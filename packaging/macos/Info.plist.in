@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Templated by scripts/build.sh: @VERSION@, @BIN@, @APP_ID@. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Proton Stream</string>
+  <key>CFBundleDisplayName</key>
+  <string>Proton Stream</string>
+  <key>CFBundleIdentifier</key>
+  <string>@APP_ID@</string>
+  <key>CFBundleExecutable</key>
+  <string>@BIN@</string>
+  <key>CFBundleIconFile</key>
+  <string>proton-stream</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <!-- The player is a window, not an agent; it belongs in the Dock. -->
+  <key>LSUIElement</key>
+  <false/>
+  <!-- Windowed video, so let the display stay awake is mpv's business, but the
+       bundle must at least declare it is not a background-only app. -->
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>MIT licensed. Nils Pukropp.</string>
+</dict>
+</plist>

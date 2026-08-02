@@ -1,0 +1,95 @@
+# Maintainer: Nils Pukropp <contact@narl.io>
+#
+# Local-build PKGBUILD, mirroring ../proton-drive-linux/packaging/PKGBUILD: this
+# is NOT a source-fetch package, it compiles the working tree this file lives in.
+#
+#   cd packaging && makepkg -fi
+#
+# Two things it needs that an ordinary AUR package would not:
+#
+#   * Network, so cargo can fetch crates.io (`--locked`, not `--frozen`).
+#   * A sibling `../../proton-sdk-rs` checkout, for as long as the workspace
+#     carries `[patch.crates-io]`. Once proton-sdk 0.3.3 is published and that
+#     block is removed, the check in build() stops firing and the package
+#     builds from the registry alone.
+
+pkgname=proton-stream
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Netflix-style desktop client for Proton Drive public links: browse and stream a share"
+arch=('x86_64')
+url="https://github.com/narrrl/proton-stream"
+license=('MIT')
+# mpv carries libmpv.so plus its headers on Arch, so it is both the runtime and
+# the build dependency. libsecret is the Secret Service side of the keyring —
+# the share fragment and custom password never touch shares.json.
+depends=('mpv' 'libsecret' 'hicolor-icon-theme')
+makedepends=('cargo')
+optdepends=('gnome-keyring: credential storage via Secret Service'
+            'kwallet: credential storage via Secret Service on KDE')
+provides=('pstr')
+# !lto for the same reason the sibling repo sets it; !debug keeps a 0.1.0 local
+# package from also emitting a multi-hundred-MB -debug split.
+options=('!lto' '!debug')
+
+# Built in place from the checkout; nothing to fetch or checksum.
+source=()
+sha256sums=()
+
+# Absolute path to the workspace root (packaging/ lives directly under it).
+_workspace="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+pkgver() {
+  cd "$_workspace"
+  local v
+  v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+  printf '%s' "${v:-0.1.0}"
+}
+
+build() {
+  cd "$_workspace"
+
+  # The dev-only path patch. Fail early and legibly rather than a hundred lines
+  # into a cargo resolve error.
+  if grep -q '^\[patch\.crates-io\]' Cargo.toml && [[ ! -d "$_workspace/../proton-sdk-rs" ]]; then
+    echo "error: Cargo.toml still carries [patch.crates-io] pointing at ../proton-sdk-rs," >&2
+    echo "       but that checkout is missing. Clone it beside this repo, or drop the" >&2
+    echo "       patch block once proton-sdk 0.3.3 is on crates.io." >&2
+    return 1
+  fi
+
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="$_workspace/target"
+  cargo build --release --locked \
+    --bin proton-stream \
+    --bin pstr
+}
+
+check() {
+  cd "$_workspace"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="$_workspace/target"
+  # Offline suites only; nothing here needs a share or an account.
+  cargo test --workspace --locked
+}
+
+package() {
+  cd "$_workspace"
+  local rel="target/release"
+
+  install -Dm755 "$rel/proton-stream" "$pkgdir/usr/bin/proton-stream"
+  install -Dm755 "$rel/pstr"          "$pkgdir/usr/bin/pstr"
+
+  install -Dm644 "packaging/io.narl.proton-stream.desktop" \
+    "$pkgdir/usr/share/applications/io.narl.proton-stream.desktop"
+  install -Dm644 "packaging/io.narl.proton-stream.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.narl.proton-stream.svg"
+
+  install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+  if [[ -f LICENSE ]]; then
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  else
+    warning "no LICENSE file in the repo root; the package ships without one"
+  fi
+}

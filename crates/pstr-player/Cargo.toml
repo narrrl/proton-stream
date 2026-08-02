@@ -1,0 +1,33 @@
+[package]
+name = "pstr-player"
+description = "Embedded libmpv playback for proton-stream."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+pstr-stream.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# The safe wrapper covers the handle, options, commands, properties and the
+# event queue. The custom protocol is registered against `-sys` directly rather
+# than through `libmpv2::Protocol`, because that type borrows the `Mpv` it is
+# registered on — which would make a struct owning both self-referential — and
+# because its open callback reports failure by panicking, while a stream that
+# cannot be opened is an ordinary outcome here.
+libmpv2 = "6"
+libmpv2-sys = "4"
+# mpv resolves every GL function it uses through a callback we have to answer,
+# and eframe exposes its context only as already-resolved `glow` pointers — so
+# the entry points come out of the GL libraries the process has already loaded.
+# See `gl.rs`.
+libloading.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+# Only for the test fixture's `RevisionOpener`, which is a `dyn` async trait.
+async-trait.workspace = true

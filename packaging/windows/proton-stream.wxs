@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX v4/v5/v6 installer definition. Built by scripts/build.ps1:
+
+    wix build -arch x64 -ext WixToolset.UI.wixext packaging/windows/proton-stream.wxs `
+      -d Version=0.1.0 -d BinDir=... -d MpvDll=... -d IconFile=... -d LicenseRtf=... -d ReadMe=... `
+      -o dist/proton-stream-0.1.0-x64.msi
+
+  UpgradeCode is fixed forever: it is what makes 0.2.0 replace 0.1.0 instead of
+  installing beside it. Never regenerate it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="Proton Stream"
+           Manufacturer="Nils Pukropp"
+           Version="$(var.Version)"
+           UpgradeCode="0a5c3818-3401-469c-a2ac-a3172cef1938"
+           Scope="perMachine"
+           Compressed="yes"
+           Language="1033">
+
+    <SummaryInformation Description="Netflix-style desktop client for Proton Drive public links" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Proton Stream is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/narrrl/proton-stream" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- 6432 resolves to Program Files (x64) because the build passes -arch x64. -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Proton Stream" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <!-- The Guids are written out rather than left to WiX's deterministic
+         generation, and they match packaging/windows/proton-stream.wixl.wxs
+         one for one. That is what lets the Linux-built .msi and this one
+         upgrade each other instead of double-counting components. A new
+         payload file gets a new Component and a new Guid, in both files. -->
+    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
+      <Component Guid="623c8cb8-b826-4d57-a054-e5be56f24c19">
+        <File Id="AppExe" Source="$(var.BinDir)\proton-stream.exe" KeyPath="yes" />
+        <Shortcut Id="StartMenuShortcut"
+                  Directory="ProgramMenuFolder"
+                  Name="Proton Stream"
+                  Description="Browse and stream a Proton Drive public link"
+                  Icon="AppIcon"
+                  Advertise="yes" />
+      </Component>
+
+      <!-- The CLI, and the PATH entry that makes it worth installing. Tied to
+           the same component so uninstalling takes the PATH edit with it. -->
+      <Component Guid="6440650e-281f-4842-a75a-4cbea8be0d71">
+        <File Id="CliExe" Source="$(var.BinDir)\pstr.exe" KeyPath="yes" />
+        <Environment Id="PstrPath" Name="PATH" Value="[INSTALLFOLDER]"
+                     Part="last" Action="set" System="yes" Permanent="no" />
+      </Component>
+
+      <!-- libmpv does the demuxing and decoding. There is no static build of it
+           worth shipping, so the DLL sits beside the exe. -->
+      <Component Guid="ff74fc79-78e3-4ed8-881d-f322ed6ff6b4">
+        <File Id="MpvDll" Source="$(var.MpvDll)" KeyPath="yes" />
+      </Component>
+
+      <Component Guid="5bb65b44-f5df-423b-8dcc-a753d7aef565">
+        <File Id="ReadMe" Source="$(var.ReadMe)" Name="README.md" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="Proton Stream" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+    </Feature>
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+  </Package>
+</Wix>

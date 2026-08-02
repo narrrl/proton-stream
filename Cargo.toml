@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pstr-core",
+    "crates/pstr-stream",
+    "crates/pstr-meta",
+    "crates/pstr-player",
+    "crates/pstr-app",
+    "crates/pstr-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/narrrl/proton-stream"
+rust-version = "1.96"
+authors = ["Nils Pukropp <contact@narl.io>"]
+
+# Dependencies build optimized even in dev/test, for the same reason
+# `proton-sdk-rs` does it: every CPU-bound thing this app does — rPGP block
+# decryption, bcrypt, the S2K derivations — lives in those crates, and
+# unoptimized rPGP is roughly two orders of magnitude slower. A debug build
+# without this cannot keep up with playback at all. Workspace crates stay at
+# `opt-level = 0` so incremental rebuilds and backtraces are unaffected.
+[profile.dev.package."*"]
+opt-level = 2
+
+[workspace.dependencies]
+proton-sdk = { version = "0.3.3" }
+proton-drive-rs = { version = "0.3.3" }
+
+# Internal crates.
+pstr-core = { path = "crates/pstr-core" }
+pstr-meta = { path = "crates/pstr-meta" }
+pstr-stream = { path = "crates/pstr-stream" }
+pstr-player = { path = "crates/pstr-player" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time"] }
+futures = "0.3"
+# The TLS features match `proton-sdk-rs`'s deliberately: cargo unifies features
+# across the graph, and a second configuration here would link a second TLS
+# stack into the same binary. `query` is the one addition — TMDB takes its
+# search terms in the query string, and it is purely additive.
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "webpki-roots", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+sha2 = "0.10"
+# `bundled` so a Windows build needs no system SQLite.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The share URL fragment and the custom password are both secrets; they go in
+# the OS credential store (Secret Service on Linux, Credential Manager on
+# Windows), never in the config file next to them.
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+clap = { version = "4", features = ["derive"] }
+# The UI. `glow` rather than `wgpu` because step two of the player hands mpv an
+# `MPV_RENDER_API_TYPE_OPENGL` context, and that has to be the same context
+# eframe is drawing into.
+eframe = { version = "0.35", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+egui = "0.35"
+# Poster thumbnails only: Proton renders them as JPEG, and a decoder that also
+# pulls in every exotic format is weight this app has no use for.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Non-poisoning, deliberately: a panicking UI frame must not wedge the catalog
+# behind a poisoned lock for the rest of the session. Same reason
+# `proton-drive-linux` uses it.
+parking_lot = "0.12"
+rpassword = "7"
+libloading = "0.8"
+lru = "0.12"
+# `async fn` in traits is stable at MSRV 1.96 but is not dyn-compatible, and the
+# stream layer needs a `dyn` block source so its cache, ring and read-ahead can
+# be tested against a fake without a network or an account.
+async-trait = "0.1"
+
+# During development the SDK work for this app lives in the sibling repo and is
+# not published yet. Remove once 0.3.3 is on crates.io — releases must build
+# against the registry.
+[patch.crates-io]
+proton-sdk = { path = "../proton-sdk-rs/crates/proton-sdk" }
+proton-drive-rs = { path = "../proton-sdk-rs/crates/proton-drive-rs" }

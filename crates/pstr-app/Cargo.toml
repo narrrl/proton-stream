@@ -1,0 +1,29 @@
+[package]
+name = "pstr-app"
+description = "The proton-stream desktop application."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "proton-stream"
+path = "src/main.rs"
+
+[dependencies]
+pstr-core.workspace = true
+pstr-meta.workspace = true
+pstr-stream.workspace = true
+pstr-player.workspace = true
+tokio.workspace = true
+futures.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+eframe.workspace = true
+egui.workspace = true
+image.workspace = true
+sha2.workspace = true
+parking_lot.workspace = true

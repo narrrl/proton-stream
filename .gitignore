@@ -1,0 +1,13 @@
+/target
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# Build artifacts.
+/dist
+
+# makepkg leftovers.
+/packaging/pkg/
+/packaging/src/
+/packaging/*.pkg.tar.zst

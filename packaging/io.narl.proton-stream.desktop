@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Proton Stream
+GenericName=Media Library
+Comment=Browse and stream a Proton Drive public link
+Exec=proton-stream
+Icon=io.narl.proton-stream
+Terminal=false
+Categories=AudioVideo;Video;Player;
+Keywords=proton;drive;stream;video;media;library;
+StartupNotify=true
+SingleMainWindow=true

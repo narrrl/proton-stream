@@ -1,0 +1,24 @@
+[package]
+name = "pstr-stream"
+description = "Seekable, cached byte streams over Proton Drive revisions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+pstr-core.workspace = true
+proton-sdk.workspace = true
+proton-drive-rs.workspace = true
+tokio.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+lru.workspace = true
+sha2.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
