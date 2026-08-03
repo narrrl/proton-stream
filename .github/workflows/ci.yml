@@ -13,7 +13,7 @@ jobs:
     name: Gate (Linux)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -21,7 +21,7 @@ jobs:
           toolchain: "1.96"
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       # libmpv for pstr-player.
       - name: Install libmpv
@@ -44,7 +44,7 @@ jobs:
     name: Gate (Windows cross)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -52,7 +52,7 @@ jobs:
           components: clippy
           targets: x86_64-pc-windows-gnu
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - name: Install the cross toolchain
         run: |

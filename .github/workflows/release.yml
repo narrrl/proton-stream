@@ -26,7 +26,7 @@ jobs:
     name: Tag and versions
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -62,7 +62,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -70,7 +70,7 @@ jobs:
           toolchain: "1.96"
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       # rpm for rpmbuild; the .deb goes through dpkg-deb, which is preinstalled.
       - name: Install build dependencies
@@ -87,7 +87,7 @@ jobs:
       - name: Build tarball, .deb and .rpm
         run: scripts/build.sh tarball deb rpm
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: |
@@ -105,28 +105,29 @@ jobs:
     needs: verify
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.96"
           targets: x86_64-pc-windows-gnu
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
-      # mingw-w64 for the cross compile, msitools for wixl, p7zip for the
-      # mpv-dev archive.
+      # mingw-w64 for the cross compile, wixl for the .msi — Debian and Ubuntu
+      # ship it apart from `msitools`, which has only the msi* tools — and
+      # p7zip for the mpv-dev archive.
       - name: Install the cross toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y mingw-w64 msitools zip p7zip-full
+          sudo apt-get install -y mingw-w64 wixl zip p7zip-full
 
       - name: Build the portable .zip and the .msi
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/build-windows.sh --fetch-mpv
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
@@ -142,7 +143,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -153,7 +154,7 @@ jobs:
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
           generate_release_notes: true

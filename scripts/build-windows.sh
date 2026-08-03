@@ -29,6 +29,7 @@
 #
 # Prerequisites (Arch names; every distro has them):
 #   mingw-w64-gcc  msitools  zip                 pacman -S mingw-w64-gcc msitools zip
+#   Debian/Ubuntu split wixl out of msitools:    apt install mingw-w64 wixl zip
 #   rustup target add x86_64-pc-windows-gnu
 #   osslsigncode                                 only for --sign
 
@@ -265,7 +266,9 @@ make_zip() {
 # --------------------------------------------------------------------- msi ---
 
 make_msi() {
-  have wixl || die 'the .msi needs wixl (pacman -S msitools / apt install msitools)'
+  # Debian and Ubuntu ship wixl in its own binary package; their `msitools`
+  # package has the msi* tools and not this one. Arch puts both in msitools.
+  have wixl || die 'the .msi needs wixl (pacman -S msitools / apt install wixl)'
 
   local out="$DIST/${PKGNAME}-${VERSION}-x64.msi"
   log "msi -> $(basename "$out")"
