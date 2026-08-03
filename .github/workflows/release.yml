@@ -96,28 +96,35 @@ jobs:
             dist/*.rpm
           if-no-files-found: error
 
+  # Cross-compiled from Linux with mingw-w64, and the .msi built by wixl rather
+  # than WiX — scripts/build-windows.sh, which is how these artifacts have been
+  # produced by hand. A windows runner would need MSVC's mpv.lib, and current
+  # mpv-dev archives ship only the mingw import library.
   windows:
     name: Windows artifacts
     needs: verify
-    runs-on: windows-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.96"
+          targets: x86_64-pc-windows-gnu
 
       - uses: Swatinem/rust-cache@v2
 
-      # Sets MPV_DEV_DIR, which is what build.ps1 reads when -MpvDev is absent.
-      - name: Install libmpv
-        uses: ./.github/actions/libmpv-windows
+      # mingw-w64 for the cross compile, msitools for wixl, p7zip for the
+      # mpv-dev archive.
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 msitools zip p7zip-full
 
-      # build.ps1 installs the WiX toolset itself if `wix` is missing, and the
-      # runner has the .NET SDK it needs for that.
       - name: Build the portable .zip and the .msi
-        shell: pwsh
-        run: scripts\build.ps1 -Artifacts zip,msi
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/build-windows.sh --fetch-mpv
 
       - uses: actions/upload-artifact@v4
         with:

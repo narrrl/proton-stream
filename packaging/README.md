@@ -69,18 +69,20 @@ so the linker wants an import library named `mpv.lib` and the process wants
 `libmpv-2.dll` at run time. Neither ships with mpv's Windows *player* build —
 both come from the separate **mpv-dev** archive:
 
-<https://sourceforge.net/projects/mpv-player-windows/files/libmpv/>
+<https://github.com/shinchiro/mpv-winbuild-cmake/releases/latest>
 
-Unpack it and point the script at it:
+(The SourceForge project these are better known by mirrors the same builds, but
+its `/download` URLs hand anything that does not look like a browser an HTML
+interstitial, so `--fetch-mpv` goes to the source.)
 
-```powershell
-scripts\build.ps1 -MpvDev C:\mpv-dev
-```
-
-If that directory has `mpv.def` but no `mpv.lib`, the script generates the import
-library with `lib.exe` (`/name:libmpv-2.dll`, so it references the DLL that
-actually ships). It finds `lib.exe` on `PATH` or imports the MSVC environment via
-`vswhere`, so a plain PowerShell session works.
+**The cross build from Linux is the supported path, and the one CI uses** —
+`scripts/build-windows.sh --fetch-mpv` fetches the archive, links against its
+`libmpv.dll.a` with mingw-w64 and builds the `.msi` with `wixl`. On a real
+Windows box `scripts\build.ps1 -MpvDev C:\mpv-dev` does the MSVC equivalent, but
+note that it needs an `mpv.lib` or an `mpv.def` to generate one from with
+`lib.exe`, and **current mpv-dev archives ship neither** — only the mingw import
+library. Producing `mpv.lib` from a recent archive means writing the `.def`
+yourself from `dumpbin /exports libmpv-2.dll`.
 
 There is no static libmpv worth shipping, so **"standalone exe" means the exe
 plus `libmpv-2.dll` beside it** — that pair, plus `pstr.exe` and the README, is
@@ -131,9 +133,9 @@ almost every field in it is computed.
 ## Releasing
 
 A release is a `v<version>` tag on `main`; `.github/workflows/release.yml` does
-the rest. It runs the CI gate and `scripts/build.sh tarball deb rpm` on Linux,
-`scripts\build.ps1 -Artifacts zip,msi` on Windows, and publishes both sets plus
-a `SHA256SUMS` to a GitHub release. So the steps are:
+the rest. Every job runs on Linux: `scripts/build.sh tarball deb rpm` for the
+Linux artifacts and `scripts/build-windows.sh --fetch-mpv` for the Windows ones,
+published together with a `SHA256SUMS` to a GitHub release. So the steps are:
 
 ```bash
 # 1. bump Cargo.toml's workspace version *and* packaging/PKGBUILD's pkgver

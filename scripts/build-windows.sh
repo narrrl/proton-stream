@@ -45,7 +45,13 @@ readonly CLI_BIN="pstr.exe"
 
 # The mpv-dev archive: libmpv-2.dll plus the import library to link against.
 # mpv's *player* build ships neither.
-readonly MPV_INDEX="https://sourceforge.net/projects/mpv-player-windows/rss?path=/libmpv"
+#
+# Fetched from shinchiro's releases rather than the SourceForge mirror the
+# archive is better known by: SourceForge's `/download` URLs answer anything
+# that does not look like a browser with an HTML interstitial, which lands as a
+# file called mpv-dev.7z that is not an archive. These are the same builds — the
+# SourceForge project mirrors them.
+readonly MPV_RELEASE="https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
 
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | cut -d'"' -f2)"
 readonly VERSION
@@ -66,6 +72,7 @@ usage() {
 usage: scripts/build-windows.sh [options] [artifact ...]
 
 artifacts
+  mpv         resolve libmpv's development files into dist/mpv-dev and stop
   binaries    cargo build --release --target ${TARGET}, then stage dist/windows
   zip         dist/${PKGNAME}-${VERSION}-x86_64-windows.zip
   msi         dist/${PKGNAME}-${VERSION}-x64.msi                (needs wixl)
@@ -100,7 +107,7 @@ done
 [[ ${#TARGETS[@]} -eq 0 ]] && TARGETS=(all)
 for t in "${TARGETS[@]}"; do
   case "$t" in
-    binaries|zip|msi|all) ;;
+    mpv|binaries|zip|msi|all) ;;
     *) echo "unknown artifact: $t" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -128,15 +135,20 @@ fetch_mpv() {
   have curl || die "--fetch-mpv needs curl"
   have 7z   || die "--fetch-mpv needs 7z (p7zip)"
 
+  # The asset names are mpv-dev-<arch>-<date>-git-<sha>.7z; the date is what
+  # keeps this off the i686, aarch64 and v3 builds in the same release.
   local url
-  url="$(curl -sL --max-time 60 "$MPV_INDEX" \
-         | grep -o '<link>[^<]*mpv-dev-x86_64-2[^<]*\.7z/download</link>' \
-         | sed 's|<link>||; s|</link>||' | head -1)"
-  [[ -n "$url" ]] || die "could not find an mpv-dev build in the SourceForge feed"
+  url="$(curl -sL --max-time 60 ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} "$MPV_RELEASE" \
+         | grep -o '"browser_download_url": *"[^"]*mpv-dev-x86_64-20[0-9]*-git-[^"]*\.7z"' \
+         | sed 's|.*: *"||; s|"$||' | head -1)"
+  [[ -n "$url" ]] || die "no mpv-dev build in the latest shinchiro/mpv-winbuild-cmake release"
 
-  log "downloading $(basename "$(dirname "$url")")"
+  log "downloading $(basename "$url")"
   mkdir -p "$dest"
   curl -L --max-time 600 -o "$dest.7z" "$url"
+  # A download that fetched an error page instead of the archive fails inside 7z
+  # with something unrelated to what went wrong; say it here.
+  [[ "$(head -c2 "$dest.7z")" == "7z" ]] || die "$url did not return a 7z archive"
   7z x -y -o"$dest" "$dest.7z" >/dev/null
   rm -f "$dest.7z"
   MPV_DEV="$dest"
@@ -156,9 +168,9 @@ resolve_mpv() {
   fi
 
   [[ -n "$MPV_DEV" ]] || die "$(cat <<EOF
-no libmpv development files. Either pass --fetch-mpv, or download the mpv-dev
-archive from
-  https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+no libmpv development files. Either pass --fetch-mpv, or download an
+mpv-dev-x86_64-*.7z from
+  https://github.com/shinchiro/mpv-winbuild-cmake/releases/latest
 unpack it, and pass --mpv-dev <dir> or set MPV_DEV_DIR.
 EOF
 )"
@@ -278,10 +290,13 @@ make_msi() {
 mkdir -p "$DIST"
 # Only the compile and the staging copy need libmpv; repackaging out of
 # dist/windows does not, so `--skip-build msi` works with no mpv-dev at hand.
-[[ " ${TARGETS[*]} " == *" binaries "* ]] && resolve_mpv
+if [[ " ${TARGETS[*]} " == *" binaries "* || " ${TARGETS[*]} " == *" mpv "* ]]; then
+  resolve_mpv
+fi
 
 for t in "${TARGETS[@]}"; do
   case "$t" in
+    mpv)      log "libmpv at $MPV_DIR" ;;   # resolve_mpv above did the work
     binaries) build; stage ;;
     zip)      [[ -d "$OUTDIR" ]] || die 'nothing staged — run the binaries artifact first'; make_zip ;;
     msi)      [[ -d "$OUTDIR" ]] || die 'nothing staged — run the binaries artifact first'; make_msi ;;
