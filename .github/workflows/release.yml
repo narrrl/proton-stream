@@ -1,0 +1,153 @@
+name: Release
+
+# A release is a `v<version>` tag on main. The tag is the trigger and the
+# version of record: nothing here reads the branch, so the first job checks that
+# the commit really is on main and that the tag, `Cargo.toml` and the PKGBUILD
+# all say the same version — a tag that disagrees would otherwise publish
+# artifacts named after the manifest, not after the tag.
+#
+# `workflow_dispatch` builds everything and publishes nothing, which is how to
+# rehearse a release without burning a tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Tag and versions
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: The tag is on main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+            { echo "::error::$GITHUB_REF_NAME points at a commit that is not on main"; exit 1; }
+
+      - name: The tag, Cargo.toml and the PKGBUILD agree
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          pkgbuild="$(sed -n 's/^pkgver=//p' packaging/PKGBUILD | head -n1)"
+          echo "tag=$tag manifest=$manifest pkgbuild=$pkgbuild"
+          [ "$tag" = "$manifest" ] ||
+            { echo "::error::tag $tag != Cargo.toml $manifest"; exit 1; }
+          [ "$tag" = "$pkgbuild" ] ||
+            { echo "::error::tag $tag != PKGBUILD $pkgbuild"; exit 1; }
+
+      # A release must resolve the SDK from crates.io. The build scripts refuse
+      # to run with a patch pointing at a missing sibling checkout, but here the
+      # patch is wrong even when the path exists.
+      - name: No path patch on the SDK
+        run: |
+          ! grep -q '^\[patch\.crates-io\]' Cargo.toml ||
+            { echo "::error::Cargo.toml carries [patch.crates-io]; releases build against the registry"; exit 1; }
+
+  linux:
+    name: Linux artifacts
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Pinned: the MSRV the workspace declares.
+          toolchain: "1.96"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # rpm for rpmbuild; the .deb goes through dpkg-deb, which is preinstalled.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev rpm
+
+      - name: Gate
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --locked
+
+      - name: Build tarball, .deb and .rpm
+        run: scripts/build.sh tarball deb rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+
+  windows:
+    name: Windows artifacts
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.96"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Sets MPV_DEV_DIR, which is what build.ps1 reads when -MpvDev is absent.
+      - name: Install libmpv
+        uses: ./.github/actions/libmpv-windows
+
+      # build.ps1 installs the WiX toolset itself if `wix` is missing, and the
+      # runner has the .NET SDK it needs for that.
+      - name: Build the portable .zip and the .msi
+        shell: pwsh
+        run: scripts\build.ps1 -Artifacts zip,msi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*.msi
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

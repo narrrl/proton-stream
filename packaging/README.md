@@ -128,12 +128,29 @@ The `.icns` is rasterized from `io.narl.proton-stream.svg` when `rsvg-convert` o
 The Debian `control` file has no template — `scripts/build.sh` writes it, because
 almost every field in it is computed.
 
-## Two things to know before releasing
+## Releasing
 
-- **The `[patch.crates-io]` block in `Cargo.toml` is development only.** It points
-  at `../proton-sdk-rs`, so both build scripts refuse to start when it is present
-  and that checkout is missing. A release must build against the published
-  crates — drop the block once the pinned proton-sdk is on crates.io.
-- **There is no `LICENSE` file in the repository root** even though `Cargo.toml`
-  declares MIT. Every packager warns and ships without the license text; the MSI
-  falls back to `windows/license.rtf`. Adding the file fixes all of them at once.
+A release is a `v<version>` tag on `main`; `.github/workflows/release.yml` does
+the rest. It runs the CI gate and `scripts/build.sh tarball deb rpm` on Linux,
+`scripts\build.ps1 -Artifacts zip,msi` on Windows, and publishes both sets plus
+a `SHA256SUMS` to a GitHub release. So the steps are:
+
+```bash
+# 1. bump Cargo.toml's workspace version *and* packaging/PKGBUILD's pkgver
+# 2. commit on main, then
+git tag -a v0.1.0 -m 'proton-stream 0.1.0'
+git push origin main --follow-tags
+```
+
+The workflow refuses to publish a tag whose commit is not an ancestor of `main`,
+or whose version disagrees with `Cargo.toml` or the PKGBUILD — the artifacts are
+named from the manifest, so a drifted tag would ship a file called something
+other than the tag. It also refuses a `Cargo.toml` carrying `[patch.crates-io]`:
+a release builds against the published SDK crates, never a sibling checkout.
+
+`workflow_dispatch` runs everything except the publish step, which is how to
+rehearse without burning a tag.
+
+Not covered by the workflow: the Arch package (`makepkg` compiles in place, so
+it wants an Arch host) and the macOS `.app`/`.dmg` (no runner for it here yet).
+Both are still `scripts/build.sh arch` and `scripts/build.sh dmg` by hand.

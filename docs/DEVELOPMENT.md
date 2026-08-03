@@ -4,34 +4,39 @@
 
 | Layer | State |
 |---|---|
-| SDK streaming surface (`../proton-sdk-rs` 0.3.3) | **done, live-verified** — `open_revision` / `download_range` / thumbnails / `refresh_session` on the visitor path; node-key cache; chunked `enumerate_nodes`; paged `download_file_to` |
-| `pstr-core` — shares, config, catalog, naming, library grouping | **done** — 67 offline tests |
-| `pstr-cli` — add / crawl / list | **done** — verified against a real 354-node share: 310 playable files, 22 titles, correct seasons and episodes |
+| SDK streaming surface (`../proton-sdk-rs` 0.4.0, from crates.io) | **done, live-verified** — `open_revision` / `download_range` / thumbnails / `refresh_session` on the visitor path; node-key cache; chunked `enumerate_nodes`; paged `download_file_to` |
+| `pstr-core` — shares, config, catalog, naming, library grouping | **done** — 106 offline tests |
+| `pstr-cli` — add / shares / remove / crawl / list / metadata / play / bench | **done** — verified against a real 354-node share: 310 playable files, 22 titles, correct seasons and episodes |
 | `pstr-stream` — block cache, read-ahead | **done, live-verified** — 68 offline tests; benchmarked against a real 761 MiB episode (see `docs/TESTING.md`) |
-| `pstr-player` — libmpv `stream_cb` | **done, live-verified** — 16 offline tests; plays a real 1080p HEVC episode over a public link, seeks, resumes from the disk cache. The render API (embedding) is not started |
-| `pstr-app` — egui UI, poster grid | **done, offline-tested** — library wall, title pages, transport, share management; mpv still opens its own window |
-| Metadata providers (AniList / TMDB) | not started — and this is what the wall is waiting on: see the note on thumbnails below |
-| Packaging | **done, locally verified** — `scripts/build.sh` (tarball, `.deb`, `.rpm`, `.app`, `.dmg`) and `scripts/build.ps1` (portable `.zip`, WiX `.msi`), plus `packaging/PKGBUILD`. See `packaging/README.md`. The Windows and macOS halves are written but only the Linux ones have been run on this machine |
+| `pstr-player` — libmpv `stream_cb` + render API | **done, live-verified** — 33 offline tests; plays a real 1080p HEVC episode over a public link, seeks, resumes from the disk cache, and renders into the app's GL context |
+| `pstr-app` — egui UI, poster grid, embedded video | **done, offline-tested** — 15 offline tests; library wall, title pages, player page with overlay controls, themes, share management |
+| Metadata providers (AniList / TMDB) | **done** — 32 offline tests; posters, synopses, per-episode titles, hand-pinned matches. Opt-in, off by default |
+| Packaging | **done, locally verified** — `scripts/build.sh` (tarball, `.deb`, `.rpm`, `.app`, `.dmg`) and `scripts/build.ps1` (portable `.zip`, WiX `.msi`), plus `packaging/PKGBUILD`. See `packaging/README.md`. The macOS half is written but has not been run on a Mac |
 
 ## Build order from here
 
-1. **`pstr-player`, step two.** `mpv_render_context_create` with
-   `MPV_RENDER_API_TYPE_OPENGL` against eframe's glow context, rendered inside an
-   `egui::PaintCallback`; overlay controls. If this proves troublesome, the
-   standalone-window mode already built remains shippable. Nothing in
-   `pstr-player` except `PlayerConfig`'s window options is about where pixels
-   land, so this does not reach the streaming path.
-2. Metadata providers, docs. Packaging is in place (`packaging/README.md`); what
-   is left there is running `scripts/build.ps1` and the macOS half on real
-   hosts, and a release workflow that drives both.
+1. **Sidecar subtitle files** — see the "not done" note at the end of this
+   section. The work is in `pstr-core`: crawl them, and pair them to a video by
+   name.
+2. Packaging is in place (`packaging/README.md`); what is left there is running
+   the macOS half on a real host, and a release workflow that drives every
+   platform.
+
+Done: **`pstr-player` step two** — `mpv_render_context_create` with
+`MPV_RENDER_API_TYPE_OPENGL` against eframe's glow context
+(`pstr-player/src/render.rs`), painted from a framebuffer this app owns
+(`pstr-app/src/video.rs`) so the picture can sit in a rectangle rather than
+filling the window. `VideoOutput::Embedded` is what the app asks for; the
+standalone-window mode the CLI uses is unchanged, and nothing about it reaches
+the streaming path.
 
 Done: `pstr-player` step one — `mpv_stream_cb_add_ro`, mpv in its own window.
 `pstr play --file <text>` plays a catalogued episode over a public link.
 
 Done: `pstr-app` step one — `cargo run -p pstr-app` opens a window with the
 library wall, a title page per series, a transport bar and share management. It
-plays through the same `Player` the CLI uses, so mpv still owns its own window;
-the app's transport drives it from a command channel. Two pieces of that are
+plays through the same `Player` the CLI uses — at that point still in mpv's own
+window; the app's transport drives it from a command channel. Two pieces of that are
 worth knowing before touching it:
 
 - **Drawing never mutates.** Pages are handed `&`-state and push `Action`s onto

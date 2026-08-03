@@ -1,0 +1,51 @@
+name: libmpv (Windows)
+description: >
+  Provide libmpv's Windows development files. `libmpv2-sys` emits
+  `cargo:rustc-link-lib=mpv`, and mpv's Windows *player* build ships neither
+  mpv.lib nor libmpv-2.dll — they come from the separate mpv-dev archive. Sets
+  LIB for the linker, PATH so binaries find the DLL at run time, and
+  MPV_DEV_DIR for `scripts/build.ps1`.
+
+outputs:
+  dir:
+    description: Directory holding libmpv-2.dll and mpv.lib.
+    value: ${{ steps.mpv.outputs.dir }}
+
+runs:
+  using: composite
+  steps:
+    # lib.exe, for turning mpv.def into an import library.
+    - uses: ilammy/msvc-dev-cmd@v1
+
+    - id: mpv
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $feed = [xml](Invoke-WebRequest -UseBasicParsing `
+          'https://sourceforge.net/projects/mpv-player-windows/rss?path=/libmpv').Content
+        # The "v3" variants are x86-64-v3 builds; take the baseline one.
+        $item = $feed.rss.channel.item |
+          Where-Object { $_.link -match 'mpv-dev-x86_64-2[^/]*\.7z/download$' } |
+          Select-Object -First 1
+        if (-not $item) { throw 'no mpv-dev build in the SourceForge feed' }
+
+        $archive = Join-Path $env:RUNNER_TEMP 'mpv-dev.7z'
+        $dir = Join-Path $env:RUNNER_TEMP 'mpv-dev'
+        Invoke-WebRequest -UseBasicParsing $item.link -OutFile $archive
+        7z x $archive "-o$dir" -y | Out-Null
+
+        $dll = Get-ChildItem -Path $dir -Filter 'libmpv-2.dll' -Recurse |
+          Select-Object -First 1
+        if (-not $dll) { throw "libmpv-2.dll not found under $dir" }
+        $libDir = $dll.Directory.FullName
+
+        # /NAME matters: without it the import library references mpv.dll, and
+        # the file that actually ships is libmpv-2.dll.
+        lib.exe /def:"$libDir\mpv.def" /name:libmpv-2.dll `
+                /out:"$libDir\mpv.lib" /machine:x64 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'lib.exe failed to build mpv.lib' }
+
+        "dir=$libDir"        | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "MPV_DEV_DIR=$libDir" | Out-File $env:GITHUB_ENV   -Append -Encoding utf8
+        "LIB=$libDir;$env:LIB" | Out-File $env:GITHUB_ENV  -Append -Encoding utf8
+        $libDir              | Out-File $env:GITHUB_PATH   -Append -Encoding utf8

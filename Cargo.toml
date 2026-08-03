@@ -91,9 +91,11 @@ lru = "0.12"
 # be tested against a fake without a network or an account.
 async-trait = "0.1"
 
-# During development the SDK work for this app lives in the sibling repo and is
-# not published yet. Remove once 0.3.3 is on crates.io — releases must build
-# against the registry.
-[patch.crates-io]
-proton-sdk = { path = "../proton-sdk-rs/crates/proton-sdk" }
-proton-drive-rs = { path = "../proton-sdk-rs/crates/proton-drive-rs" }
+# The SDK builds against the registry — 0.4.0 is published. To test an
+# unpublished `../proton-sdk-rs` change against this app, add locally and do
+# **not** commit it (CI has no sibling checkout, and the build scripts refuse to
+# run with a patch pointing at a missing path):
+#
+#     [patch.crates-io]
+#     proton-sdk = { path = "../proton-sdk-rs/crates/proton-sdk" }
+#     proton-drive-rs = { path = "../proton-sdk-rs/crates/proton-drive-rs" }

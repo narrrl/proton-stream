@@ -18,23 +18,28 @@ is playable without downloading 2 GB of it.
 
 ## Status
 
-Early, but it plays, and there is a window now. The SDK streaming surface, the
-catalog, the streaming layer and the player are done and verified against a real
-share; the app has a library wall, a page per title with seasons and episodes,
-resume-where-you-left-off, a transport bar and share management. The picture
-still lands in mpv's own window — embedding it in the app's surface is next. See
-`docs/DEVELOPMENT.md`.
+Early, but it is an app now: the picture lands **inside the window**, not in an
+mpv window of its own. The SDK streaming surface, the catalog, the streaming
+layer and the player are done and verified against a real share, and the app has
+a library wall, a page per title with seasons and episodes,
+resume-where-you-left-off, an overlay with a chapter-marked seek bar, a skip
+button for openings and endings, next/previous episode with an "up next"
+countdown, optional metadata, themes and share management. What is left is mostly sidecar subtitle files
+(`.srt`/`.ass` beside the video are invisible to the crawl today) and running the
+macOS packaging on a real Mac. See `docs/DEVELOPMENT.md`.
 
 ```bash
 cargo run --release -p pstr-app          # the app
 ```
 
-Working today, via the `pstr` CLI:
+The `pstr` CLI does the same work headlessly, and is what tells you which layer
+is broken:
 
 ```bash
 cargo run -p pstr-cli -- add --name anime 'https://drive.proton.me/urls/TOKEN#fragment'
 cargo run -p pstr-cli -- crawl
 cargo run -p pstr-cli -- list
+cargo run -p pstr-cli -- metadata                      # opt-in; off unless configured
 cargo run --release -p pstr-cli -- play --file Frieren --disk-cache
 cargo run --release -p pstr-cli -- bench --file Frieren --verify
 ```
@@ -54,12 +59,12 @@ against the SDK's own range download.
 |---|---|
 | Topology | Fat client. No server; each viewer's app talks to Proton directly. |
 | Auth | Public links only — but several, merged into one library. |
-| Player | Embedded libmpv: HEVC 10-bit, HDR and ASS subtitles with hardware decode. Volume, audio-track, subtitle and chapter pickers; skip-the-opening; next/previous episode and autoplay. The language picked is preferred for the next file too. |
+| Player | Embedded libmpv, drawing into the app's own GL surface: HEVC 10-bit, HDR and ASS subtitles with hardware decode. Volume, audio-track, subtitle and chapter pickers; skip-the-opening; next/previous episode and autoplay. The language picked is preferred for the next file too. |
 | Transcoding | None. mpv demuxes and decodes natively. |
 | UI | egui/eframe on glow; mpv renders into the same GL context. |
 | Themes | The shipped near-black palette plus Catppuccin Latte, Frappé, Macchiato and Mocha, each with a choice of eight accents — pink and sky among them — drawn as a gradient unless you turn that off. Picked on the Shares page, applied without a restart. |
-| Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. |
-| Platforms | Linux and Windows. |
+| Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses and per-episode titles; a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. |
+| Platforms | Linux and Windows. The macOS packaging is written but has not been run on a Mac. |
 
 ## Building
 
@@ -69,8 +74,15 @@ Rust 2024, MSRV 1.96.
 cargo build --release
 ```
 
-`pstr-player` needs libmpv development headers (`mpv` ≥ 2.0). On Windows,
-`libmpv-2.dll` is bundled next to the executable.
+`pstr-player` needs libmpv development headers (`mpv` ≥ 2.0). On Windows those
+come from the separate **mpv-dev** archive rather than mpv's player build, and
+`libmpv-2.dll` ships next to the executable. The Proton SDK crates come from
+crates.io; nothing here builds against a sibling checkout.
+
+Installable artifacts — tarball, `.deb`, `.rpm`, Arch package, `.app`/`.dmg`,
+and a portable `.zip` plus an `.msi` on Windows — are produced by
+`scripts/build.sh` and `scripts\build.ps1`; `packaging/README.md` has the
+per-platform detail.
 
 ## Privacy
 
