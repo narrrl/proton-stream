@@ -36,7 +36,9 @@
 
   Keep in sync with proton-stream.wxs
   ===================================
-  UpgradeCode and every Component Guid are shared with that file, deliberately.
+  One attribute deliberately disagrees — Environment/@Permanent, because wixl
+  reads it backwards; see the comment on that element. UpgradeCode and every
+  Component Guid are shared with that file, deliberately.
   They are what lets an .msi built here upgrade one built on Windows (and the
   reverse) instead of the two stacking up or corrupting each other's component
   reference counts. Never regenerate them; a new *payload file* gets a new
@@ -108,11 +110,23 @@
 
           <!-- The CLI, and the PATH entry that makes it worth installing. Tied
                to the same component so uninstalling takes the PATH edit with
-               it. -->
+               it.
+
+               Permanent="yes" here against Permanent="no" in the WiX file, and
+               the two mean the same thing. wixl has the attribute inverted: it
+               appends the Environment table's "-" prefix — "remove this value
+               on uninstall" — when Permanent is *true*, so Permanent="no"
+               builds an .msi whose uninstall leaves the PATH entry behind.
+               Verify with `msiinfo export out.msi Environment`; the Name must
+               come out "=-*PATH".
+
+               <Environment> itself needs msitools >= 0.105. Older wixl aborts
+               on this element with a core dump rather than an error, which is
+               why scripts/build-windows.sh checks the version first. -->
           <Component Id="CliExe" Guid="6440650e-281f-4842-a75a-4cbea8be0d71" Win64="yes">
             <File Id="CliExe" Source="$(var.BinDir)/pstr.exe" Name="pstr.exe" KeyPath="yes" />
             <Environment Id="PstrPath" Name="PATH" Value="[INSTALLDIR]"
-                         Part="last" Action="set" System="yes" Permanent="no" />
+                         Part="last" Action="set" System="yes" Permanent="yes" />
           </Component>
 
           <!-- libmpv does the demuxing and decoding. There is no static build

@@ -30,6 +30,7 @@
 # Prerequisites (Arch names; every distro has them):
 #   mingw-w64-gcc  msitools  zip                 pacman -S mingw-w64-gcc msitools zip
 #   Debian/Ubuntu split wixl out of msitools:    apt install mingw-w64 wixl zip
+#   wixl >= 0.105 (Ubuntu 24.04 has 0.103):      scripts/install-wixl.sh
 #   rustup target add x86_64-pc-windows-gnu
 #   osslsigncode                                 only for --sign
 
@@ -41,6 +42,9 @@ readonly OUTDIR="$DIST/windows"
 readonly PKG="$ROOT/packaging/windows"
 
 readonly PKGNAME="proton-stream"
+
+# msitools 0.105 is where wixl grew <Environment>; see make_msi.
+readonly WIXL_MIN="0.105"
 readonly GUI_BIN="proton-stream.exe"
 readonly CLI_BIN="pstr.exe"
 
@@ -269,6 +273,17 @@ make_msi() {
   # Debian and Ubuntu ship wixl in its own binary package; their `msitools`
   # package has the msi* tools and not this one. Arch puts both in msitools.
   have wixl || die 'the .msi needs wixl (pacman -S msitools / apt install wixl)'
+
+  # The .wxs puts pstr.exe's PATH entry in an <Environment>, which wixl only
+  # implements from msitools 0.105. Older ones do not decline it — they abort in
+  # wix.vala with a core dump — and Ubuntu 24.04, the release runner, ships
+  # 0.103. Check before handing it the file.
+  local wixl_version
+  wixl_version="$(wixl --version 2>/dev/null | head -1)"
+  if [[ -z "$wixl_version" ]] ||
+     [[ "$(printf '%s\n%s\n' "$WIXL_MIN" "$wixl_version" | sort -V | head -1)" != "$WIXL_MIN" ]]; then
+    die "wixl ${wixl_version:-unknown} is too old for <Environment> (need >= $WIXL_MIN); run scripts/install-wixl.sh"
+  fi
 
   local out="$DIST/${PKGNAME}-${VERSION}-x64.msi"
   log "msi -> $(basename "$out")"

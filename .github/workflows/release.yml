@@ -114,13 +114,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.1
 
-      # mingw-w64 for the cross compile, wixl for the .msi — Debian and Ubuntu
-      # ship it apart from `msitools`, which has only the msi* tools — and
-      # p7zip for the mpv-dev archive.
+      # mingw-w64 for the cross compile and p7zip for the mpv-dev archive.
       - name: Install the cross toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y mingw-w64 wixl zip p7zip-full
+          sudo apt-get install -y mingw-w64 zip p7zip-full
+
+      # Not `apt install wixl`: noble has msitools 0.103, and <Environment> —
+      # the PATH entry for pstr.exe — arrived in 0.105. An older wixl core dumps
+      # on the .wxs rather than declining it. 0.106 is in 25.10 but its .deb
+      # wants a libxml2 noble does not have, so this builds from source (~2 min).
+      - name: Install wixl >= 0.105
+        run: scripts/install-wixl.sh
 
       - name: Build the portable .zip and the .msi
         env:
