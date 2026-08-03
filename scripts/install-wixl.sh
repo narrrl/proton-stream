@@ -82,10 +82,27 @@ if [[ $DEPS -eq 1 ]] && have apt-get; then
     libgcab-dev libgirepository1.0-dev libgsf-1-dev libxml2-dev uuid-dev >/dev/null
 fi
 
-if ! have meson || [[ "$(printf '1.4\n%s\n' "$(meson --version)" | sort -V | head -1)" != "1.4" ]]; then
+# The install step below runs as root, and `meson install` re-executes meson
+# there — so a pip --user meson in ~/.local is useless to it: the launcher is on
+# disk but `mesonbuild` is not on root's sys.path, and ninja stops with
+# ModuleNotFoundError after a complete build. Install it system-wide, under the
+# same $SUDO that will run the install, and use that binary explicitly rather
+# than whatever PATH resolves — a stale ~/.local/bin/meson would shadow it.
+MESON="$(command -v meson || true)"
+meson_usable() {
+  [[ -n "$MESON" ]] || return 1
+  [[ "$(printf '1.4\n%s\n' "$("$MESON" --version 2>/dev/null)" | sort -V | head -1)" == "1.4" ]] || return 1
+  # Whoever performs the install has to be able to import mesonbuild.
+  $SUDO "$MESON" --version >/dev/null 2>&1
+}
+
+if ! meson_usable; then
   log "installing meson >= 1.4 from pip"
-  pip3 install --break-system-packages --root-user-action=ignore --quiet 'meson>=1.4' \
-    || pip3 install --quiet 'meson>=1.4'
+  $SUDO pip3 install --break-system-packages --root-user-action=ignore --quiet 'meson>=1.4' \
+    || $SUDO pip3 install --quiet 'meson>=1.4'
+  hash -r 2>/dev/null || true
+  MESON="$([[ -x /usr/local/bin/meson ]] && echo /usr/local/bin/meson || command -v meson)"
+  meson_usable || die "meson >= 1.4 is still not usable as the installing user"
 fi
 
 src="$(mktemp -d)"
@@ -106,14 +123,14 @@ run() {
 }
 
 log "building"
-run meson setup "$src/msitools/build" "$src/msitools" --prefix "$PREFIX" --buildtype=release
+run "$MESON" setup "$src/msitools/build" "$src/msitools" --prefix "$PREFIX" --buildtype=release
 run ninja -C "$src/msitools/build"
 
 log "installing into $PREFIX"
 if [[ -w "$PREFIX" ]]; then
-  run ninja -C "$src/msitools/build" install
+  run "$MESON" install -C "$src/msitools/build" --no-rebuild
 else
-  run $SUDO ninja -C "$src/msitools/build" install
+  run $SUDO "$MESON" install -C "$src/msitools/build" --no-rebuild
 fi
 [[ $EUID -eq 0 || -n "$SUDO" ]] && $SUDO ldconfig 2>/dev/null || true
 
