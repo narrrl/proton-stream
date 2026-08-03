@@ -162,6 +162,19 @@ impl Title {
         self.episodes().filter(|e| e.is_watched()).count()
     }
 
+    /// Whether the files themselves say this is episodic, rather than
+    /// [`Title::kind`] having been inferred from how many of them there are.
+    ///
+    /// The difference matters to whoever is matching this against a provider: a
+    /// folder of three unnumbered films is a `Series` here purely because it
+    /// holds three files, and it must not be scored down against the film
+    /// entries it is actually made of. Numbering is a statement; a file count
+    /// is a guess.
+    pub fn states_its_numbering(&self) -> bool {
+        self.episodes()
+            .any(|episode| episode.node.parsed.is_episode() || episode.node.parsed.season.is_some())
+    }
+
     /// The file to pull a poster thumbnail from: the first episode there is.
     /// Proton renders a thumbnail per file, so any of them is a frame of the
     /// right show; the first is the one most likely already cached.
@@ -288,9 +301,7 @@ impl Library {
         for title in &mut titles {
             // A season number, an episode number or more than one file all mean
             // series. A lone unnumbered file is a film.
-            let numbered = title.episodes().any(|episode| {
-                episode.node.parsed.is_episode() || episode.node.parsed.season.is_some()
-            });
+            let numbered = title.states_its_numbering();
             title.kind = if numbered || title.episode_count() > 1 {
                 TitleKind::Series
             } else {
@@ -357,10 +368,19 @@ impl Library {
 
 /// The grouping key: case- and punctuation-insensitive, so `Fullmetal
 /// Alchemist: Brotherhood` and `Fullmetal Alchemist Brotherhood` are one title.
+///
+/// An apostrophe is the one punctuation mark that closes up rather than
+/// separating: `Heaven's Feel` keys as `heavens feel`, which is what a folder
+/// that had to give its apostrophe up to the filesystem is called. Splitting it
+/// into `heaven s feel` instead files the two apart and, worse, costs the
+/// matcher a real match on the difference.
 pub fn title_key(title: &str) -> String {
     let mut key = String::with_capacity(title.len());
     let mut pending_space = false;
     for character in title.chars() {
+        if matches!(character, '\'' | '\u{2019}' | '\u{02bc}') {
+            continue;
+        }
         if character.is_alphanumeric() {
             if pending_space && !key.is_empty() {
                 key.push(' ');
@@ -633,6 +653,16 @@ mod tests {
             title_key("fullmetal alchemist brotherhood")
         );
         assert_eq!(title_key("K-On!!"), "k on");
+    }
+
+    /// An apostrophe closes up rather than separating, and a name written to
+    /// disk has usually lost it — the two have to key alike, or a folder called
+    /// `Heavens Feel` is a different title to the one the provider has.
+    #[test]
+    fn an_apostrophe_keys_the_same_as_its_absence() {
+        assert_eq!(title_key("Heaven's Feel"), "heavens feel");
+        assert_eq!(title_key("Heaven\u{2019}s Feel"), title_key("Heavens Feel"));
+        assert_eq!(title_key("Devils' Line"), title_key("Devils Line"));
     }
 
     #[test]

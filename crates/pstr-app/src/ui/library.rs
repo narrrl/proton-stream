@@ -118,7 +118,9 @@ fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut V
                         name: &title.name,
                         subtitle: subtitle(title),
                         progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
-                        badge: (title.kind == TitleKind::Film).then(|| "Film".to_string()),
+                        // What a film is says itself in the subtitle below the
+                        // card; a second `Film` over the poster is noise.
+                        badge: None,
                     },
                 )
                 .clicked();
@@ -132,13 +134,19 @@ fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut V
     }
 }
 
-/// The grey line under a card: how much there is, and how much is left.
+/// The grey line under a card: what it is, how much there is, and how much is
+/// left.
+///
+/// A film says so, and says its year after it. The year alone was ambiguous in
+/// the one place it mattered: `Ghost in the Shell` over `1995` reads as a
+/// season, an episode count, anything — where every series card on the same
+/// shelf is counting episodes.
 fn subtitle(title: &Title) -> String {
     if title.kind == TitleKind::Film {
-        return title
-            .year
-            .map(|year| year.to_string())
-            .unwrap_or_else(|| "Film".into());
+        return match title.year {
+            Some(year) => format!("Film  ·  {year}"),
+            None => "Film".into(),
+        };
     }
     let total = title.episode_count();
     let watched = title.watched_count();
@@ -181,6 +189,32 @@ pub fn plural(count: usize, noun: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn title(kind: TitleKind, year: Option<u32>) -> Title {
+        Title {
+            key: "k".into(),
+            name: "Ghost in the Shell".into(),
+            year,
+            kind,
+            seasons: Vec::new(),
+            share_ids: Vec::new(),
+        }
+    }
+
+    /// A film says it is one. The year on its own was read as anything but —
+    /// the cards beside it are all counting episodes.
+    #[test]
+    fn a_film_is_labelled_a_film_and_dated_after_it() {
+        assert_eq!(
+            subtitle(&title(TitleKind::Film, Some(1995))),
+            "Film  ·  1995"
+        );
+        assert_eq!(subtitle(&title(TitleKind::Film, None)), "Film");
+        assert_eq!(
+            subtitle(&title(TitleKind::Series, Some(1995))),
+            "0 episodes"
+        );
+    }
 
     #[test]
     fn plurals_read_naturally() {

@@ -27,8 +27,8 @@ authors = ["Nils Pukropp <contact@narl.io>"]
 opt-level = 2
 
 [workspace.dependencies]
-proton-sdk = { version = "0.3.3" }
-proton-drive-rs = { version = "0.3.3" }
+proton-sdk = { version = "0.4.0" }
+proton-drive-rs = { version = "0.4.0" }
 
 # Internal crates.
 pstr-core = { path = "crates/pstr-core" }
@@ -56,7 +56,15 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # The share URL fragment and the custom password are both secrets; they go in
 # the OS credential store (Secret Service on Linux, Credential Manager on
 # Windows), never in the config file next to them.
-keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+#
+# No platform features here on purpose. `keyring` selects its keystore by
+# `cfg(all(target_os = ..., feature = ...))`, and with the matching feature off
+# it falls back to `mock` — an in-memory store built fresh per `Entry`, so
+# `set_password` succeeds, the next `Entry::new(..).get_password()` returns
+# `NoEntry`, and nothing warns. Every consuming crate therefore enables the
+# store for its target in a `[target.'cfg(...)'.dependencies]` block; see
+# `crates/pstr-core/Cargo.toml`.
+keyring = { version = "3" }
 clap = { version = "4", features = ["derive"] }
 # The UI. `glow` rather than `wgpu` because step two of the player hands mpv an
 # `MPV_RENDER_API_TYPE_OPENGL` context, and that has to be the same context

@@ -21,7 +21,7 @@ use crate::metadata::{EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId,
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -116,6 +116,16 @@ CREATE TABLE episode_metadata (
     air_date    TEXT,
     PRIMARY KEY (title_key, season, number)
 );
+"#;
+
+/// Which rows the viewer chose themselves.
+///
+/// A column rather than a separate table of overrides, because it changes
+/// nothing about what the row *holds* — only about who put it there, and
+/// therefore whether a match run may replace it. See
+/// [`MetadataRecord::manual`].
+const MIGRATION_V5: &str = r#"
+ALTER TABLE title_metadata ADD COLUMN manual INTEGER NOT NULL DEFAULT 0;
 "#;
 
 /// What `season = -1` means in `episode_metadata`: no season at all.
@@ -216,6 +226,13 @@ impl Catalog {
             let tx = self.conn.transaction()?;
             tx.execute_batch(MIGRATION_V4)?;
             tx.pragma_update(None, "user_version", 4)?;
+            tx.commit()?;
+        }
+
+        if version < 5 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V5)?;
+            tx.pragma_update(None, "user_version", 5)?;
             tx.commit()?;
         }
 
@@ -384,7 +401,8 @@ impl Catalog {
     pub fn all_metadata(&self) -> Result<HashMap<String, MetadataRecord>> {
         let mut statement = self.conn.prepare(
             "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
-                    overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url
+                    overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
+                    manual
              FROM title_metadata",
         )?;
         let rows = statement.query_map([], row_to_metadata)?;
@@ -404,7 +422,8 @@ impl Catalog {
             .conn
             .query_row(
                 "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
-                        overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url
+                        overview, year, kind, poster_url, backdrop_url, rating, genres, episodes,
+                        url, manual
                  FROM title_metadata WHERE title_key = ?1",
                 params![title_key],
                 row_to_metadata,
@@ -422,8 +441,9 @@ impl Catalog {
         self.conn.execute(
             "INSERT INTO title_metadata (
                  title_key, provider, matched, fetched_at, remote_id, name, original_name,
-                 overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                 overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
+                 manual
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT (title_key) DO UPDATE SET
                  provider      = excluded.provider,
                  matched       = excluded.matched,
@@ -439,7 +459,8 @@ impl Catalog {
                  rating        = excluded.rating,
                  genres        = excluded.genres,
                  episodes      = excluded.episodes,
-                 url           = excluded.url",
+                 url           = excluded.url,
+                 manual        = excluded.manual",
             params![
                 record.title_key,
                 record.provider.as_str(),
@@ -457,7 +478,27 @@ impl Catalog {
                 data.map(|data| data.genres.join("\n")),
                 data.and_then(|data| data.episodes),
                 data.and_then(|data| data.url.as_deref()),
+                record.manual as i64,
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Forget one title's answer entirely, episodes included.
+    ///
+    /// Different from storing a miss: a miss says "asked, nothing there" and is
+    /// trusted for a while, where this leaves no row at all and the next match
+    /// run treats the title as one it has never seen. That is what "match this
+    /// one automatically again" has to mean after a hand-picked match, since a
+    /// hand-picked one never expires.
+    pub fn forget_metadata(&self, title_key: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM title_metadata WHERE title_key = ?1",
+            params![title_key],
+        )?;
+        self.conn.execute(
+            "DELETE FROM episode_metadata WHERE title_key = ?1",
+            params![title_key],
         )?;
         Ok(())
     }
@@ -618,6 +659,7 @@ fn row_to_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MetadataR
         provider,
         metadata,
         fetched_at,
+        manual: row.get::<_, i64>(16)? != 0,
     }))
 }
 
@@ -893,6 +935,7 @@ mod tests {
             provider: ProviderId::AniList,
             metadata: Some(found()),
             fetched_at: 1_700_000_000,
+            manual: false,
         };
 
         catalog.set_metadata(&record).expect("store");
@@ -907,6 +950,76 @@ mod tests {
         assert_eq!(catalog.all_metadata().expect("read all").len(), 1);
     }
 
+    /// A hand-picked match has to read back as hand-picked, or the next match
+    /// run overwrites the one thing the viewer corrected themselves.
+    #[test]
+    fn a_hand_picked_match_says_so_when_it_is_read_back() {
+        let catalog = Catalog::in_memory().expect("open");
+        let record = MetadataRecord {
+            title_key: "fate stay night heavens feel".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(found()),
+            fetched_at: 1_700_000_000,
+            manual: true,
+        };
+        catalog.set_metadata(&record).expect("store");
+
+        let read = catalog.metadata(&record.title_key).expect("read");
+        assert_eq!(read.as_ref().map(|read| read.manual), Some(true));
+        assert_eq!(read, Some(record.clone()));
+
+        // And an automatic write over the top says so in turn: the flag is the
+        // row's, not the title's.
+        catalog
+            .set_metadata(&MetadataRecord {
+                manual: false,
+                ..record.clone()
+            })
+            .expect("store again");
+        assert_eq!(
+            catalog
+                .metadata(&record.title_key)
+                .expect("read")
+                .map(|read| read.manual),
+            Some(false)
+        );
+    }
+
+    /// Forgetting is not the same as storing a miss: it must leave no row at
+    /// all, so the next match run treats the title as one it never asked about.
+    #[test]
+    fn forgetting_a_title_leaves_neither_its_match_nor_its_episodes() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .set_metadata(&MetadataRecord {
+                title_key: "attack on titan".into(),
+                provider: ProviderId::AniList,
+                metadata: Some(found()),
+                fetched_at: 1,
+                manual: true,
+            })
+            .expect("store");
+        catalog
+            .set_episode_metadata(
+                "attack on titan",
+                ProviderId::AniList,
+                1,
+                &[EpisodeMetadata {
+                    season: None,
+                    number: 1,
+                    name: Some("To You, in 2000 Years".into()),
+                    overview: None,
+                    still_url: None,
+                    air_date: None,
+                }],
+            )
+            .expect("store episodes");
+
+        catalog.forget_metadata("attack on titan").expect("forget");
+        assert!(catalog.metadata("attack on titan").expect("read").is_none());
+        assert!(catalog.all_episode_metadata().expect("read").is_empty());
+    }
+
     /// The negative answer is the one that has to survive a round trip: without
     /// it every render re-asks about every unmatched title.
     #[test]
@@ -917,6 +1030,7 @@ mod tests {
             provider: ProviderId::AniList,
             metadata: None,
             fetched_at: 1_700_000_000,
+            manual: false,
         };
         catalog.set_metadata(&record).expect("store");
 
@@ -959,6 +1073,7 @@ mod tests {
                 provider: ProviderId::AniList,
                 metadata: Some(found()),
                 fetched_at: 1,
+                manual: false,
             })
             .expect("store");
 

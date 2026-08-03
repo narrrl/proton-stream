@@ -7,7 +7,7 @@
       -D Version=0.1.0 -D BinDir=... -D MpvDll=... -D IconFile=...
 
   Why a second file at all, next to proton-stream.wxs
-  ---------------------------------------------------
+  ===================================================
   The WiX toolset cannot build an .msi on Linux. Not "is unsupported" — it
   fails outright, in WixToolset.Core's BundleValidator.GetCanonicalRelativePath,
   which validates every Directory/@Name by prepending a drive letter and asking
@@ -26,7 +26,7 @@
   of it — hence this file rather than a preprocessor branch inside the v4 one.
 
   What this loses against the WiX build
-  -------------------------------------
+  =====================================
   The dialog UI. WixUI_InstallDir, and with it the license page and the
   "choose a folder" page, is a WiX extension with no wixl equivalent, so this
   .msi installs with the plain Windows Installer progress UI and always lands in
@@ -35,7 +35,7 @@
   entry, clean uninstall — is authored here and identical.
 
   Keep in sync with proton-stream.wxs
-  -----------------------------------
+  ===================================
   UpgradeCode and every Component Guid are shared with that file, deliberately.
   They are what lets an .msi built here upgrade one built on Windows (and the
   reverse) instead of the two stacking up or corrupting each other's component
@@ -89,17 +89,21 @@
 
           <Component Id="AppExe" Guid="623c8cb8-b826-4d57-a054-e5be56f24c19" Win64="yes">
             <File Id="AppExe" Source="$(var.BinDir)/proton-stream.exe"
-                  Name="proton-stream.exe" KeyPath="yes">
-              <!-- Not advertised: an advertised shortcut needs the feature
-                   state machine that the dialog-less install does not drive. -->
-              <Shortcut Id="StartMenuShortcut"
-                        Directory="ProgramMenuFolder"
-                        Name="Proton Stream"
-                        Description="Browse and stream a Proton Drive public link"
-                        WorkingDirectory="INSTALLDIR"
-                        Icon="proton-stream.ico"
-                        Advertise="no" />
-            </File>
+                  Name="proton-stream.exe" KeyPath="yes" />
+            <!-- Not advertised: an advertised shortcut needs the feature state
+                 machine that the dialog-less install does not drive. wixl has
+                 no Advertise attribute — it logs "builder.vala: unimplemented"
+                 and writes the advertised form anyway, with the feature name in
+                 Shortcut/Target. What selects the non-advertised form is being
+                 a child of the Component rather than of the File, plus an
+                 explicit formatted Target. Keep it out of the <File>. -->
+            <Shortcut Id="StartMenuShortcut"
+                      Directory="ProgramMenuFolder"
+                      Name="Proton Stream"
+                      Description="Browse and stream a Proton Drive public link"
+                      Target="[INSTALLDIR]proton-stream.exe"
+                      WorkingDirectory="INSTALLDIR"
+                      Icon="proton-stream.ico" />
           </Component>
 
           <!-- The CLI, and the PATH entry that makes it worth installing. Tied

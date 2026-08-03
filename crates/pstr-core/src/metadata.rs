@@ -250,6 +250,13 @@ pub struct MetadataRecord {
     pub metadata: Option<TitleMetadata>,
     /// Unix seconds. What makes a miss expire rather than being forever.
     pub fetched_at: i64,
+    /// The viewer picked this entry themselves.
+    ///
+    /// A hand-picked match outranks anything the matcher would decide: it never
+    /// expires, and "match again" leaves it alone. Otherwise the one title the
+    /// scorer gets wrong — the case this flag exists for — would be corrected by
+    /// hand and then quietly un-corrected by the next run.
+    pub manual: bool,
 }
 
 /// How long a stored answer is trusted.
@@ -266,6 +273,11 @@ impl MetadataRecord {
     pub fn is_fresh(&self, now: i64, provider: ProviderId) -> bool {
         if self.provider != provider {
             return false;
+        }
+        // A hand-picked match does not go stale: nothing a re-ask could learn
+        // would be better than what the viewer already said it was.
+        if self.manual {
+            return true;
         }
         let ttl = if self.metadata.is_some() {
             MATCH_TTL_SECS
@@ -425,6 +437,7 @@ mod tests {
             provider: ProviderId::AniList,
             metadata: None,
             fetched_at: now - MISS_TTL_SECS - 1,
+            manual: false,
         };
         assert!(!miss.is_fresh(now, ProviderId::AniList));
 
@@ -433,6 +446,22 @@ mod tests {
             ..miss.clone()
         };
         assert!(matched.is_fresh(now, ProviderId::AniList));
+    }
+
+    /// What the viewer picked by hand outlives every TTL: it is not an answer
+    /// that could go stale, it is an instruction.
+    #[test]
+    fn a_hand_picked_match_never_expires() {
+        let record = MetadataRecord {
+            title_key: "k".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(metadata()),
+            fetched_at: 0,
+            manual: true,
+        };
+        assert!(record.is_fresh(MATCH_TTL_SECS * 100, ProviderId::AniList));
+        // But it is still one provider's id, and it means nothing to the other.
+        assert!(!record.is_fresh(MATCH_TTL_SECS * 100, ProviderId::Tmdb));
     }
 
     /// Switching provider must re-ask rather than trust the other one's answer —
@@ -444,6 +473,7 @@ mod tests {
             provider: ProviderId::AniList,
             metadata: Some(metadata()),
             fetched_at: 1_000_000_000,
+            manual: false,
         };
         assert!(!record.is_fresh(1_000_000_000, ProviderId::Tmdb));
     }

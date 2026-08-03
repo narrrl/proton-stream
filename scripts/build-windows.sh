@@ -147,6 +147,14 @@ fetch_mpv() {
 resolve_mpv() {
   [[ $FETCH_MPV -eq 1 ]] && fetch_mpv
 
+  # A previous --fetch-mpv left its unpacked copy in dist/mpv-dev. Adopt it
+  # rather than making every later run repeat the flag; it is the same
+  # directory fetch_mpv would have reused.
+  if [[ -z "$MPV_DEV" && -f "$DIST/mpv-dev/libmpv-2.dll" ]]; then
+    log "reusing $DIST/mpv-dev"
+    MPV_DEV="$DIST/mpv-dev"
+  fi
+
   [[ -n "$MPV_DEV" ]] || die "$(cat <<EOF
 no libmpv development files. Either pass --fetch-mpv, or download the mpv-dev
 archive from

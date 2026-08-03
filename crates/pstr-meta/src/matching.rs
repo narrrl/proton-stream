@@ -38,6 +38,15 @@ pub struct Query {
     pub name: String,
     pub year: Option<u32>,
     pub kind: TitleKind,
+    /// Whether the library *knows* what kind of thing this is.
+    ///
+    /// The mirror of [`Candidate::kind_known`], and it exists for the same
+    /// reason. A folder holding the three `Heaven's Feel` films is a `Series`
+    /// to [`pstr_core::library`] only because it holds three files — the films
+    /// themselves are numbered nothing — and scoring that guess against the
+    /// provider's (correct) `Film` costs the right answer the 0.05 that puts it
+    /// under the floor.
+    pub kind_known: bool,
 }
 
 impl Query {
@@ -46,7 +55,15 @@ impl Query {
             name: name.into(),
             year,
             kind,
+            kind_known: true,
         }
+    }
+
+    /// Say that [`Query::kind`] was inferred rather than stated — see
+    /// [`Query::kind_known`].
+    pub fn with_guessed_kind(mut self) -> Self {
+        self.kind_known = false;
+        self
     }
 }
 
@@ -93,10 +110,11 @@ pub fn score(query: &Query, candidate: &Candidate) -> f32 {
         _ => {}
     }
 
-    if candidate.kind_known && query.kind != candidate.metadata.kind {
+    if query.kind_known && candidate.kind_known && query.kind != candidate.metadata.kind {
         // A film and a series of the same name are usually genuinely related —
         // an adaptation, a compilation — so this is a nudge, not a veto. And
-        // only when the provider said; see `Candidate::kind_known`.
+        // only when both sides actually said; see `Candidate::kind_known` and
+        // `Query::kind_known`.
         score -= 0.05;
     }
 
@@ -353,6 +371,47 @@ mod tests {
 
         assert!(score(&query, &unstated) > score(&query, &stated));
         assert_eq!(score(&query, &unstated), 1.0);
+
+        // And the same in reverse: a library that guessed its own kind has
+        // nothing to disagree with the provider about.
+        let guessed = query.clone().with_guessed_kind();
+        assert_eq!(score(&guessed, &stated), 1.0);
+    }
+
+    /// **The apostrophe case, both shapes of it.** A folder cannot carry the
+    /// apostrophe of `Fate/stay night [Heaven's Feel]`, so it is called
+    /// `Heavens Feel` — and until [`title_key`] closed the apostrophe up rather
+    /// than splitting on it, the provider's own entry scored under the floor.
+    ///
+    /// One film per folder matches outright. The trilogy in a single folder is
+    /// the harder half: the library calls three files a series where the
+    /// provider calls each of them a film, so it clears the floor by a hair
+    /// with that mismatch subtracted.
+    #[test]
+    fn a_title_that_lost_its_apostrophe_matches_the_entry_that_kept_one() {
+        let film = candidate(
+            "Fate/stay night [Heaven's Feel] I. presage flower",
+            &[],
+            Some(2017),
+            TitleKind::Film,
+        );
+
+        let alone = Query::new(
+            "Fate stay night Heavens Feel I Presage Flower",
+            Some(2017),
+            TitleKind::Film,
+        );
+        assert!(score(&alone, &film) >= 1.0);
+
+        // Three films in one folder: a `Series` only because there are three of
+        // them, so the kind is a guess and costs the film entry nothing.
+        let trilogy =
+            Query::new("Fate stay night Heavens Feel", None, TitleKind::Series).with_guessed_kind();
+        assert!(
+            score(&trilogy, &film) >= MATCH_FLOOR,
+            "scored {}",
+            score(&trilogy, &film)
+        );
     }
 
     /// The tie-break must not override the score: a later candidate that

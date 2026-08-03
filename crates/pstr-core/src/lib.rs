@@ -5,6 +5,7 @@
 //! how a share is opened and how its contents are modelled.
 #![forbid(unsafe_code)]
 
+pub mod appearance;
 pub mod catalog;
 pub mod config;
 pub mod error;

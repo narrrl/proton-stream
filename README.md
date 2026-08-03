@@ -57,6 +57,7 @@ against the SDK's own range download.
 | Player | Embedded libmpv: HEVC 10-bit, HDR and ASS subtitles with hardware decode. Volume, audio-track, subtitle and chapter pickers; skip-the-opening; next/previous episode and autoplay. The language picked is preferred for the next file too. |
 | Transcoding | None. mpv demuxes and decodes natively. |
 | UI | egui/eframe on glow; mpv renders into the same GL context. |
+| Themes | The shipped near-black palette plus Catppuccin Latte, Frappé, Macchiato and Mocha, each with a choice of eight accents — pink and sky among them — drawn as a gradient unless you turn that off. Picked on the Shares page, applied without a restart. |
 | Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. |
 | Platforms | Linux and Windows. |
 

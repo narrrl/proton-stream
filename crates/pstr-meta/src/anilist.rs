@@ -85,19 +85,28 @@ impl Provider for AniList {
     }
 
     async fn search(&self, query: &Query) -> Result<Vec<Candidate>> {
-        let data: Option<SearchData> = self
-            .query(serde_json::json!({
-                "query": SEARCH,
-                "variables": { "search": query.name, "perPage": PAGE_SIZE },
-            }))
-            .await?;
+        // Each term is asked only because the one before it came back with
+        // nothing at all — see `search_terms`. A page of candidates, however
+        // weak, is the matcher's business rather than this one's.
+        for term in search_terms(&query.name) {
+            let data: Option<SearchData> = self
+                .query(serde_json::json!({
+                    "query": SEARCH,
+                    "variables": { "search": term, "perPage": PAGE_SIZE },
+                }))
+                .await?;
 
-        Ok(data
-            .map(|data| data.page.media)
-            .unwrap_or_default()
-            .into_iter()
-            .map(Media::into_candidate)
-            .collect())
+            let candidates: Vec<Candidate> = data
+                .map(|data| data.page.media)
+                .unwrap_or_default()
+                .into_iter()
+                .map(Media::into_candidate)
+                .collect();
+            if !candidates.is_empty() {
+                return Ok(candidates);
+            }
+        }
+        Ok(Vec::new())
     }
 
     async fn episodes(&self, title: &TitleMetadata) -> Result<Vec<EpisodeMetadata>> {
@@ -155,6 +164,61 @@ impl AniList {
         }
         Ok(payload.data)
     }
+}
+
+/// The search strings to try, in order, until one of them returns anything.
+///
+/// AniList does not do fuzzy search. Every word of the query has to be a word
+/// its index actually holds — only the *last* one is matched as a prefix — and
+/// all of them have to match, so a single word AniList has never seen empties
+/// the whole result set. `ghost in the shel` finds the film; `cowbo bebop`
+/// finds nothing.
+///
+/// That turns one filesystem habit into a total miss: a name written to disk
+/// has had its apostrophes taken out, because plenty of tools and shares still
+/// dislike them. `Fate/stay night [Heaven's Feel]` indexes the words `heaven`
+/// and `s`, and the folder is called `Fate stay night Heavens Feel` — whose
+/// `heavens` is not a word in the index and not a prefix of one either. AniList
+/// answers with an empty page, the title is stored as a miss, and it stays
+/// unmatched for as long as the record is fresh.
+///
+/// So the fallback puts the apostrophe back the only way that survives
+/// tokenisation: by dropping the `s` it was holding on to. It is asked for only
+/// after the name as written found nothing, which is what keeps it from
+/// broadening a search that was already working.
+fn search_terms(name: &str) -> Vec<String> {
+    let mut terms = vec![name.to_string()];
+
+    let depossessed = without_possessive_s(name);
+    if depossessed != name {
+        terms.push(depossessed);
+    }
+    terms
+}
+
+/// `Heavens Feel` → `Heaven Feel`.
+///
+/// Only words long enough to still mean something without it, and only where
+/// the `s` follows a letter — a word that kept its apostrophe (`Heaven's`) is
+/// already what the index holds, and cutting the `s` off it would leave the
+/// apostrophe behind as its own token.
+fn without_possessive_s(name: &str) -> String {
+    name.split(' ')
+        .map(|word| {
+            let mut characters = word.chars().rev();
+            let last = characters.next();
+            let previous = characters.next();
+            let long_enough = word.chars().count() >= 4;
+
+            match (last, previous) {
+                (Some('s' | 'S'), Some(previous)) if long_enough && previous.is_alphabetic() => {
+                    &word[..word.len() - 1]
+                }
+                _ => word,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Deserialize)]
@@ -400,6 +464,45 @@ mod tests {
         assert_eq!(kind_of(Some("OVA")), TitleKind::Series);
         assert_eq!(kind_of(Some("MOVIE")), TitleKind::Film);
         assert_eq!(kind_of(None), TitleKind::Film);
+    }
+
+    /// The miss this exists for: a folder named after a title whose apostrophe
+    /// the filesystem never got, searched against an index that tokenised the
+    /// apostrophe into a word boundary.
+    #[test]
+    fn a_name_that_lost_its_apostrophe_is_searched_for_again_without_the_s() {
+        assert_eq!(
+            search_terms("Fate stay night Heavens Feel"),
+            vec![
+                "Fate stay night Heavens Feel".to_string(),
+                "Fate stay night Heaven Feel".to_string(),
+            ]
+        );
+    }
+
+    /// One request, not two, for the names that need no repair — the fallback
+    /// is a second round trip and a title that already matched must not pay it.
+    #[test]
+    fn a_name_with_nothing_to_repair_is_searched_for_once() {
+        assert_eq!(search_terms("Cowboy Bebop"), vec!["Cowboy Bebop"]);
+        // Short words keep their `s`: `Kids on the Slope` is not `Kid on the
+        // Slope`, and a name that still has its apostrophe is already what the
+        // index holds.
+        assert_eq!(search_terms("Heaven's Feel"), vec!["Heaven's Feel"]);
+        assert_eq!(
+            search_terms("Kids on the Bus"),
+            vec!["Kids on the Bus".to_string(), "Kid on the Bus".to_string()],
+            "a four-letter word is long enough; a three-letter one is not"
+        );
+    }
+
+    /// Byte slicing, on names that are not ASCII.
+    #[test]
+    fn a_multi_byte_name_is_not_cut_inside_a_character() {
+        for name in ["進撃の巨人", "Kaguya-sama: Love is War？", "café"] {
+            let terms = search_terms(name);
+            assert_eq!(terms[0], name);
+        }
     }
 
     #[test]

@@ -23,9 +23,10 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use parking_lot::Mutex;
+use pstr_core::appearance::Appearance;
 use pstr_core::catalog::{Catalog, CatalogNode, WatchState, build_rows};
 use pstr_core::config::AppDirs;
-use pstr_core::library::{Library, Title};
+use pstr_core::library::{Library, Title, TitleKind};
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId};
 use pstr_core::prefs::PlaybackPrefs;
 use pstr_core::proton_drive_rs::ThumbnailType;
@@ -85,6 +86,16 @@ pub enum Event {
     },
     /// Every requested match is done.
     MatchFinished,
+    /// What the provider answered a hand search with, unscored and in its own
+    /// order. `title_key` says which title asked, because the viewer can close
+    /// the search and open another one while a request is still out.
+    MatchOptions {
+        title_key: String,
+        options: Vec<pstr_core::metadata::TitleMetadata>,
+    },
+    /// A hand search did not get an answer. Distinct from an empty one: nothing
+    /// found is a result, and a rate limit is not.
+    MatchSearchFailed { title_key: String, error: String },
     /// A decoded piece of provider artwork, keyed by title key.
     Poster {
         key: String,
@@ -158,6 +169,9 @@ pub struct Engine {
     /// because a new player is built from them, and the player is started from
     /// a background event.
     prefs: Arc<Mutex<PlaybackPrefs>>,
+    /// Which theme the window wears. Kept beside the playback preferences for
+    /// the same reason: it is read from the UI and written to disk off it.
+    appearance: Arc<Mutex<Appearance>>,
     events: Sender<Event>,
     ctx: egui::Context,
 }
@@ -221,6 +235,14 @@ impl Engine {
             PlaybackPrefs::default()
         });
 
+        // And the same again for the theme, which is the least load-bearing
+        // file of the three: an unreadable one costs the viewer their colours
+        // until they pick them again.
+        let appearance = pstr_core::appearance::load(&dirs).unwrap_or_else(|error| {
+            tracing::warn!("read the appearance: {error}");
+            Appearance::default()
+        });
+
         let engine = Self {
             runtime,
             store: Arc::new(ShareStore::new(dirs.clone())),
@@ -232,6 +254,7 @@ impl Engine {
             lookups: Arc::new(tokio::sync::Semaphore::new(LOOKUP_CONCURRENCY)),
             metadata: Arc::new(Mutex::new(Enrichment::build(config))),
             prefs: Arc::new(Mutex::new(prefs)),
+            appearance: Arc::new(Mutex::new(appearance)),
             events,
             ctx,
         };
@@ -267,6 +290,27 @@ impl Engine {
                 // config directory is unwritable in a red line under the film
                 // helps nobody mid-episode.
                 tracing::warn!("save the playback preferences: {error}");
+            }
+        });
+    }
+
+    /// Which theme the window wears.
+    pub fn appearance(&self) -> Appearance {
+        *self.appearance.lock()
+    }
+
+    /// Change the theme and write it.
+    ///
+    /// Always committed, unlike the volume: a theme is picked with a click and
+    /// there is no drag to coalesce.
+    pub fn set_appearance(&self, appearance: Appearance) {
+        *self.appearance.lock() = appearance;
+        let engine = self.clone();
+        self.runtime.spawn_blocking(move || {
+            if let Err(error) = pstr_core::appearance::save(&engine.dirs, &appearance) {
+                // Not `fail`, for the same reason the playback preferences are
+                // not: the change happened, and only the remembering did not.
+                tracing::warn!("save the appearance: {error}");
             }
         });
     }
@@ -745,7 +789,13 @@ impl Engine {
         let mut pending: Vec<Work> = Vec::new();
         for title in titles {
             let record = stored.get(&title.key);
-            if force || !pstr_meta::service::is_usable(record, provider) {
+            // A hand-picked entry is never searched for again, not even by
+            // "match again" — that button means "the automatic answers are
+            // wrong", and re-deciding the one title the viewer already fixed by
+            // hand is the opposite of what they asked for. Its episode list is
+            // still fetched below if it is missing.
+            let pinned = record.is_some_and(|record| record.manual && record.provider == provider);
+            if !pinned && (force || !pstr_meta::service::is_usable(record, provider)) {
                 pending.push(Work::Match(title));
                 continue;
             }
@@ -846,6 +896,98 @@ impl Engine {
             failed,
         });
         self.load_metadata();
+    }
+
+    /// Ask the provider what `term` might be, for a viewer choosing by hand.
+    ///
+    /// Unscored and unfiltered — see [`MetadataService::search`]. Nothing is
+    /// stored: this is a look, and only [`Engine::choose_match`] writes.
+    pub fn search_matches(&self, title_key: String, term: String, kind: TitleKind) {
+        let Some(service) = self.metadata.lock().service.clone() else {
+            let config = self.metadata_config();
+            return self.emit(Event::MatchSearchFailed {
+                title_key,
+                error: if !config.enabled {
+                    "turn on metadata enrichment first".into()
+                } else {
+                    format!("{} needs an API key", config.provider.label())
+                },
+            });
+        };
+
+        let engine = self.clone();
+        let permits = Arc::clone(&self.lookups);
+        self.runtime.spawn(async move {
+            // The same permit the batch run takes: a viewer typing in the search
+            // box while a match run is going must not be what earns the 429.
+            let Ok(_permit) = permits.acquire().await else {
+                return;
+            };
+            match service.search(&term, kind).await {
+                Ok(options) => engine.emit(Event::MatchOptions { title_key, options }),
+                Err(error) => {
+                    tracing::warn!("search {term:?}: {error}");
+                    engine.emit(Event::MatchSearchFailed {
+                        title_key,
+                        error: error.to_string(),
+                    });
+                }
+            }
+        });
+    }
+
+    /// Pin one title to the entry the viewer picked, and take its episodes.
+    ///
+    /// Stored as [`MetadataRecord::manual`], so it outlives every TTL and
+    /// survives "match again". The episode list is fetched here rather than left
+    /// to the next match run, because the point of choosing an entry by hand is
+    /// usually that its episode names were wrong too.
+    pub fn choose_match(&self, title: Title, found: pstr_core::metadata::TitleMetadata) {
+        let Some(service) = self.metadata.lock().service.clone() else {
+            return self.emit(Event::Error("turn on metadata enrichment first".into()));
+        };
+
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let name = found.name.clone();
+            let record = service.chosen(title.key.clone(), found.clone());
+            if let Err(error) = engine.catalog.lock().set_metadata(&record) {
+                return engine.fail("store the match", error);
+            }
+
+            let episodes = episodes_of(&service, &title, &found).await;
+            if !episodes.is_empty() {
+                let stored = engine.catalog.lock().set_episode_metadata(
+                    &title.key,
+                    service.provider(),
+                    now(),
+                    &episodes,
+                );
+                if let Err(error) = stored {
+                    tracing::warn!("store episodes for {}: {error}", title.key);
+                }
+            }
+
+            engine.emit(Event::Status(format!("{} is now {name}", title.name)));
+            engine.load_metadata();
+        });
+    }
+
+    /// Drop what is stored for one title, so it is matched from scratch again.
+    ///
+    /// The undo for [`Engine::choose_match`], and the repair for a bad automatic
+    /// match: the row goes entirely rather than becoming a stored miss, which is
+    /// what makes the next match run treat the title as one it has never asked
+    /// about.
+    pub fn forget_match(&self, title_key: String) {
+        let engine = self.clone();
+        self.runtime.spawn_blocking(move || {
+            if let Err(error) = engine.catalog.lock().forget_metadata(&title_key) {
+                return engine.fail("forget the match", error);
+            }
+            engine.emit(Event::Status("match cleared".into()));
+            engine.load_metadata();
+        });
     }
 
     /// Fetch, decode and post one title's artwork.

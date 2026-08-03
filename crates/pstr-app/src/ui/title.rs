@@ -61,10 +61,9 @@ pub fn show(
 fn header(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<Action>) {
     // Cloned out of the borrow: `art` is held mutably for the card below, and
     // the description is drawn beside it.
-    let found = art
-        .metadata
-        .get(&title.key)
-        .and_then(|record| record.metadata.clone());
+    let record = art.metadata.get(&title.key);
+    let found = record.and_then(|record| record.metadata.clone());
+    let by_hand = record.is_some_and(|record| record.manual);
 
     ui.horizontal_top(|ui| {
         ui::card(
@@ -87,7 +86,11 @@ fn header(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec
             if let Some(found) = &found
                 && found.name != title.name
             {
-                ui.label(ui::muted(format!("also known as {}", found.name)));
+                ui.label(ui::muted(format!(
+                    "also known as {}{}",
+                    found.name,
+                    if by_hand { " (chosen by hand)" } else { "" }
+                )));
             }
             ui.add_space(4.0);
             ui.label(ui::muted(meta_line(title, found.as_ref())));
@@ -122,6 +125,21 @@ fn header(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec
                         }
                     }
                 }
+
+                // The way out of a match the scorer would not make, or made
+                // wrongly. Offered whether or not anything matched: the two
+                // cases it exists for are a title with no poster at all and a
+                // title wearing someone else's.
+                if ui
+                    .button(match &found {
+                        Some(_) => "Change match",
+                        None => "Match…",
+                    })
+                    .on_hover_text("Search the metadata provider and pick the entry yourself")
+                    .clicked()
+                {
+                    actions.push(Action::OpenMatcher(title.key.clone()));
+                }
             });
 
             if let Some(found) = &found {
@@ -140,7 +158,12 @@ fn description(ui: &mut egui::Ui, found: &TitleMetadata) {
     }
     if let Some(overview) = &found.overview {
         ui.add(
-            egui::Label::new(egui::RichText::new(overview).size(13.0).color(theme::TEXT)).wrap(),
+            egui::Label::new(
+                egui::RichText::new(overview)
+                    .size(13.0)
+                    .color(theme::text()),
+            )
+            .wrap(),
         );
     }
     if let Some(url) = &found.url {
@@ -215,9 +238,9 @@ fn episode_row(
     let watched = episode.is_watched();
     egui::Frame::new()
         .fill(if watched {
-            theme::BACKGROUND
+            theme::background()
         } else {
-            theme::CARD
+            theme::card()
         })
         .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(10, 8))
@@ -230,7 +253,7 @@ fn episode_row(
                 if ui
                     .add(
                         egui::Button::new(egui::RichText::new("▶").size(13.0))
-                            .fill(theme::CARD_HOVER),
+                            .fill(theme::card_hover()),
                     )
                     .on_hover_text("Play")
                     .clicked()
@@ -247,7 +270,7 @@ fn episode_row(
                     egui::Label::new(
                         egui::RichText::new(numbering)
                             .monospace()
-                            .color(theme::MUTED),
+                            .color(theme::muted()),
                     ),
                 );
 
@@ -259,9 +282,9 @@ fn episode_row(
                     .and_then(|(name, _, _)| name.clone())
                     .unwrap_or_else(|| episode.detail().to_string());
                 let label = egui::RichText::new(name).color(if watched {
-                    theme::MUTED
+                    theme::muted()
                 } else {
-                    theme::TEXT
+                    theme::text()
                 });
                 let hover = match &found {
                     // The synopsis, where the provider has one — AniList does
@@ -306,7 +329,7 @@ fn episode_row(
                             ui.label(
                                 egui::RichText::new("empty")
                                     .size(12.0)
-                                    .color(theme::DANGER),
+                                    .color(theme::danger()),
                             )
                             .on_hover_text(
                                 "The share reports no content for this file; it cannot be played.",
@@ -321,7 +344,7 @@ fn episode_row(
                         ui.label(
                             egui::RichText::new(format!("resume {}", ui::format_time(at)))
                                 .size(12.0)
-                                .color(theme::ACCENT),
+                                .color(theme::accent()),
                         );
                     }
                 });

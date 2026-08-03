@@ -4,6 +4,14 @@
 //! logging, the tokio runtime, the window, and the app inside it. See
 //! [`pstr_app`] for how the three threads divide the work.
 
+// A GUI binary linked against the Windows *console* subsystem gets a console
+// allocated for it, so launching from the Start menu flashes up a cmd window
+// that lives as long as the app. Only release builds are switched: with the
+// windows subsystem there is no stdout for `tracing_subscriber` to write to, and
+// a developer running `cargo run` on Windows wants the log more than the tidy
+// window. `pstr-cli` stays on the console subsystem, which is correct for it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use anyhow::Context;
 use pstr_core::config::AppDirs;
 

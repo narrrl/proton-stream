@@ -4,6 +4,7 @@
 //! applies them after the frame is drawn.
 
 pub mod library;
+pub mod matcher;
 pub mod player;
 pub mod shares;
 pub mod title;
@@ -115,23 +116,74 @@ pub fn section(ui: &mut egui::Ui, text: &str) {
         egui::RichText::new(text)
             .size(17.0)
             .strong()
-            .color(theme::TEXT),
+            .color(theme::text()),
     );
     ui.add_space(2.0);
 }
 
 /// Small grey text, for everything that is context rather than content.
 pub fn muted(text: impl Into<String>) -> egui::RichText {
-    egui::RichText::new(text).size(12.0).color(theme::MUTED)
+    egui::RichText::new(text).size(12.0).color(theme::muted())
 }
 
 /// The one button style that means "this is the action".
 pub fn accent_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).strong().color(Color32::WHITE))
-            .fill(theme::ACCENT)
-            .corner_radius(CornerRadius::same(8)),
-    )
+    filled(ui, text, true, Vec2::new(0.0, 0.0))
+}
+
+/// A tab in the top bar. The selected one wears the accent; the others are text
+/// until the pointer is over them.
+pub fn tab(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
+    filled(ui, text, selected, Vec2::new(4.0, 0.0))
+}
+
+/// A button painted by hand, so that "filled with the accent" can mean a
+/// gradient.
+///
+/// `egui::Button` takes a single `Color32` and there is no way in to give it
+/// anything else, so the fill, the label and the hover states are all drawn
+/// here. Everything else — sizing, padding, the click — is still egui's.
+fn filled(ui: &mut egui::Ui, text: &str, accented: bool, extra: Vec2) -> egui::Response {
+    let padding = ui.spacing().button_padding + extra;
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::TextStyle::Button.resolve(ui.style()),
+        Color32::PLACEHOLDER,
+    );
+    let size = Vec2::new(
+        galley.size().x + padding.x * 2.0,
+        (galley.size().y + padding.y * 2.0).max(ui.spacing().interact_size.y),
+    );
+
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+
+    let radius = CornerRadius::same(8);
+    let lift = if response.is_pointer_button_down_on() {
+        -0.14
+    } else if response.hovered() {
+        0.10
+    } else {
+        0.0
+    };
+
+    let ink = if accented {
+        theme::accent_fill(ui.painter(), rect, radius, lift);
+        theme::on_accent()
+    } else {
+        if response.hovered() {
+            ui.painter().rect_filled(rect, radius, theme::card_hover());
+            theme::text()
+        } else {
+            theme::muted()
+        }
+    };
+
+    let position = rect.center() - galley.size() / 2.0;
+    ui.painter().galley(position, galley, ink);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// What a tile shows.
@@ -142,7 +194,7 @@ pub struct Card<'a> {
     pub subtitle: String,
     /// Fraction watched, drawn as a bar across the bottom of the still.
     pub progress: Option<f32>,
-    /// A short label in the corner — `S01E04`, `Film`.
+    /// A short label in the corner — `S01E04`.
     pub badge: Option<String>,
 }
 
@@ -173,7 +225,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     let hovered = response.hovered();
     let painter = ui.painter();
 
-    painter.rect_filled(image_rect, radius, theme::CARD);
+    painter.rect_filled(image_rect, radius, theme::card());
 
     match &card.art {
         Some((texture, ArtShape::Landscape)) => {
@@ -199,7 +251,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
                 Align2::CENTER_CENTER,
                 initials(card.name),
                 egui::FontId::proportional(28.0),
-                theme::MUTED,
+                theme::muted(),
             );
         }
     }
@@ -231,14 +283,14 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
         painter.rect_filled(track, CornerRadius::ZERO, Color32::from_black_alpha(150));
         let mut played = track;
         played.set_width(track.width() * progress.clamp(0.0, 1.0));
-        painter.rect_filled(played, CornerRadius::ZERO, theme::ACCENT);
+        theme::accent_fill(painter, played, CornerRadius::ZERO, 0.0);
     }
 
     if hovered {
         painter.rect_stroke(
             image_rect,
             radius,
-            Stroke::new(2.0, theme::ACCENT),
+            Stroke::new(2.0, theme::accent()),
             egui::StrokeKind::Inside,
         );
     }
@@ -254,20 +306,24 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     let mut job = egui::text::LayoutJob::simple(
         card.name.to_string(),
         egui::FontId::proportional(14.0),
-        if hovered { Color32::WHITE } else { theme::TEXT },
+        if hovered {
+            Color32::WHITE
+        } else {
+            theme::text()
+        },
         width,
     );
     job.wrap.max_rows = 2;
     job.wrap.overflow_character = Some('…');
     let name = painter.layout_job(job);
     let name_height = name.size().y;
-    painter.galley(text_rect.min, name, theme::TEXT);
+    painter.galley(text_rect.min, name, theme::text());
     painter.text(
         text_rect.min + Vec2::new(0.0, name_height + 2.0),
         Align2::LEFT_TOP,
         card.subtitle,
         egui::FontId::proportional(11.5),
-        theme::MUTED,
+        theme::muted(),
     );
 
     response.on_hover_cursor(egui::CursorIcon::PointingHand)

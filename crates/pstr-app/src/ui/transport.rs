@@ -10,7 +10,7 @@
 //! Both push the same [`Action`]s, so there is one behaviour and two layouts,
 //! and neither mutates: this module draws.
 
-use egui::{Color32, CornerRadius, Rect, Sense, Vec2};
+use egui::{Color32, CornerRadius, Rect, Sense, Stroke, Vec2, pos2};
 use pstr_player::{MAX_VOLUME, Track, TrackKind};
 
 use crate::app::{Action, Adjacent, Page};
@@ -25,6 +25,20 @@ const SEEK_HIT_HEIGHT: f32 = 18.0;
 /// How wide the volume slider draws. Wide enough to land on a value, narrow
 /// enough that it does not read as a second seek bar.
 const VOLUME_WIDTH: f32 = 90.0;
+
+/// Height of the transport row, and the reason it is a constant.
+///
+/// `Align::Center` in a horizontal layout centres each widget against the row
+/// height *known when that widget is added*, and the row only grows as it goes.
+/// The play button is the tallest thing in the cluster and sits in the middle,
+/// so everything left of it — previous, −10s — is centred against a shorter row
+/// and lands a few pixels high. Calling `set_min_height` with the tallest
+/// widget's height before adding anything gives every one of them the same
+/// height to centre against.
+const ROW_HEIGHT_FULL: f32 = 44.0;
+
+/// The same, for the library strip. See [`ROW_HEIGHT_FULL`].
+const ROW_HEIGHT_MINI: f32 = 34.0;
 
 /// Whether there is a file before and after this one in the same title.
 #[derive(Debug, Clone, Copy, Default)]
@@ -45,6 +59,8 @@ pub fn full(
     ui.add_space(6.0);
 
     ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT_FULL);
+
         // Left cluster: everything that moves the playhead, in the order a
         // hand reaches for it.
         step_button(
@@ -93,13 +109,15 @@ pub fn mini(
     actions: &mut Vec<Action>,
 ) {
     ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT_MINI);
+
         // The way back to the picture. First, and a real button rather than a
         // label, because leaving the player page with Esc is otherwise a
         // one-way trip: playback carries on with nowhere to watch it.
         if ui
             .add(
                 egui::Button::new(egui::RichText::new("Back to video").size(13.0))
-                    .fill(theme::CARD_HOVER)
+                    .fill(theme::card_hover())
                     .corner_radius(CornerRadius::same(8)),
             )
             .on_hover_text("Show the picture again")
@@ -167,15 +185,63 @@ pub fn mini(
 }
 
 /// The one button whose position should never move.
+///
+/// Painted rather than set as `▶`/`⏸` text. A glyph is centred by its advance
+/// width, and `U+25B6`'s advance carries side bearings that are not symmetric —
+/// in a round button that reads, correctly, as a triangle sitting off to one
+/// side. It also comes from whichever fallback font has it, so the shape and its
+/// weight vary by platform. Two polygons cost less than either problem.
 fn play_pause(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>, size: f32) {
-    let symbol = if playback.paused { "▶" } else { "⏸" };
-    if ui
-        .add(
-            egui::Button::new(egui::RichText::new(symbol).size(size * 0.42))
-                .fill(theme::ACCENT)
-                .corner_radius(CornerRadius::same((size / 2.0) as u8))
-                .min_size(Vec2::splat(size)),
-        )
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+
+    let lift = if response.is_pointer_button_down_on() {
+        -0.18
+    } else if response.hovered() {
+        0.12
+    } else {
+        0.0
+    };
+    let painter = ui.painter();
+    // A rounded rectangle whose corner radius is its half-width *is* a circle,
+    // and unlike `circle_filled` it can be painted with a gradient.
+    theme::accent_fill(
+        painter,
+        rect,
+        CornerRadius::same((size / 2.0).round() as u8),
+        lift,
+    );
+
+    let centre = rect.center();
+    if playback.paused {
+        // A triangle's centroid is a third of the way from base to apex, not
+        // half — so centring its bounding box puts the visual mass left of the
+        // circle's centre, which is the usual reason a play button looks wrong.
+        // Placed by centroid instead: base at `centre.x - width / 3`.
+        let (width, height) = (size * 0.30, size * 0.34);
+        let base = centre.x - width / 3.0;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(base, centre.y - height / 2.0),
+                pos2(base, centre.y + height / 2.0),
+                pos2(base + width, centre.y),
+            ],
+            theme::on_accent(),
+            Stroke::NONE,
+        ));
+    } else {
+        // Pause is symmetric, so it is centred the ordinary way.
+        let (bar, height, gap) = (size * 0.09, size * 0.32, size * 0.10);
+        for side in [-1.0f32, 1.0] {
+            let x = centre.x + side * (gap / 2.0 + bar / 2.0);
+            painter.rect_filled(
+                Rect::from_center_size(pos2(x, centre.y), Vec2::new(bar, height)),
+                CornerRadius::same((bar / 2.0).round() as u8),
+                theme::on_accent(),
+            );
+        }
+    }
+
+    if response
         .on_hover_text(if playback.paused {
             "Play (Space)"
         } else {
@@ -232,7 +298,7 @@ fn times(ui: &mut egui::Ui, playback: &Playback, over_picture: bool) {
     let (size, ink, dim) = if over_picture {
         (13.0, Color32::WHITE, Color32::from_white_alpha(215))
     } else {
-        (12.0, theme::MUTED, theme::MUTED)
+        (12.0, theme::muted(), theme::muted())
     };
     let time = |text: String| egui::RichText::new(text).size(size).color(ink);
 
@@ -413,7 +479,11 @@ fn seek_bar(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>, t
     if let Some(progress) = playback.progress() {
         let mut played = track;
         played.set_width(track.width() * progress);
-        painter.rect_filled(played, CornerRadius::same(3), theme::ACCENT);
+        // The gradient is sized to the *played* part, not to the whole bar, so
+        // the far end of it arrives at the playhead rather than at the end of
+        // the file. A bar that only ever shows the first fifth of its own ramp
+        // does not read as a gradient at all.
+        theme::accent_fill(painter, played, CornerRadius::same(3), 0.0);
         painter.circle_filled(
             egui::pos2(played.right(), track.center().y),
             if hovered { 8.0 } else { 6.0 },

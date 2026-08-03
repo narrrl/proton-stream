@@ -133,7 +133,7 @@ almost every field in it is computed.
 - **The `[patch.crates-io]` block in `Cargo.toml` is development only.** It points
   at `../proton-sdk-rs`, so both build scripts refuse to start when it is present
   and that checkout is missing. A release must build against the published
-  crates — drop the block once proton-sdk 0.3.3 is on crates.io.
+  crates — drop the block once the pinned proton-sdk is on crates.io.
 - **There is no `LICENSE` file in the repository root** even though `Cargo.toml`
   declares MIT. Every packager warns and ships without the license text; the MSI
   falls back to `windows/license.rtf`. Adding the file fixes all of them at once.

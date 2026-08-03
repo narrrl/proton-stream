@@ -345,9 +345,7 @@ fn ordinal_before(lower: &str, at: usize) -> Option<(u32, usize)> {
         .into_iter()
         .find_map(|suffix| head.strip_suffix(suffix))?;
 
-    let digits_start = head
-        .rfind(|c: char| !c.is_ascii_digit())
-        .map_or(0, |index| index + 1);
+    let digits_start = trailing_digits_start(head).unwrap_or(0);
     let digits = &head[digits_start..];
     if digits.is_empty() || digits.len() > 2 {
         return None;
@@ -596,6 +594,26 @@ fn read_number(text: &str, from: usize) -> Option<(u32, usize)> {
     text[from..end].parse().ok().map(|n| (n, end))
 }
 
+/// Where the trailing run of ASCII digits starts, or `None` when the text is
+/// nothing but digits (or empty).
+///
+/// Walked back by `char_indices`, not by `rfind(…) + 1`: one past the *start*
+/// of the character before the digits is inside it whenever that character is
+/// multi-byte. `Death (True)² - 007` is the case that proves it — the `+ 1`
+/// form cuts the `²` in half and panics.
+fn trailing_digits_start(text: &str) -> Option<usize> {
+    let mut start = None;
+
+    for (index, ch) in text.char_indices().rev() {
+        if ch.is_ascii_digit() {
+            start = Some(index);
+        } else {
+            return Some(start.unwrap_or(text.len()));
+        }
+    }
+    None
+}
+
 fn is_token_char(byte: Option<u8>) -> bool {
     byte.is_some_and(|b| b.is_ascii_alphanumeric())
 }
@@ -715,7 +733,7 @@ pub fn classify_folder(name: &str) -> FolderRole {
 /// `Evangelion 3`, `Kaijuu 8-gou` — would lose it to a season it never claimed.
 fn trailing_season(name: &str) -> Option<(&str, u32)> {
     let trimmed = name.trim_end();
-    let digits_start = trimmed.rfind(|c: char| !c.is_ascii_digit())? + 1;
+    let digits_start = trailing_digits_start(trimmed)?;
     let (head, digits) = trimmed.split_at(digits_start);
     let season: u32 = digits.parse().ok()?;
 
@@ -908,6 +926,29 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// **A panic, not a mis-parse.** A folder name whose trailing digits sit
+    /// directly behind a multi-byte character — or that simply *ends* in one —
+    /// used to be split one byte past that character's start, i.e. inside it.
+    #[test]
+    fn a_multi_byte_character_does_not_break_folder_classification() {
+        for name in [
+            "Neon Genesis Evangelion Death (True)\u{b2}",
+            "Show\u{b2}3",
+            "Show\u{b2}3rd Season",
+            "Caf\u{e9} Season 2",
+            "\u{b2}",
+        ] {
+            // The classification itself is the assertion: any of these used to
+            // panic before it could return one.
+            let _ = classify_folder(name);
+        }
+
+        let FolderRole::Title(parsed) = classify_folder("Caf\u{e9} Season 2") else {
+            panic!("expected a title");
+        };
+        assert_eq!((parsed.title.as_str(), parsed.season), ("Café", Some(2)));
     }
 
     /// A resolution is four digits in brackets too, and must not read as a year.

@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use pstr_core::library::{Title, title_key};
+use pstr_core::library::{Title, TitleKind, title_key};
 use pstr_core::metadata::{
     EpisodeMetadata, MetadataConfig, MetadataRecord, ProviderId, TitleMetadata,
 };
@@ -124,7 +124,12 @@ impl MetadataService {
     /// `Ok(None)` is a real answer — nothing matched well enough — and the
     /// caller should store it. An `Err` is not, and the caller should not.
     pub async fn lookup(&self, title: &Title) -> Result<Option<TitleMetadata>> {
-        let query = Query::new(title.name.clone(), title.year, title.kind);
+        let mut query = Query::new(title.name.clone(), title.year, title.kind);
+        // Nothing in the files numbered itself, so the kind came from counting
+        // them — see `Query::kind_known`.
+        if !title.states_its_numbering() {
+            query = query.with_guessed_kind();
+        }
         let candidates = self.source.search(&query).await?;
         let found = candidates.len();
         let best = matching::best(&query, candidates);
@@ -149,7 +154,54 @@ impl MetadataService {
             provider: self.provider(),
             metadata,
             fetched_at: now(),
+            manual: false,
         })
+    }
+
+    /// Everything the provider thinks `name` might be, unscored and in its own
+    /// order.
+    ///
+    /// The escape hatch from [`matching::best`], for a viewer picking an entry
+    /// by hand. Nothing is filtered here and nothing is ranked: the floor exists
+    /// to stop the *matcher* guessing, and a person reading the list is not
+    /// guessing. The `Fate/stay night [Heaven's Feel]` trilogy is the case that
+    /// wants it — three films in one folder, matched against a provider that
+    /// files each of them separately, where no single entry is the right answer
+    /// and only the viewer knows which one they meant.
+    ///
+    /// Takes a kind because the providers key their search on it, and no year:
+    /// the point of a hand search is that the library's own guesses are what
+    /// went wrong.
+    pub async fn search(&self, name: &str, kind: TitleKind) -> Result<Vec<TitleMetadata>> {
+        let query = Query::new(name.trim().to_string(), None, kind).with_guessed_kind();
+        if query.name.is_empty() {
+            return Ok(Vec::new());
+        }
+        let candidates = self.source.search(&query).await?;
+        tracing::debug!(
+            "hand search {:?}: {} candidates from {}",
+            query.name,
+            candidates.len(),
+            self.provider().label()
+        );
+        Ok(candidates
+            .into_iter()
+            .map(|candidate| candidate.metadata)
+            .collect())
+    }
+
+    /// A record for an entry the viewer picked themselves.
+    ///
+    /// Marked [`MetadataRecord::manual`], which is what keeps the next match run
+    /// — including a forced one — from undoing it.
+    pub fn chosen(&self, title_key: String, found: TitleMetadata) -> MetadataRecord {
+        MetadataRecord {
+            title_key,
+            provider: self.provider(),
+            metadata: Some(found),
+            fetched_at: now(),
+            manual: true,
+        }
     }
 
     /// What the provider lists as the episodes of a title it matched.
@@ -339,6 +391,7 @@ mod tests {
             provider: ProviderId::AniList,
             metadata: None,
             fetched_at: now(),
+            manual: false,
         };
         assert!(is_usable(Some(&record), ProviderId::AniList));
         assert!(!is_usable(Some(&record), ProviderId::Tmdb));

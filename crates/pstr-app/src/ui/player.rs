@@ -288,7 +288,7 @@ fn waiting(ui: &mut egui::Ui, playback: &Playback, rect: Rect) {
         Align2::CENTER_CENTER,
         &playback.target.title_name,
         egui::FontId::proportional(20.0),
-        theme::TEXT,
+        theme::text(),
     );
     painter.text(
         rect.center() + Vec2::new(0.0, 10.0),
@@ -299,7 +299,7 @@ fn waiting(ui: &mut egui::Ui, playback: &Playback, rect: Rect) {
             "playing in mpv's own window"
         },
         egui::FontId::proportional(13.0),
-        theme::MUTED,
+        theme::muted(),
     );
 }
 
@@ -314,14 +314,14 @@ fn between(ui: &mut egui::Ui, opening: Option<&str>, rect: Rect, actions: &mut V
         Align2::CENTER_CENTER,
         "Up next",
         egui::FontId::proportional(14.0),
-        theme::MUTED,
+        theme::muted(),
     );
     ui.painter().text(
         rect.center() + Vec2::new(0.0, 12.0),
         Align2::CENTER_CENTER,
         opening.unwrap_or("opening…"),
         egui::FontId::proportional(20.0),
-        theme::TEXT,
+        theme::text(),
     );
 
     ui.scope_builder(
@@ -451,7 +451,7 @@ fn up_next_card(
                         ui.label(
                             egui::RichText::new(format!("in {}s", card.seconds.ceil() as u32))
                                 .size(12.0)
-                                .color(theme::ACCENT),
+                                .color(theme::accent()),
                         );
                     });
                 });

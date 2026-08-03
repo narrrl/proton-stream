@@ -111,6 +111,24 @@ tagged with that season. The absolute fallback in `EpisodeGuide::get` stops at
 season one for the same reason: without that it answered `S02E01` with season
 one's episode one, which is not a missing caption but a wrong one.
 
+Done: **matching a title by hand.** `MATCH_FLOOR` is set where a wrong poster
+costs more than none, and the price of that is a few titles it refuses to decide
+about — `Fate/stay night [Heaven's Feel]` is the standing example, three films in
+one folder against a provider that files each of them as its own entry, so there
+is no single answer for the scorer to find. *Change match* on the title page opens
+`ui::matcher`: the provider's own answers for whatever is typed, unscored and in
+its own order (`MetadataService::search`), and a click pins one. Nothing is
+ranked there on purpose — the floor exists to stop the *scorer* guessing, and a
+person reading eight entries with their posters is not guessing.
+
+A chosen row is stored `manual` (schema **v5**), which means two things:
+`MetadataRecord::is_fresh` never expires it, and `run_match` skips it even when
+forced — "match again" must not undo the one title someone fixed by hand. The
+way back is *Clear*, which drops the row entirely (`Catalog::forget_metadata`)
+rather than storing a miss, so the next run treats the title as one it has never
+asked about. Switching provider still clears everything, hand-picked rows
+included: a `remote_id` means nothing to the other provider.
+
 Worth knowing before chasing a missing name: AniList's episode titles come from
 `streamingEpisodes`, which is what streaming sites published, and for some shows
 it is simply **empty** — all three Oshi no Ko entries have none, while Fullmetal

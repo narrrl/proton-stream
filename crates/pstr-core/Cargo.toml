@@ -21,3 +21,17 @@ directories.workspace = true
 rusqlite.workspace = true
 keyring.workspace = true
 sha2.workspace = true
+
+# The credential store, per platform. Without the target's feature `keyring`
+# compiles fine and silently resolves to its in-memory `mock` store, which
+# accepts every write and has forgotten it by the next `Entry` — a share that
+# adds cleanly and then reports "has no stored credentials" on open. These
+# blocks only add features to the dependency above.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }

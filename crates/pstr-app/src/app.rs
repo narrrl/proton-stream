@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
 use pstr_core::Share;
+use pstr_core::appearance::Appearance;
 use pstr_core::config::AppDirs;
 use pstr_core::library::Library;
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord};
@@ -128,10 +129,21 @@ pub enum Action {
     MatchTitles {
         force: bool,
     },
+    /// Open the hand-matching search for one title, seeded with its own name.
+    OpenMatcher(String),
+    CloseMatcher,
+    /// Ask the provider what the text in the box might be.
+    SearchMatches,
+    /// Pin the open title to this entry.
+    ChooseMatch(Box<pstr_core::metadata::TitleMetadata>),
+    /// Forget what is stored for a title, so it is matched from scratch again.
+    ForgetMatch(String),
     /// Play the file before or after the one playing, within its title.
     PlayAdjacent(Adjacent),
     /// Start or stop the next episode playing on its own at the end of one.
     SetAutoplay(bool),
+    /// Repaint the window in a different palette.
+    SetAppearance(Appearance),
     /// In or out of fullscreen, from the player page.
     ToggleFullscreen,
     /// Stop watching, keep playing: back to the page this film came from, with
@@ -178,6 +190,52 @@ pub struct Status {
     pub at: f64,
 }
 
+/// Picking a title's entry by hand.
+///
+/// The escape hatch from the matcher, which is deliberately unwilling to guess:
+/// [`pstr_meta::matching::MATCH_FLOOR`] is set where a wrong poster is worse
+/// than none, and the cost of that is a handful of titles that match nothing.
+/// The `Fate/stay night [Heaven's Feel]` films are the standing example — three
+/// films in one folder, filed by AniList as three separate entries, so there is
+/// no answer for the scorer to find and only the viewer knows which one the
+/// folder means.
+pub struct Matcher {
+    /// The title being matched, by [`pstr_core::library::Title::key`].
+    pub title_key: String,
+    /// Its name as the library has it, for the dialog's own heading.
+    pub title_name: String,
+    pub kind: pstr_core::library::TitleKind,
+    /// What is in the search box. Seeded with the library's name for the title,
+    /// which is the thing that failed — so it is the right starting point to
+    /// edit rather than to re-send.
+    pub query: String,
+    pub results: Vec<pstr_core::metadata::TitleMetadata>,
+    /// A request is out. The box stays usable; only the button is held.
+    pub searching: bool,
+    /// Whether a search has come back yet, so an empty list can read as "nothing
+    /// found" rather than "nothing asked".
+    pub asked: bool,
+    pub error: Option<String>,
+    /// Set for the frame the dialog opens, to put the caret in the box.
+    pub focus: bool,
+}
+
+impl Matcher {
+    pub fn new(title: &pstr_core::library::Title) -> Self {
+        Self {
+            title_key: title.key.clone(),
+            title_name: title.name.clone(),
+            kind: title.kind,
+            query: title.name.clone(),
+            results: Vec::new(),
+            searching: false,
+            asked: false,
+            error: None,
+            focus: true,
+        }
+    }
+}
+
 /// The share the viewer is typing in.
 #[derive(Default)]
 pub struct ShareForm {
@@ -206,6 +264,8 @@ pub struct App {
     /// it goes straight to the credential store on save.
     pub api_key: String,
     pub matching: bool,
+    /// The hand-matching dialog, while it is open.
+    pub matcher: Option<Matcher>,
     pub search: String,
     pub form: ShareForm,
     pub playback: Option<Playback>,
@@ -229,9 +289,11 @@ impl App {
         runtime: std::sync::Arc<tokio::runtime::Runtime>,
         dirs: AppDirs,
     ) -> anyhow::Result<Self> {
-        theme::apply(&cc.egui_ctx);
-
+        // After the engine, not before: the engine is what reads the stored
+        // theme, and a window that paints one frame in the default palette
+        // before switching is a window that flashes on every launch.
         let (engine, events) = Engine::new(runtime, dirs, cc.egui_ctx.clone())?;
+        theme::apply(&cc.egui_ctx, engine.appearance());
 
         // Paint from the catalog immediately; the network catches up. A library
         // that was crawled yesterday is on screen before the shares open.
@@ -254,6 +316,7 @@ impl App {
             settings,
             api_key: String::new(),
             matching: false,
+            matcher: None,
             search: String::new(),
             form: ShareForm::default(),
             playback: None,
@@ -345,6 +408,28 @@ impl App {
                     self.note(ctx, text, failed > 0);
                 }
                 Event::MatchFinished => self.matching = false,
+                // Both of these are addressed to a dialog, and the viewer may
+                // have closed it or opened another one while the request was
+                // out — so an answer for a title that is not the open one is
+                // dropped rather than shown under the wrong heading.
+                Event::MatchOptions { title_key, options } => {
+                    if let Some(matcher) = &mut self.matcher
+                        && matcher.title_key == title_key
+                    {
+                        matcher.results = options;
+                        matcher.searching = false;
+                        matcher.asked = true;
+                        matcher.error = None;
+                    }
+                }
+                Event::MatchSearchFailed { title_key, error } => {
+                    if let Some(matcher) = &mut self.matcher
+                        && matcher.title_key == title_key
+                    {
+                        matcher.searching = false;
+                        matcher.error = Some(error);
+                    }
+                }
                 Event::PlaybackReady { target, stream } => {
                     self.opening = None;
                     // Dropped before the new one is built: two mpv cores would
@@ -605,6 +690,43 @@ impl App {
                     self.engine.match_titles(self.library.titles.clone(), force);
                 }
             }
+            Action::OpenMatcher(key) => {
+                self.matcher = self.library.get(&key).map(Matcher::new);
+                // The library's own name is what the automatic search already
+                // failed on, so the first search is the viewer's to press —
+                // except that pressing it unchanged is exactly what someone
+                // wants when the *scorer* was the problem rather than the name.
+                // So it is sent, and the box stays theirs to edit.
+                if self.matcher.is_some() {
+                    self.apply(ctx, Action::SearchMatches);
+                }
+            }
+            Action::CloseMatcher => self.matcher = None,
+            Action::SearchMatches => {
+                if let Some(matcher) = &mut self.matcher {
+                    matcher.searching = true;
+                    matcher.error = None;
+                    self.engine.search_matches(
+                        matcher.title_key.clone(),
+                        matcher.query.clone(),
+                        matcher.kind,
+                    );
+                }
+            }
+            Action::ChooseMatch(found) => {
+                if let Some(title) = self
+                    .matcher
+                    .as_ref()
+                    .and_then(|matcher| self.library.get(&matcher.title_key))
+                {
+                    self.engine.choose_match(title.clone(), *found);
+                }
+                self.matcher = None;
+            }
+            Action::ForgetMatch(key) => {
+                self.engine.forget_match(key);
+                self.matcher = None;
+            }
             Action::ToggleFullscreen => {
                 self.fullscreen = !self.fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
@@ -679,6 +801,10 @@ impl App {
                 prefs.autoplay_next = autoplay;
                 self.engine.set_playback_prefs(prefs, true);
             }
+            Action::SetAppearance(appearance) => {
+                self.engine.set_appearance(appearance);
+                theme::apply(ctx, appearance);
+            }
             Action::SetVolume { volume, commit } => self.set_volume(volume, commit),
             Action::ToggleMute => {
                 let mut prefs = self.engine.playback_prefs();
@@ -734,18 +860,15 @@ impl App {
                 egui::RichText::new("proton-stream")
                     .size(18.0)
                     .strong()
-                    .color(theme::ACCENT),
+                    .color(theme::accent()),
             );
             ui.add_space(12.0);
 
             let on_library = matches!(self.page, Page::Library | Page::Title(_));
-            if ui.selectable_label(on_library, "Library").clicked() {
+            if ui::tab(ui, on_library, "Library").clicked() {
                 actions.push(Action::Goto(Page::Library));
             }
-            if ui
-                .selectable_label(self.page == Page::Shares, "Shares")
-                .clicked()
-            {
+            if ui::tab(ui, self.page == Page::Shares, "Shares").clicked() {
                 actions.push(Action::Goto(Page::Shares));
             }
 
@@ -845,17 +968,35 @@ impl eframe::App for App {
         {
             let mut search = std::mem::take(&mut self.search);
             let neighbours = self.neighbours();
-            let autoplay = self.engine.playback_prefs().autoplay_next;
+            let prefs = ui::shares::Prefs {
+                autoplay: self.engine.playback_prefs().autoplay_next,
+                appearance: self.engine.appearance(),
+            };
 
+            const NAV_MARGIN: egui::Vec2 = egui::vec2(14.0, 10.0);
             egui::Panel::top("nav")
                 .resizable(false)
-                .frame(
-                    egui::Frame::new()
-                        .fill(theme::SURFACE)
-                        .inner_margin(egui::Margin::symmetric(14, 10)),
-                )
+                // No fill: the bar is a gradient, and a `Frame` only takes a
+                // colour. It is painted below, into a shape reserved before the
+                // contents are laid out — which is the only point at which the
+                // height they came to is known.
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(
+                    NAV_MARGIN.x as i8,
+                    NAV_MARGIN.y as i8,
+                )))
                 .show(ui, |ui| {
+                    let background = ui.painter().add(egui::Shape::Noop);
                     self.navigation(ui, &mut actions, &mut search);
+                    // Full width from the space the panel was given, height from
+                    // the space its contents took.
+                    let content = ui.min_rect();
+                    let bar = egui::Rect::from_min_max(
+                        egui::pos2(ui.max_rect().left(), content.top()),
+                        egui::pos2(ui.max_rect().right(), content.bottom()),
+                    )
+                    .expand2(NAV_MARGIN);
+                    ui.painter()
+                        .set(background, theme::bar_shape(ui.ctx(), bar));
                 });
             self.search = search;
 
@@ -872,6 +1013,7 @@ impl eframe::App for App {
                 api_key,
                 search,
                 form,
+                matcher,
                 playback,
                 opening,
                 status,
@@ -883,7 +1025,7 @@ impl eframe::App for App {
                     .resizable(false)
                     .frame(
                         egui::Frame::new()
-                            .fill(theme::SURFACE)
+                            .fill(theme::surface())
                             .inner_margin(egui::Margin::symmetric(16, 10)),
                     )
                     .show(ui, |ui| {
@@ -904,14 +1046,14 @@ impl eframe::App for App {
                         .resizable(false)
                         .frame(
                             egui::Frame::new()
-                                .fill(theme::BACKGROUND)
+                                .fill(theme::background())
                                 .inner_margin(egui::Margin::symmetric(16, 6)),
                         )
                         .show(ui, |ui| {
                             let colour = if line.error {
-                                theme::DANGER
+                                theme::danger()
                             } else {
-                                theme::MUTED
+                                theme::muted()
                             };
                             ui.label(egui::RichText::new(&line.text).size(12.0).color(colour));
                         });
@@ -926,14 +1068,17 @@ impl eframe::App for App {
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::new()
-                        .fill(theme::BACKGROUND)
+                        .fill(theme::background())
                         .inner_margin(egui::Margin::symmetric(18, 12)),
                 )
                 .show(ui, |ui| {
+                    // Reborrowed rather than moved: the matching dialog below is
+                    // drawn from the same caches, and a moved `&mut` would leave
+                    // nothing to draw it with.
                     let mut art = ui::Art {
                         engine,
-                        thumbs,
-                        posters,
+                        thumbs: &mut *thumbs,
+                        posters: &mut *posters,
                         metadata,
                         episodes,
                     };
@@ -949,7 +1094,7 @@ impl eframe::App for App {
                             shares,
                             form,
                             settings,
-                            autoplay,
+                            prefs,
                             api_key,
                             &mut actions,
                         ),
@@ -957,6 +1102,20 @@ impl eframe::App for App {
                         Page::Player => {}
                     }
                 });
+
+            // Over everything, and after it: a modal takes the input the page
+            // under it would otherwise get, and it can only do that for widgets
+            // laid out after it claims the layer.
+            if let Some(open) = matcher {
+                let mut art = ui::Art {
+                    engine,
+                    thumbs,
+                    posters,
+                    metadata,
+                    episodes,
+                };
+                ui::matcher::show(ctx, open, &mut art, settings.provider, &mut actions);
+            }
         }
 
         for action in actions {
