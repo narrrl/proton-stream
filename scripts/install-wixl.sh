@@ -77,32 +77,43 @@ fi
 if [[ $DEPS -eq 1 ]] && have apt-get; then
   log "installing build dependencies"
   $SUDO apt-get update -qq
-  $SUDO apt-get install -y --no-install-recommends \
+  $SUDO apt-get install -y -qq --no-install-recommends \
     build-essential ninja-build valac bison pkg-config gettext git python3-pip \
-    libgcab-dev libgirepository1.0-dev libgsf-1-dev libxml2-dev uuid-dev
+    libgcab-dev libgirepository1.0-dev libgsf-1-dev libxml2-dev uuid-dev >/dev/null
 fi
 
 if ! have meson || [[ "$(printf '1.4\n%s\n' "$(meson --version)" | sort -V | head -1)" != "1.4" ]]; then
   log "installing meson >= 1.4 from pip"
-  pip3 install --break-system-packages --quiet 'meson>=1.4' \
+  pip3 install --break-system-packages --root-user-action=ignore --quiet 'meson>=1.4' \
     || pip3 install --quiet 'meson>=1.4'
 fi
 
 src="$(mktemp -d)"
+build_log="$(mktemp -t wixl-build-XXXXXX.log)"
 trap 'rm -rf "$src"' EXIT
 
 log "cloning msitools $MSITOOLS_TAG"
-git clone -q --depth 1 --branch "$MSITOOLS_TAG" --recursive "$REPO" "$src/msitools"
+git clone -q --depth 1 --branch "$MSITOOLS_TAG" --recursive "$REPO" "$src/msitools" 2>/dev/null
+
+# valac generates C that warns about everything; a clean build is some 600 lines
+# of noise that buries whatever went wrong. Keep the log and print its tail only
+# when a step fails. The log sits outside $src so the trap does not take it.
+run() {
+  if ! "$@" >>"$build_log" 2>&1; then
+    tail -40 "$build_log" >&2
+    die "$1 failed; full log was $build_log"
+  fi
+}
 
 log "building"
-meson setup "$src/msitools/build" "$src/msitools" --prefix "$PREFIX" --buildtype=release
-ninja -C "$src/msitools/build"
+run meson setup "$src/msitools/build" "$src/msitools" --prefix "$PREFIX" --buildtype=release
+run ninja -C "$src/msitools/build"
 
 log "installing into $PREFIX"
 if [[ -w "$PREFIX" ]]; then
-  ninja -C "$src/msitools/build" install
+  run ninja -C "$src/msitools/build" install
 else
-  $SUDO ninja -C "$src/msitools/build" install
+  run $SUDO ninja -C "$src/msitools/build" install
 fi
 [[ $EUID -eq 0 || -n "$SUDO" ]] && $SUDO ldconfig 2>/dev/null || true
 
