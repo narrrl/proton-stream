@@ -4096,7 +4096,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "eframe",
@@ -4116,7 +4116,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4134,7 +4134,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "directories",
  "futures",
@@ -4152,7 +4152,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-meta"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keyring",
  "pstr-core",
@@ -4166,7 +4166,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-player"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "libloading",
@@ -4180,7 +4180,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-stream"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "futures",
