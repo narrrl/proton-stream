@@ -230,19 +230,22 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     match &card.art {
         Some((texture, ArtShape::Landscape)) => {
             let size = texture.size_vec2();
-            painter.image(
-                texture.id(),
-                image_rect,
-                cover_uv(size, image_rect.size()),
-                Color32::WHITE,
+            painter.add(
+                egui::epaint::RectShape::filled(image_rect, radius, Color32::WHITE)
+                    .with_texture(texture.id(), cover_uv(size, image_rect.size())),
             );
         }
         Some((texture, ArtShape::Portrait)) => {
-            painter.image(
-                texture.id(),
-                contain_rect(texture.size_vec2(), image_rect),
-                Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
+            painter.add(
+                egui::epaint::RectShape::filled(
+                    contain_rect(texture.size_vec2(), image_rect),
+                    radius,
+                    Color32::WHITE,
+                )
+                .with_texture(
+                    texture.id(),
+                    Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                ),
             );
         }
         None => {
@@ -276,14 +279,38 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     }
 
     if let Some(progress) = card.progress {
-        let track = Rect::from_min_size(
+        let clip_rect = Rect::from_min_size(
             image_rect.left_bottom() - Vec2::new(0.0, 4.0),
             Vec2::new(width, 4.0),
         );
-        painter.rect_filled(track, CornerRadius::ZERO, Color32::from_black_alpha(150));
+        let clipped_painter = painter.with_clip_rect(clip_rect);
+
+        let track = Rect::from_min_size(
+            image_rect.left_bottom() - Vec2::new(0.0, 16.0),
+            Vec2::new(width, 16.0),
+        );
+        let track_radius = CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: 8,
+            se: 8,
+        };
+        clipped_painter.rect_filled(track, track_radius, Color32::from_black_alpha(150));
+
         let mut played = track;
         played.set_width(track.width() * progress.clamp(0.0, 1.0));
-        theme::accent_fill(painter, played, CornerRadius::ZERO, 0.0);
+
+        let played_radius = CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: 8,
+            se: if played.max.x >= track.max.x - 0.1 {
+                8
+            } else {
+                0
+            },
+        };
+        theme::accent_fill(&clipped_painter, played, played_radius, 0.0);
     }
 
     if hovered {

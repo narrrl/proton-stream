@@ -230,11 +230,17 @@ fn play_pause(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>,
         ));
     } else {
         // Pause is symmetric, so it is centred the ordinary way.
-        let (bar, height, gap) = (size * 0.09, size * 0.32, size * 0.10);
-        for side in [-1.0f32, 1.0] {
-            let x = centre.x + side * (gap / 2.0 + bar / 2.0);
+        let bar = (size * 0.09).round();
+        let height = (size * 0.32).round();
+        let gap = (size * 0.10).round();
+        let y = (centre.y - height / 2.0).round();
+
+        for x in [
+            (centre.x - gap / 2.0 - bar).round(),
+            (centre.x + gap / 2.0).round(),
+        ] {
             painter.rect_filled(
-                Rect::from_center_size(pos2(x, centre.y), Vec2::new(bar, height)),
+                Rect::from_min_size(pos2(x, y), Vec2::new(bar, height)),
                 CornerRadius::same((bar / 2.0).round() as u8),
                 theme::on_accent(),
             );
