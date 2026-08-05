@@ -5,15 +5,22 @@ use pstr_core::library::{Episode, Library, Season, Title, TitleKind};
 use pstr_core::metadata::TitleMetadata;
 
 use crate::app::{Action, Page};
+use crate::engine::{DownloadItem, DownloadKey, DownloadState};
 use crate::playback::PlaybackTarget;
 use crate::theme;
 use crate::ui::{self, Art, Card};
+
+pub struct OfflineView<'a> {
+    pub downloads: &'a [DownloadItem],
+    pub files: &'a std::collections::HashSet<DownloadKey>,
+}
 
 pub fn show(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
     library: &Library,
     key: &str,
+    offline: OfflineView<'_>,
     actions: &mut Vec<Action>,
 ) {
     let Some(title) = library.get(key) else {
@@ -31,7 +38,7 @@ pub fn show(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            header(ui, art, title, actions);
+            header(ui, art, title, &offline, actions);
             ui.add_space(18.0);
 
             for (index, season) in title.seasons.iter().enumerate() {
@@ -48,8 +55,29 @@ pub fn show(
                 .id_salt(("season", index))
                 .default_open(open)
                 .show(ui, |ui| {
+                    let season_keys: Vec<_> = season.episodes.iter().map(key_of).collect();
+                    let all_offline = season_keys.iter().all(|key| offline.files.contains(key));
+                    if all_offline {
+                        if ui.button("Make season online-only").clicked() {
+                            for key in season_keys {
+                                actions.push(Action::RemoveDownload(key, false));
+                            }
+                        }
+                    } else if ui
+                        .button("Make season offline")
+                        .on_hover_text("Download every episode in this season")
+                        .clicked()
+                    {
+                        actions.push(Action::MakeOffline(
+                            season
+                                .episodes
+                                .iter()
+                                .map(|episode| PlaybackTarget::new(title, episode))
+                                .collect(),
+                        ));
+                    }
                     for episode in &season.episodes {
-                        episode_row(ui, art, title, season, episode, actions);
+                        episode_row(ui, art, title, season, episode, &offline, actions);
                     }
                 });
                 ui.add_space(6.0);
@@ -58,7 +86,13 @@ pub fn show(
 }
 
 /// The still, the name and the one button that matters.
-fn header(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<Action>) {
+fn header(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    title: &Title,
+    offline: &OfflineView<'_>,
+    actions: &mut Vec<Action>,
+) {
     // Cloned out of the borrow: `art` is held mutably for the card below, and
     // the description is drawn beside it.
     let record = art.metadata.get(&title.key);
@@ -109,6 +143,44 @@ fn header(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec
                     };
                     if ui::accent_button(ui, &label).clicked() {
                         actions.push(Action::Play(PlaybackTarget::new(title, episode)));
+                    }
+                    let title_keys: Vec<_> = title.episodes().map(key_of).collect();
+                    let all_offline = title_keys.iter().all(|key| offline.files.contains(key));
+                    if all_offline {
+                        if ui.button("Make show online-only").clicked() {
+                            for key in title_keys {
+                                actions.push(Action::RemoveDownload(key, false));
+                            }
+                        }
+                    } else if ui
+                        .button("Make show offline")
+                        .on_hover_text("Download every episode for disconnected playback")
+                        .clicked()
+                    {
+                        actions.push(Action::MakeOffline(
+                            title
+                                .episodes()
+                                .map(|episode| PlaybackTarget::new(title, episode))
+                                .collect(),
+                        ));
+                    }
+                    let active = offline
+                        .downloads
+                        .iter()
+                        .filter(|item| {
+                            item.target.title_key == title.key
+                                && matches!(
+                                    item.state,
+                                    DownloadState::Queued
+                                        | DownloadState::Running
+                                        | DownloadState::Paused
+                                )
+                        })
+                        .count();
+                    if active > 0 {
+                        ui.label(ui::muted(format!("{active} downloading")));
+                    } else if all_offline {
+                        ui.label(ui::muted("Available offline"));
                     }
                     if resuming && let Some(at) = episode.resume_at() {
                         ui.label(ui::muted(format!("at {}", ui::format_time(at))));
@@ -225,6 +297,7 @@ fn episode_row(
     title: &Title,
     season: &Season,
     episode: &Episode,
+    offline: &OfflineView<'_>,
     actions: &mut Vec<Action>,
 ) {
     // Cloned out before `ui` borrows: the row draws while `art` is held.
@@ -259,6 +332,50 @@ fn episode_row(
                     .clicked()
                 {
                     actions.push(Action::Play(PlaybackTarget::new(title, episode)));
+                }
+                let key = key_of(episode);
+                let current = offline.downloads.iter().find(|item| item.key == key);
+                if offline.files.contains(&key) {
+                    if ui
+                        .small_button("Online-only")
+                        .on_hover_text("Delete the offline copy; keep the online source")
+                        .clicked()
+                    {
+                        actions.push(Action::RemoveDownload(key.clone(), false));
+                    }
+                    ui.label(ui::muted("✓ Offline"));
+                } else if let Some(item) = current {
+                    match item.state {
+                        DownloadState::Running | DownloadState::Queued => {
+                            if ui.small_button("Pause").clicked() {
+                                actions.push(Action::PauseDownload(key.clone()));
+                            }
+                            ui.label(ui::muted(format!("↓ {:.0}%", item.percent() * 100.0)));
+                        }
+                        DownloadState::Paused => {
+                            if ui.small_button("Resume").clicked() {
+                                actions.push(Action::ResumeDownload(key.clone()));
+                            }
+                            ui.label(ui::muted("Paused · partial kept"));
+                        }
+                        DownloadState::Cancelled | DownloadState::Failed(_) => {
+                            if ui.small_button("Resume").clicked() {
+                                actions.push(Action::ResumeDownload(key.clone()));
+                            }
+                            ui.label(ui::muted("Partial"));
+                        }
+                        DownloadState::Completed => {
+                            ui.label(ui::muted("✓ Offline"));
+                        }
+                    }
+                } else if ui
+                    .small_button("Download")
+                    .on_hover_text("Make available offline")
+                    .clicked()
+                {
+                    actions.push(Action::MakeOffline(vec![PlaybackTarget::new(
+                        title, episode,
+                    )]));
                 }
 
                 let numbering = episode
@@ -351,4 +468,11 @@ fn episode_row(
             });
         });
     ui.add_space(4.0);
+}
+
+fn key_of(episode: &Episode) -> DownloadKey {
+    DownloadKey {
+        share_id: episode.node.share_id.clone(),
+        link_id: episode.node.link_id.clone(),
+    }
 }

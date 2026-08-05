@@ -14,10 +14,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-# The per-platform keystore feature comes from `pstr-core` above — cargo unifies
-# it across the graph, and `pstr-core` is a hard dependency here. Do not enable
-# `keyring` without it: the feature-less build resolves to the `mock` store.
-keyring.workspace = true
 # Same feature set as the SDK's, deliberately: two reqwest configurations in one
 # binary means two TLS stacks linked into it.
 reqwest.workspace = true

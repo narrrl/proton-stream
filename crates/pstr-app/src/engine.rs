@@ -18,13 +18,16 @@
 //! lands in the channel and sits there until the viewer happens to move the
 //! mouse.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use parking_lot::Mutex;
 use pstr_core::appearance::Appearance;
-use pstr_core::catalog::{Catalog, CatalogNode, WatchState, build_rows};
+use pstr_core::catalog::{
+    Catalog, CatalogNode, OfflineFile, TitleTrackPrefs, WatchState, build_rows,
+};
 use pstr_core::config::AppDirs;
 use pstr_core::library::{Library, Title, TitleKind};
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId};
@@ -33,10 +36,113 @@ use pstr_core::proton_drive_rs::ThumbnailType;
 use pstr_core::proton_sdk::ids::{LinkId, NodeUid, VolumeId};
 use pstr_core::{Share, ShareStore, SharedLibrary};
 use pstr_meta::MetadataService;
-use pstr_stream::{DiskCacheConfig, LibraryOpener, StreamConfig, StreamSource, VideoStream};
+use pstr_stream::{
+    BlockSource, DiskCacheConfig, FileBlocks, LibraryOpener, StreamConfig, StreamSource,
+    VideoStream,
+};
 use tokio::runtime::Runtime;
 
 use crate::playback::PlaybackTarget;
+
+/// Stable identity for an episode download. No share secret is included.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct DownloadKey {
+    pub share_id: String,
+    pub link_id: String,
+}
+
+impl From<&PlaybackTarget> for DownloadKey {
+    fn from(target: &PlaybackTarget) -> Self {
+        Self {
+            share_id: target.share_id.clone(),
+            link_id: target.link_id.clone(),
+        }
+    }
+}
+
+/// A download state suitable for presenting directly to the viewer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadState {
+    Queued,
+    Running,
+    Paused,
+    Completed,
+    Failed(String),
+    /// Work stopped, but its complete-block partial is retained for Resume.
+    Cancelled,
+}
+
+/// Current, inspectable state for one episode in a download batch.
+#[derive(Debug, Clone)]
+pub struct DownloadItem {
+    pub key: DownloadKey,
+    pub target: PlaybackTarget,
+    pub state: DownloadState,
+    pub downloaded: u64,
+    pub total: u64,
+}
+
+impl DownloadItem {
+    pub fn percent(&self) -> f32 {
+        if self.total == 0 {
+            0.0
+        } else {
+            (self.downloaded as f64 / self.total as f64).clamp(0.0, 1.0) as f32
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadCommand {
+    Run,
+    Pause,
+    Cancel,
+}
+
+struct DownloadControl {
+    command: tokio::sync::watch::Sender<DownloadCommand>,
+}
+
+impl DownloadControl {
+    fn new() -> Self {
+        let (command, _) = tokio::sync::watch::channel(DownloadCommand::Run);
+        Self { command }
+    }
+
+    fn set(&self, command: DownloadCommand) {
+        self.command.send_replace(command);
+    }
+
+    fn subscribe(&self) -> tokio::sync::watch::Receiver<DownloadCommand> {
+        self.command.subscribe()
+    }
+}
+
+struct DownloadJob {
+    control: Arc<DownloadControl>,
+    handle: tokio::task::JoinHandle<()>,
+    live: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Copy)]
+enum DownloadEnd {
+    Completed,
+    Cancelled,
+}
+
+#[derive(Default)]
+struct Downloads {
+    items: HashMap<DownloadKey, DownloadItem>,
+    jobs: HashMap<DownloadKey, DownloadJob>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PartialMarker {
+    revision_id: String,
+    block_sizes: Vec<u64>,
+    #[serde(default)]
+    target: Option<PlaybackTarget>,
+}
 
 /// Poster thumbnails are decoded to at most this edge before they become a
 /// texture. Proton's preview is larger than any tile this UI draws, and the
@@ -121,6 +227,11 @@ pub enum Event {
     Error(String),
     /// Something the viewer might like to see, briefly.
     Status(String),
+    /// Full download-manager snapshot. Replacing rather than patching avoids
+    /// stale rows when a task is removed.
+    Downloads(Vec<DownloadItem>),
+    /// Completed local copies, for badges and online-only actions.
+    OfflineFiles(HashSet<DownloadKey>),
 }
 
 /// The share clients and the block layer, once they exist.
@@ -172,6 +283,10 @@ pub struct Engine {
     /// Which theme the window wears. Kept beside the playback preferences for
     /// the same reason: it is read from the UI and written to disk off it.
     appearance: Arc<Mutex<Appearance>>,
+    /// Preloaded so clicking Play never runs SQLite on egui's thread.
+    track_prefs: Arc<Mutex<HashMap<String, TitleTrackPrefs>>>,
+    downloads: Arc<Mutex<Downloads>>,
+    download_permits: Arc<tokio::sync::Semaphore>,
     events: Sender<Event>,
     ctx: egui::Context,
 }
@@ -181,6 +296,7 @@ const THUMBNAIL_CONCURRENCY: usize = 6;
 
 /// How many provider lookups may be in flight at once. See [`Engine::lookups`].
 const LOOKUP_CONCURRENCY: usize = 2;
+const DOWNLOAD_CONCURRENCY: usize = 3;
 
 /// Enrichment as currently configured.
 struct Enrichment {
@@ -243,6 +359,10 @@ impl Engine {
             Appearance::default()
         });
 
+        let track_prefs = catalog.all_title_track_prefs().unwrap_or_else(|error| {
+            tracing::warn!("read show track preferences: {error}");
+            HashMap::new()
+        });
         let engine = Self {
             runtime,
             store: Arc::new(ShareStore::new(dirs.clone())),
@@ -255,6 +375,9 @@ impl Engine {
             metadata: Arc::new(Mutex::new(Enrichment::build(config))),
             prefs: Arc::new(Mutex::new(prefs)),
             appearance: Arc::new(Mutex::new(appearance)),
+            track_prefs: Arc::new(Mutex::new(track_prefs)),
+            downloads: Arc::new(Mutex::new(Downloads::default())),
+            download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
             events,
             ctx,
         };
@@ -357,15 +480,57 @@ impl Engine {
     pub fn remove_share(&self, id: String) {
         let engine = self.clone();
         self.runtime.spawn(async move {
+            let keys: Vec<_> = engine
+                .downloads
+                .lock()
+                .jobs
+                .keys()
+                .filter(|key| key.share_id == id)
+                .cloned()
+                .collect();
+            for key in &keys {
+                engine.cancel_and_join(key).await;
+            }
+
+            let offline = match engine.catalog.lock().offline_files_for_share(&id) {
+                Ok(files) => files,
+                Err(error) => return engine.fail("inspect that share's downloads", error),
+            };
+            for (link_id, file) in &offline {
+                let path = engine.dirs.offline_file(&id, link_id, &file.revision_id);
+                if let Err(error) = remove_if_present(&path).await {
+                    return engine.fail("delete that share's offline bytes", error);
+                }
+            }
+            let item_keys: Vec<_> = engine
+                .downloads
+                .lock()
+                .items
+                .keys()
+                .filter(|key| key.share_id == id)
+                .cloned()
+                .collect();
+            for key in &item_keys {
+                let (partial, marker) = engine.partial_paths(key);
+                if let Err(error) = remove_if_present(&partial).await {
+                    return engine.fail("delete that share's partial download", error);
+                }
+                if let Err(error) = remove_if_present(&marker).await {
+                    return engine.fail("delete that share's partial marker", error);
+                }
+            }
+            if let Err(error) = engine.catalog.lock().remove_share(&id) {
+                return engine.fail("drop that share's catalog rows", error);
+            }
             if let Err(error) = engine.store.remove(&id) {
                 return engine.fail("remove that share", error);
             }
             {
-                let catalog = engine.catalog.lock();
-                if let Err(error) = catalog.remove_share(&id) {
-                    tracing::warn!("drop catalog rows for {id}: {error}");
-                }
+                let mut downloads = engine.downloads.lock();
+                downloads.items.retain(|key, _| key.share_id != id);
+                downloads.jobs.retain(|key, _| key.share_id != id);
             }
+            engine.emit_downloads();
             engine.load_shares();
             // Its clients are stale now; the next action reopens what is left.
             engine.connection.lock().take();
@@ -464,9 +629,78 @@ impl Engine {
             };
             match result {
                 Ok((files, watch)) => {
-                    engine.emit(Event::LibraryLoaded(Library::build(files, &watch)))
+                    engine.emit(Event::LibraryLoaded(Library::build(files, &watch)));
+                    engine.load_offline_files();
                 }
                 Err(error) => engine.fail("read the catalog", error),
+            }
+        });
+    }
+
+    /// Refresh the lightweight offline index used by title badges and actions.
+    pub fn load_offline_files(&self) {
+        let engine = self.clone();
+        self.runtime.spawn_blocking(move || {
+            let result = (|| {
+                let catalog = engine.catalog.lock();
+                let files = catalog.all_offline_files()?;
+                let library = Library::build(catalog.all_files()?, &catalog.all_watch_states()?);
+                let mut targets = HashMap::new();
+                for title in &library.titles {
+                    for episode in title.episodes() {
+                        let target = PlaybackTarget::new(title, episode);
+                        targets.insert(DownloadKey::from(&target), target);
+                    }
+                }
+                let mut valid = HashSet::new();
+                let mut hydrated = Vec::new();
+                for ((share_id, link_id), file) in files {
+                    let key = DownloadKey { share_id, link_id };
+                    let path =
+                        engine
+                            .dirs
+                            .offline_file(&key.share_id, &key.link_id, &file.revision_id);
+                    let Some(expected) = file
+                        .block_sizes
+                        .iter()
+                        .try_fold(0_u64, |sum, size| sum.checked_add(*size))
+                    else {
+                        catalog.remove_offline_file(&key.share_id, &key.link_id)?;
+                        continue;
+                    };
+                    if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == expected) {
+                        valid.insert(key.clone());
+                        if let Some(target) = targets.get(&key).cloned() {
+                            hydrated.push(DownloadItem {
+                                key,
+                                target,
+                                state: DownloadState::Completed,
+                                downloaded: expected,
+                                total: expected,
+                            });
+                        }
+                    } else {
+                        // The catalog is an index, not the bytes. A manually
+                        // removed or truncated file must stop wearing an
+                        // offline badge and remain playable from the share.
+                        catalog.remove_offline_file(&key.share_id, &key.link_id)?;
+                    }
+                }
+                Ok::<_, pstr_core::Error>((valid, hydrated))
+            })();
+            match result {
+                Ok((files, hydrated)) => {
+                    {
+                        let mut downloads = engine.downloads.lock();
+                        for item in hydrated {
+                            downloads.items.entry(item.key.clone()).or_insert(item);
+                        }
+                    }
+                    engine.hydrate_partial_downloads();
+                    engine.emit_downloads();
+                    engine.emit(Event::OfflineFiles(files));
+                }
+                Err(error) => engine.fail("read offline downloads", error),
             }
         });
     }
@@ -502,9 +736,67 @@ impl Engine {
             let rows = build_rows(&share_id, &nodes);
             let files = rows.len();
 
+            // A writer opened before the crawl may be producing the revision
+            // this crawl is about to supersede. Quiesce all writers for the
+            // share before inspecting or deleting any revision paths.
+            let active_downloads: Vec<_> = self
+                .downloads
+                .lock()
+                .jobs
+                .keys()
+                .filter(|key| key.share_id == share_id)
+                .cloned()
+                .collect();
+            for key in &active_downloads {
+                self.cancel_and_join(key).await;
+            }
+
+            // Paths are derived from the old revision id, so inspect and
+            // remove stale bytes before changing or dropping their index rows.
+            let retained = match self.catalog.lock().offline_files_for_share(&share_id) {
+                Ok(files) => files,
+                Err(error) => {
+                    self.fail(&format!("inspect downloads for {share_id}"), error);
+                    continue;
+                }
+            };
+            let revisions: HashMap<&str, Option<&str>> = rows
+                .iter()
+                .map(|row| (row.link_id.as_str(), row.active_revision_id.as_deref()))
+                .collect();
+            let stale: Vec<_> = retained
+                .iter()
+                .filter(|(link_id, file)| {
+                    revisions.get(link_id.as_str()).copied().flatten()
+                        != Some(file.revision_id.as_str())
+                })
+                .map(|(link_id, file)| (link_id.clone(), file.clone()))
+                .collect();
+            let mut cleanup_failed = false;
+            for (link_id, file) in &stale {
+                let path = self
+                    .dirs
+                    .offline_file(&share_id, link_id, &file.revision_id);
+                if let Err(error) = remove_if_present(&path).await {
+                    self.fail(&format!("delete stale download for {share_id}"), error);
+                    cleanup_failed = true;
+                    break;
+                }
+            }
+            if cleanup_failed {
+                continue;
+            }
+
             let stored = {
                 let mut catalog = self.catalog.lock();
-                catalog.replace_share(&share_id, &rows)
+                catalog
+                    .replace_share_retaining_offline(&share_id, &rows)
+                    .and_then(|()| {
+                        for (link_id, _) in &stale {
+                            catalog.remove_offline_file(&share_id, link_id)?;
+                        }
+                        Ok(())
+                    })
             };
             if let Err(error) = stored {
                 self.fail(&format!("store {share_id}"), error);
@@ -548,6 +840,19 @@ impl Engine {
         }
     }
 
+    pub fn title_track_prefs(&self, key: &str) -> Option<TitleTrackPrefs> {
+        self.track_prefs.lock().get(key).cloned()
+    }
+    pub fn set_title_track_prefs(&self, key: String, prefs: TitleTrackPrefs) {
+        self.track_prefs.lock().insert(key.clone(), prefs.clone());
+        let engine = self.clone();
+        self.runtime.spawn_blocking(move || {
+            if let Err(e) = engine.catalog.lock().set_title_track_prefs(&key, &prefs) {
+                tracing::warn!("save show track preferences: {e}");
+            }
+        });
+    }
+
     // ------------------------------------------------------------- playback
 
     /// Open a stream on `node` and hand it back through
@@ -559,6 +864,37 @@ impl Engine {
     pub fn play(&self, target: PlaybackTarget) {
         let engine = self.clone();
         self.runtime.spawn(async move {
+            // A completed local copy is authoritative until the catalog sees a
+            // new revision; opening it never needs a public-link session.
+            let offline = {
+                engine
+                    .catalog
+                    .lock()
+                    .offline_file(&target.share_id, &target.link_id)
+                    .ok()
+                    .flatten()
+            };
+            if let Some(file) = offline {
+                let path =
+                    engine
+                        .dirs
+                        .offline_file(&target.share_id, &target.link_id, &file.revision_id);
+                if tokio::fs::metadata(&path)
+                    .await
+                    .map(|m| m.len() == file.block_sizes.iter().sum::<u64>())
+                    .unwrap_or(false)
+                {
+                    let blocks: std::sync::Arc<dyn BlockSource> = std::sync::Arc::new(
+                        FileBlocks::new(file.revision_id, path, file.block_sizes),
+                    );
+                    let uid = node_uid(&target.volume_id, &target.link_id);
+                    engine.emit(Event::PlaybackReady {
+                        target: Box::new(target),
+                        stream: VideoStream::offline(uid, blocks, pstr_stream::DEFAULT_RING_BYTES),
+                    });
+                    return;
+                }
+            }
             let Some((_, source)) = engine.ensure_connected().await else {
                 return;
             };
@@ -574,6 +910,459 @@ impl Engine {
                 Err(error) => engine.fail(&format!("open {}", target.name), error),
             }
         });
+    }
+
+    /// Queue complete plaintext copies. Jobs for the same episode are
+    /// de-duplicated; a failed or cancelled row is a resumable retry.
+    pub fn make_offline(&self, targets: Vec<PlaybackTarget>) {
+        for target in targets {
+            let key = DownloadKey::from(&target);
+            if !self.job_is_live(&key) {
+                self.spawn_download(target);
+            }
+        }
+    }
+
+    fn job_is_live(&self, key: &DownloadKey) -> bool {
+        self.downloads
+            .lock()
+            .jobs
+            .get(key)
+            .is_some_and(|job| job.live.load(Ordering::Acquire))
+    }
+
+    fn spawn_download(&self, target: PlaybackTarget) {
+        let key = DownloadKey::from(&target);
+        let control = Arc::new(DownloadControl::new());
+        let live = Arc::new(AtomicBool::new(true));
+        {
+            let mut downloads = self.downloads.lock();
+            let previous = downloads.items.get(&key).cloned();
+            downloads.items.insert(
+                key.clone(),
+                DownloadItem {
+                    key: key.clone(),
+                    target: target.clone(),
+                    state: DownloadState::Queued,
+                    downloaded: previous.as_ref().map_or(0, |item| item.downloaded),
+                    total: previous.as_ref().map_or(0, |item| item.total),
+                },
+            );
+        }
+        self.emit_downloads();
+        let engine = self.clone();
+        let task_live = Arc::clone(&live);
+        let task_target = target.clone();
+        let task_control = Arc::clone(&control);
+        let handle = self.runtime.spawn(async move {
+            let result = engine.download_one(task_target.clone(), task_control).await;
+            task_live.store(false, Ordering::Release);
+            let task_key = DownloadKey::from(&task_target);
+            match result {
+                Ok(DownloadEnd::Completed) => {
+                    engine.update_download(&task_key, |item| {
+                        item.downloaded = item.total;
+                        item.state = DownloadState::Completed;
+                    });
+                    engine.load_offline_files();
+                    engine.emit(Event::Status(format!(
+                        "{} is available offline",
+                        task_target.name
+                    )));
+                }
+                Ok(DownloadEnd::Cancelled) => {
+                    engine.update_download(&task_key, |item| item.state = DownloadState::Cancelled);
+                }
+                Err(error) => {
+                    engine.update_download(&task_key, |item| {
+                        item.state = DownloadState::Failed(error.to_string());
+                    });
+                }
+            }
+        });
+        self.downloads.lock().jobs.insert(
+            key,
+            DownloadJob {
+                control,
+                handle,
+                live,
+            },
+        );
+    }
+
+    pub fn pause_download(&self, key: &DownloadKey) {
+        if let Some(control) = self.live_control(key) {
+            control.set(DownloadCommand::Pause);
+            self.update_download(key, |item| item.state = DownloadState::Paused);
+        }
+    }
+
+    pub fn resume_download(&self, key: &DownloadKey) {
+        let control = self.live_control(key);
+        if let Some(control) = control {
+            control.set(DownloadCommand::Run);
+            self.update_download(key, |item| item.state = DownloadState::Running);
+            return;
+        }
+        if let Some(target) = self
+            .downloads
+            .lock()
+            .items
+            .get(key)
+            .map(|item| item.target.clone())
+        {
+            self.make_offline(vec![target]);
+        }
+    }
+
+    /// Stop network work after the current complete block. The partial remains
+    /// valid and Resume starts at its next block.
+    pub fn cancel_download(&self, key: &DownloadKey) {
+        if let Some(control) = self.live_control(key) {
+            control.set(DownloadCommand::Cancel);
+        }
+    }
+
+    fn live_control(&self, key: &DownloadKey) -> Option<Arc<DownloadControl>> {
+        self.downloads
+            .lock()
+            .jobs
+            .get(key)
+            .filter(|job| job.live.load(Ordering::Acquire))
+            .map(|job| Arc::clone(&job.control))
+    }
+
+    /// Remove completed offline bytes and the catalog record. With
+    /// `remove_partial`, also discard resumable work after cancelling it.
+    pub fn remove_download(&self, key: DownloadKey, remove_partial: bool) {
+        self.cancel_download(&key);
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            engine.cancel_and_join(&key).await;
+            let offline = {
+                engine
+                    .catalog
+                    .lock()
+                    .offline_file(&key.share_id, &key.link_id)
+                    .ok()
+                    .flatten()
+            };
+            if let Some(file) = offline {
+                let path = engine
+                    .dirs
+                    .offline_file(&key.share_id, &key.link_id, &file.revision_id);
+                if let Err(error) = remove_if_present(&path).await {
+                    return engine.fail("delete offline bytes", error);
+                }
+            }
+            if remove_partial {
+                let (partial, marker) = engine.partial_paths(&key);
+                if let Err(error) = remove_if_present(&partial).await {
+                    return engine.fail("delete partial download", error);
+                }
+                if let Err(error) = remove_if_present(&marker).await {
+                    return engine.fail("delete partial marker", error);
+                }
+            }
+            if let Err(error) = engine
+                .catalog
+                .lock()
+                .remove_offline_file(&key.share_id, &key.link_id)
+            {
+                return engine.fail("make online-only", error);
+            }
+            {
+                let mut downloads = engine.downloads.lock();
+                downloads.jobs.remove(&key);
+                downloads.items.remove(&key);
+            }
+            engine.emit_downloads();
+            engine.load_offline_files();
+            engine.emit(Event::Status(
+                "download removed; online source was kept".to_owned(),
+            ));
+        });
+    }
+
+    async fn cancel_and_join(&self, key: &DownloadKey) {
+        let job = self.downloads.lock().jobs.remove(key);
+        if let Some(job) = job {
+            job.control.set(DownloadCommand::Cancel);
+            if let Err(error) = job.handle.await
+                && !error.is_cancelled()
+            {
+                tracing::warn!("join offline writer: {error}");
+            }
+        }
+    }
+
+    /// Ask every writer to stop at its next durable block boundary and wait a
+    /// bounded time. If a network read outlives the bound, the marker and last
+    /// `sync_data` boundary remain a coherent handoff for the next launch.
+    pub fn shutdown_downloads(&self, timeout: std::time::Duration) {
+        let jobs: Vec<_> = {
+            let mut downloads = self.downloads.lock();
+            downloads
+                .jobs
+                .drain()
+                .map(|(_, job)| {
+                    job.control.set(DownloadCommand::Cancel);
+                    job.handle
+                })
+                .collect()
+        };
+        self.runtime.block_on(async move {
+            let wait = async move {
+                for handle in jobs {
+                    let _ = handle.await;
+                }
+            };
+            let _ = tokio::time::timeout(timeout, wait).await;
+        });
+    }
+
+    fn emit_downloads(&self) {
+        let mut items: Vec<_> = self.downloads.lock().items.values().cloned().collect();
+        items.sort_by(|a, b| {
+            a.target
+                .title_key
+                .cmp(&b.target.title_key)
+                .then(a.target.season.cmp(&b.target.season))
+                .then(a.target.number.cmp(&b.target.number))
+        });
+        self.emit(Event::Downloads(items));
+    }
+
+    fn update_download(&self, key: &DownloadKey, update: impl FnOnce(&mut DownloadItem)) {
+        if let Some(item) = self.downloads.lock().items.get_mut(key) {
+            update(item);
+        }
+        self.emit_downloads();
+    }
+
+    fn partial_paths(&self, key: &DownloadKey) -> (std::path::PathBuf, std::path::PathBuf) {
+        let partial = self
+            .dirs
+            .offline_file(&key.share_id, &key.link_id, "partial");
+        let marker = partial.with_extension("partial.json");
+        (partial, marker)
+    }
+
+    fn hydrate_partial_downloads(&self) {
+        let Ok(entries) = std::fs::read_dir(self.dirs.offline_content()) else {
+            return;
+        };
+        let mut found = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".partial.json"))
+            {
+                continue;
+            }
+            let Some(marker) = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<PartialMarker>(&bytes).ok())
+            else {
+                continue;
+            };
+            let Some(target) = marker.target else {
+                continue;
+            };
+            let key = DownloadKey::from(&target);
+            let (partial, expected_marker) = self.partial_paths(&key);
+            if expected_marker != path {
+                continue;
+            }
+            let existing = std::fs::metadata(partial).map_or(0, |metadata| metadata.len());
+            let (_, downloaded) = resume_position(existing, &marker.block_sizes);
+            let Some(total) = marker
+                .block_sizes
+                .iter()
+                .try_fold(0_u64, |sum, size| sum.checked_add(*size))
+            else {
+                continue;
+            };
+            found.push(DownloadItem {
+                key,
+                target,
+                state: DownloadState::Cancelled,
+                downloaded,
+                total,
+            });
+        }
+        let mut downloads = self.downloads.lock();
+        for item in found {
+            downloads.items.entry(item.key.clone()).or_insert(item);
+        }
+    }
+
+    async fn download_one(
+        &self,
+        target: PlaybackTarget,
+        control: Arc<DownloadControl>,
+    ) -> anyhow::Result<DownloadEnd> {
+        use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+        let key = DownloadKey::from(&target);
+        let mut command = control.subscribe();
+        if !wait_until_runnable(&mut command).await {
+            return Ok(DownloadEnd::Cancelled);
+        }
+
+        let _permit = loop {
+            self.update_download(&key, |item| item.state = DownloadState::Queued);
+            let permits = Arc::clone(&self.download_permits);
+            tokio::select! {
+                permit = permits.acquire_owned() => break permit?,
+                changed = command.changed() => {
+                    if changed.is_err() || !wait_until_runnable(&mut command).await {
+                        return Ok(DownloadEnd::Cancelled);
+                    }
+                }
+            }
+        };
+        self.update_download(&key, |item| item.state = DownloadState::Running);
+        let Some((_, source)) = self.ensure_connected().await else {
+            anyhow::bail!("share is not connected");
+        };
+        let stream = source
+            .open(
+                &target.share_id,
+                &node_uid(&target.volume_id, &target.link_id),
+            )
+            .await?;
+        let revision_id = stream.revision_id().to_owned();
+        let block_sizes = stream.block_sizes().to_vec();
+        let total = block_sizes
+            .iter()
+            .try_fold(0_u64, |sum, size| sum.checked_add(*size))
+            .ok_or_else(|| anyhow::anyhow!("offline file size overflow"))?;
+        self.update_download(&key, |item| item.total = total);
+
+        let destination = self
+            .dirs
+            .offline_file(&target.share_id, &target.link_id, &revision_id);
+        let parent = destination
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("offline file has no parent"))?;
+        tokio::fs::create_dir_all(parent).await?;
+        if tokio::fs::metadata(&destination)
+            .await
+            .is_ok_and(|metadata| metadata.len() == total)
+        {
+            let (partial, marker) = self.partial_paths(&key);
+            remove_if_present(&partial).await?;
+            self.finish_download(&key, &target, revision_id, block_sizes, total, &marker)
+                .await?;
+            return Ok(DownloadEnd::Completed);
+        }
+
+        let (partial, marker_path) = self.partial_paths(&key);
+        let marker = PartialMarker {
+            revision_id: revision_id.clone(),
+            block_sizes: block_sizes.clone(),
+            target: Some(target.clone()),
+        };
+        let matches = tokio::fs::read(&marker_path)
+            .await
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<PartialMarker>(&bytes).ok())
+            .is_some_and(|stored| {
+                stored.revision_id == revision_id && stored.block_sizes == block_sizes
+            });
+        if !matches {
+            remove_if_present(&partial).await?;
+            // The old marker describes bytes we just discarded. Remove it
+            // before publishing the new journal so rename never relies on
+            // platform-specific replace-existing behaviour.
+            remove_if_present(&marker_path).await?;
+            write_marker_atomically(&marker_path, &marker).await?;
+        }
+
+        let existing = tokio::fs::metadata(&partial)
+            .await
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let (mut block_index, mut offset) = resume_position(existing, &block_sizes);
+        let mut output = tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&partial)
+            .await?;
+        output.set_len(offset).await?;
+        output.seek(std::io::SeekFrom::Start(offset)).await?;
+        self.update_download(&key, |item| item.downloaded = offset);
+
+        let mut last_snapshot = std::time::Instant::now();
+        while block_index < block_sizes.len() {
+            if !wait_until_runnable(&mut command).await {
+                output.sync_all().await?;
+                return Ok(DownloadEnd::Cancelled);
+            }
+            let size = block_sizes[block_index];
+            let bytes = stream.read_range(offset, size).await?;
+            if bytes.len() as u64 != size {
+                anyhow::bail!(
+                    "short block {block_index}: received {}, expected {size}",
+                    bytes.len()
+                );
+            }
+            output.write_all(&bytes).await?;
+            // The reported boundary must survive a crash; otherwise the next
+            // run could trust a file length whose trailing block never reached
+            // storage.
+            output.sync_data().await?;
+            offset += size;
+            block_index += 1;
+            if last_snapshot.elapsed() >= std::time::Duration::from_millis(100)
+                || block_index == block_sizes.len()
+            {
+                self.update_download(&key, |item| {
+                    item.state = DownloadState::Running;
+                    item.downloaded = offset;
+                });
+                last_snapshot = std::time::Instant::now();
+            }
+        }
+        output.sync_all().await?;
+        drop(output);
+        if !wait_until_runnable(&mut command).await {
+            return Ok(DownloadEnd::Cancelled);
+        }
+        remove_if_present(&destination).await?;
+        tokio::fs::rename(&partial, &destination).await?;
+        sync_parent(&destination).await?;
+        self.finish_download(&key, &target, revision_id, block_sizes, total, &marker_path)
+            .await?;
+        Ok(DownloadEnd::Completed)
+    }
+
+    async fn finish_download(
+        &self,
+        key: &DownloadKey,
+        target: &PlaybackTarget,
+        revision_id: String,
+        block_sizes: Vec<u64>,
+        total: u64,
+        marker_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        self.catalog.lock().set_offline_file_durable(
+            &target.share_id,
+            &target.link_id,
+            &OfflineFile {
+                revision_id,
+                block_sizes,
+            },
+        )?;
+        remove_if_present(marker_path).await?;
+        sync_parent(marker_path).await?;
+        self.update_download(key, |item| item.total = total);
+        Ok(())
     }
 
     /// Drop a stream the player is done with, so its reader and blocks are not
@@ -1132,6 +1921,77 @@ fn node_uid(volume_id: &str, link_id: &str) -> NodeUid {
     )
 }
 
+/// Resume only after the last completely durable Proton block. A process may
+/// die during a write, so trailing bytes inside a block are deliberately
+/// discarded rather than trusted.
+fn resume_position(existing: u64, block_sizes: &[u64]) -> (usize, u64) {
+    let mut offset = 0_u64;
+    for (index, size) in block_sizes.iter().copied().enumerate() {
+        let Some(next) = offset.checked_add(size) else {
+            break;
+        };
+        if next > existing {
+            return (index, offset);
+        }
+        offset = next;
+    }
+    (block_sizes.len(), offset)
+}
+
+async fn wait_until_runnable(command: &mut tokio::sync::watch::Receiver<DownloadCommand>) -> bool {
+    loop {
+        let current = *command.borrow_and_update();
+        match current {
+            DownloadCommand::Run => return true,
+            DownloadCommand::Cancel => return false,
+            DownloadCommand::Pause => {
+                if command.changed().await.is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+async fn remove_if_present(path: &std::path::Path) -> std::io::Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+async fn sync_parent(path: &std::path::Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    tokio::fs::File::open(parent).await?.sync_all().await
+}
+
+#[cfg(not(unix))]
+async fn sync_parent(_path: &std::path::Path) -> std::io::Result<()> {
+    // Windows does not expose directory handles through std/tokio. The file
+    // itself is synced before publication and rename is still atomic.
+    Ok(())
+}
+
+async fn write_marker_atomically(
+    path: &std::path::Path,
+    marker: &PartialMarker,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let temporary = path.with_extension("partial.json.tmp");
+    let bytes = serde_json::to_vec(marker)?;
+    let mut output = tokio::fs::File::create(&temporary).await?;
+    output.write_all(&bytes).await?;
+    output.sync_all().await?;
+    drop(output);
+    tokio::fs::rename(temporary, path).await?;
+    sync_parent(path).await?;
+    Ok(())
+}
+
 /// Decode image bytes into something egui can upload, scaled down to
 /// [`THUMBNAIL_MAX_EDGE`].
 ///
@@ -1221,5 +2081,114 @@ impl ImageCache {
         self.textures.clear();
         self.requested.clear();
         self.missing.clear();
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+
+    #[test]
+    fn a_partial_download_resumes_only_after_a_complete_block() {
+        let blocks = [3, 5, 2];
+        assert_eq!(resume_position(0, &blocks), (0, 0));
+        assert_eq!(resume_position(3, &blocks), (1, 3));
+        assert_eq!(resume_position(7, &blocks), (1, 3));
+        assert_eq!(resume_position(8, &blocks), (2, 8));
+        assert_eq!(resume_position(99, &blocks), (3, 10));
+    }
+
+    #[test]
+    fn pause_resume_and_cancel_controls_are_distinct() {
+        let control = DownloadControl::new();
+        let command = control.subscribe();
+        assert_eq!(*command.borrow(), DownloadCommand::Run);
+        control.set(DownloadCommand::Pause);
+        assert_eq!(*command.borrow(), DownloadCommand::Pause);
+        control.set(DownloadCommand::Run);
+        assert_eq!(*command.borrow(), DownloadCommand::Run);
+        control.set(DownloadCommand::Cancel);
+        assert_eq!(*command.borrow(), DownloadCommand::Cancel);
+    }
+
+    #[tokio::test]
+    async fn resume_before_wait_cannot_be_lost() {
+        let control = DownloadControl::new();
+        let mut command = control.subscribe();
+        control.set(DownloadCommand::Pause);
+        control.set(DownloadCommand::Run);
+        assert!(wait_until_runnable(&mut command).await);
+    }
+
+    #[tokio::test]
+    async fn cancellation_wakes_a_paused_writer_deterministically() {
+        let control = Arc::new(DownloadControl::new());
+        let mut command = control.subscribe();
+        control.set(DownloadCommand::Pause);
+        let waiter = tokio::spawn(async move { wait_until_runnable(&mut command).await });
+        tokio::task::yield_now().await;
+        control.set(DownloadCommand::Cancel);
+        assert!(
+            !tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                .await
+                .expect("the paused waiter woke")
+                .expect("waiter did not panic")
+        );
+    }
+
+    #[test]
+    fn startup_hydrates_a_durable_partial_as_resumable() {
+        let unique = format!(
+            "pstr-download-hydration-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let dirs = AppDirs::from_paths(root.join("config"), root.join("data"), root.join("cache"))
+            .expect("temporary app dirs");
+        let runtime = Arc::new(Runtime::new().expect("runtime"));
+        let (engine, _) =
+            Engine::new(Arc::clone(&runtime), dirs, egui::Context::default()).expect("engine");
+        let target = PlaybackTarget {
+            share_id: "share".to_owned(),
+            volume_id: "volume".to_owned(),
+            link_id: "episode".to_owned(),
+            name: "Show.S01E01.mkv".to_owned(),
+            title_key: "show".to_owned(),
+            title_name: "Show".to_owned(),
+            subtitle: "S01E01".to_owned(),
+            season: Some(1),
+            number: Some(1),
+            episode_name: None,
+            resume_at: None,
+            track_prefs: None,
+        };
+        let key = DownloadKey::from(&target);
+        let (partial, marker_path) = engine.partial_paths(&key);
+        std::fs::create_dir_all(partial.parent().expect("offline parent"))
+            .expect("create offline parent");
+        std::fs::write(&partial, [0_u8; 7]).expect("write one block and a fragment");
+        runtime
+            .block_on(write_marker_atomically(
+                &marker_path,
+                &PartialMarker {
+                    revision_id: "revision".to_owned(),
+                    block_sizes: vec![4, 5],
+                    target: Some(target),
+                },
+            ))
+            .expect("durable marker");
+
+        engine.hydrate_partial_downloads();
+        let downloads = engine.downloads.lock();
+        let item = downloads.items.get(&key).expect("hydrated row");
+        assert_eq!(item.state, DownloadState::Cancelled);
+        assert_eq!(item.downloaded, 4, "only a complete block is resumable");
+        assert_eq!(item.total, 9);
+        drop(downloads);
+        std::fs::remove_dir_all(root).expect("remove temporary app dirs");
     }
 }

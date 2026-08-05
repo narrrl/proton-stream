@@ -36,6 +36,61 @@ pub const CARD_WIDTH: f32 = 232.0;
 pub const CARD_ASPECT: f32 = 9.0 / 16.0;
 pub const CARD_GAP: f32 = 14.0;
 
+/// Install a real CJK fallback before the default egui fonts.  egui ships a
+/// compact Latin font, but it intentionally does not bundle the multi-megabyte
+/// CJK families.  Native desktops already provide one, so use it when present.
+pub fn install_font_fallbacks(ctx: &egui::Context) {
+    let Some((path, index)) = system_cjk_font() else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+
+    let mut fonts = egui::FontDefinitions::default();
+    let mut data = egui::FontData::from_owned(bytes);
+    data.index = index;
+    let name = "system-cjk-fallback".to_owned();
+    fonts.font_data.insert(name.clone(), Arc::new(data));
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push(name.clone());
+    }
+    ctx.set_fonts(fonts);
+}
+
+#[cfg(target_os = "linux")]
+fn system_cjk_font() -> Option<(std::path::PathBuf, u32)> {
+    let output = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}\\n%{index}", "Noto Sans CJK JP"])
+        .output()
+        .ok()?;
+    let text = std::str::from_utf8(&output.stdout).ok()?;
+    let mut lines = text.lines();
+    let path = std::path::PathBuf::from(lines.next()?);
+    let index = lines
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    path.is_file().then_some((path, index))
+}
+
+#[cfg(target_os = "windows")]
+fn system_cjk_font() -> Option<(std::path::PathBuf, u32)> {
+    let path = std::path::PathBuf::from(r"C:\Windows\Fonts\YuGothR.ttc");
+    path.is_file().then_some((path, 0))
+}
+
+#[cfg(target_os = "macos")]
+fn system_cjk_font() -> Option<(std::path::PathBuf, u32)> {
+    let path = std::path::PathBuf::from("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc");
+    path.is_file().then_some((path, 0))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+fn system_cjk_font() -> Option<(std::path::PathBuf, u32)> {
+    None
+}
+
 /// Every colour the app draws with, resolved from a [`Flavor`] and an
 /// [`Accent`].
 ///

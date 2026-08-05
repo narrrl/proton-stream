@@ -55,7 +55,7 @@ const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 const POLL_TIMEOUT: f64 = 0.05;
 
 /// What is being played, and where it came from.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlaybackTarget {
     pub share_id: String,
     pub volume_id: String,
@@ -76,6 +76,8 @@ pub struct PlaybackTarget {
     pub episode_name: Option<String>,
     /// Where to resume, when the viewer had been here before.
     pub resume_at: Option<f64>,
+    /// Per-show track choices, filled by the app just before opening.
+    pub track_prefs: Option<Box<pstr_core::catalog::TitleTrackPrefs>>,
 }
 
 impl PlaybackTarget {
@@ -102,6 +104,7 @@ impl PlaybackTarget {
             number: node.parsed.episode,
             episode_name: None,
             resume_at,
+            track_prefs: None,
         }
     }
 
@@ -374,7 +377,7 @@ fn build_player(
             // controller would be a second set of controls over the same file.
             on_screen_controller: false,
             default_keybindings: false,
-            ..from_prefs(prefs)
+            ..from_prefs(prefs, target.track_prefs.as_deref())
         };
 
         match Player::new(engine.runtime().clone(), config) {
@@ -403,7 +406,7 @@ fn build_player(
 
     let config = PlayerConfig {
         window_title: title,
-        ..from_prefs(prefs)
+        ..from_prefs(prefs, target.track_prefs.as_deref())
     };
     let player = Player::new(engine.runtime().clone(), config)
         .map_err(|error| format!("start mpv: {error}"))?;
@@ -411,13 +414,20 @@ fn build_player(
 }
 
 /// The player defaults with the viewer's preferences folded in.
-fn from_prefs(prefs: &PlaybackPrefs) -> PlayerConfig {
+fn from_prefs(
+    prefs: &PlaybackPrefs,
+    show: Option<&pstr_core::catalog::TitleTrackPrefs>,
+) -> PlayerConfig {
     PlayerConfig {
         volume: prefs.volume,
         muted: prefs.muted,
-        audio_language: prefs.audio_language.clone(),
-        subtitle_language: prefs.subtitle_language.clone(),
-        subtitles: prefs.subtitles,
+        audio_language: show
+            .and_then(|p| p.audio_language.clone())
+            .or_else(|| prefs.audio_language.clone()),
+        subtitle_language: show
+            .and_then(|p| p.subtitle_language.clone())
+            .or_else(|| prefs.subtitle_language.clone()),
+        subtitles: show.map(|p| p.subtitles).unwrap_or(prefs.subtitles),
         ..PlayerConfig::default()
     }
 }

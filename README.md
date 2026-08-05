@@ -28,6 +28,10 @@ countdown, optional metadata, themes and share management. What is left is mostl
 (`.srt`/`.ass` beside the video are invisible to the crawl today) and running the
 macOS packaging on a real Mac. See `docs/DEVELOPMENT.md`.
 
+A native Android 12+ client is under `android/`, sharing the Rust catalog and
+streaming implementation through UniFFI. Its toolchain, emulator, signing, and
+release instructions are in [`docs/ANDROID.md`](docs/ANDROID.md).
+
 ```bash
 cargo run --release -p pstr-app          # the app
 ```
@@ -64,7 +68,7 @@ against the SDK's own range download.
 | UI | egui/eframe on glow; mpv renders into the same GL context. |
 | Themes | The shipped near-black palette plus Catppuccin Latte, Frappé, Macchiato and Mocha, each with a choice of eight accents — pink and sky among them — drawn as a gradient unless you turn that off. Picked on the Shares page, applied without a restart. |
 | Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses and per-episode titles; a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. |
-| Platforms | Linux and Windows. The macOS packaging is written but has not been run on a Mac. |
+| Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. The Android 12+ phone/tablet client is under active development. |
 
 ## Building
 
@@ -84,6 +88,10 @@ and a portable `.zip` plus an `.msi` on Windows — are produced by
 `scripts/build.sh` and `scripts\build.ps1`; `packaging/README.md` has the
 per-platform detail.
 
+Android builds use JDK 17, Android SDK 36/NDK 28, Gradle 8.13, `cargo-ndk`, and
+UniFFI. Run `bash scripts/build-android.sh debug` after installing that toolchain;
+see [`docs/ANDROID.md`](docs/ANDROID.md) for exact setup and release signing.
+
 ## Privacy
 
 - The share URL fragment **is** the decryption password. It and any custom
@@ -99,4 +107,6 @@ per-platform detail.
 
 ## License
 
-MIT.
+The shared Rust crates and desktop application are MIT licensed. The Android
+application and its combined native distribution are GPL-3.0-or-later; see
+[`android/LICENSE.md`](android/LICENSE.md) and the bundled-component notices.

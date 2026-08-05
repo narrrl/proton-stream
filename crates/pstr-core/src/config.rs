@@ -30,6 +30,25 @@ pub struct AppDirs {
 }
 
 impl AppDirs {
+    /// Use directories supplied by a platform host.
+    ///
+    /// Android owns its application directories and exposes them through
+    /// `Context`; resolving them through desktop conventions would put state in
+    /// a path that does not exist inside the application sandbox.
+    pub fn from_paths(
+        config: impl Into<PathBuf>,
+        data: impl Into<PathBuf>,
+        cache: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        let dirs = Self {
+            config: config.into(),
+            data: data.into(),
+            cache: cache.into(),
+        };
+        dirs.create()?;
+        Ok(dirs)
+    }
+
     /// Resolve the platform directories and create them.
     pub fn ensure() -> Result<Self> {
         let dirs =
@@ -43,10 +62,15 @@ impl AppDirs {
             cache: dirs.cache_dir().to_path_buf(),
         };
 
-        for path in [&dirs.config, &dirs.data, &dirs.cache] {
+        dirs.create()?;
+        Ok(dirs)
+    }
+
+    fn create(&self) -> Result<()> {
+        for path in [&self.config, &self.data, &self.cache] {
             fs::create_dir_all(path)?;
         }
-        Ok(dirs)
+        Ok(())
     }
 
     /// The share list.
@@ -62,6 +86,26 @@ impl AppDirs {
     /// The content-block cache root.
     pub fn block_cache(&self) -> PathBuf {
         self.cache.join("blocks")
+    }
+
+    /// Complete files explicitly kept for disconnected playback.
+    pub fn offline_content(&self) -> PathBuf {
+        self.data.join("offline")
+    }
+
+    /// Opaque path for one complete offline revision. No media name or share
+    /// secret reaches the filesystem.
+    pub fn offline_file(&self, share_id: &str, link_id: &str, revision: &str) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(share_id.as_bytes());
+        hash.update([0]);
+        hash.update(link_id.as_bytes());
+        hash.update([0]);
+        hash.update(revision.as_bytes());
+        let digest = hash.finalize();
+        let name: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        self.offline_content().join(format!("{name}.media"))
     }
 
     /// Where decrypted poster thumbnails are kept.

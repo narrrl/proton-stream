@@ -7,6 +7,7 @@ members = [
     "crates/pstr-player",
     "crates/pstr-app",
     "crates/pstr-cli",
+    "crates/pstr-android",
 ]
 
 [workspace.package]
@@ -90,6 +91,7 @@ lru = "0.12"
 # stream layer needs a `dyn` block source so its cache, ring and read-ahead can
 # be tested against a fake without a network or an account.
 async-trait = "0.1"
+uniffi = "0.32"
 
 # The SDK builds against the registry — 0.4.0 is published. To test an
 # unpublished `../proton-sdk-rs` change against this app, add locally and do

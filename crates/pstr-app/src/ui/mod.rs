@@ -3,6 +3,7 @@
 //! mutating the library it is iterating: pages collect [`Action`]s and the app
 //! applies them after the frame is drawn.
 
+pub mod downloads;
 pub mod library;
 pub mod matcher;
 pub mod player;

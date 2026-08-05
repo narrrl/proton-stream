@@ -1,0 +1,205 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'crates/pstr-android/**'
+      - 'crates/pstr-core/**'
+      - 'crates/pstr-meta/**'
+      - 'crates/pstr-stream/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/build-android.sh'
+      - 'scripts/build-libmpv-android.sh'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+    inputs:
+      signed_release:
+        description: Build artifacts with the configured release key
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  ANDROID_API: '36'
+  ANDROID_BUILD_TOOLS: '37.0.0'
+  ANDROID_NDK: '29.0.14206865'
+
+jobs:
+  build:
+    name: Validate, debug, and unsigned release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Enforce release versions and tag ancestry
+        shell: bash
+        run: |
+          workspace_version="$(awk '/^\[workspace.package\]/{found=1; next} found && /^\[/{exit} found && /^version = /{gsub(/[" ]/, "", $3); print $3; exit}' Cargo.toml)"
+          test -n "$workspace_version"
+          if [[ ! "$workspace_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::workspace version is not supported Android semver: $workspace_version"
+            exit 1
+          fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          test "$minor" -le 999
+          test "$patch" -le 999
+          expected_code=$((major * 1000000 + minor * 1000 + patch))
+          test "$expected_code" -ge 1
+          test "$expected_code" -le 2100000000
+          echo "EXPECTED_ANDROID_VERSION_NAME=$workspace_version" >> "$GITHUB_ENV"
+          echo "EXPECTED_ANDROID_VERSION_CODE=$expected_code" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            test "$tag" = "$workspace_version"
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          fi
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            autoconf automake build-essential cmake curl git gperf libtool \
+            meson nasm ninja-build pkg-config python3 unzip wget xz-utils yasm
+
+      - name: Install Android SDK and NDK
+        run: >-
+          sdkmanager
+          "platforms;android-${ANDROID_API}"
+          "build-tools;${ANDROID_BUILD_TOOLS}"
+          "ndk;${ANDROID_NDK}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2.9.1
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Validate Android version derivation and override
+        shell: bash
+        run: |
+          resolved="$(gradle --no-daemon -q -p android :app:printAndroidVersion)"
+          grep -Fx "versionName=$EXPECTED_ANDROID_VERSION_NAME" <<< "$resolved"
+          grep -Fx "versionCode=$EXPECTED_ANDROID_VERSION_CODE" <<< "$resolved"
+          if [[ "$EXPECTED_ANDROID_VERSION_CODE" -lt 2100000000 ]]; then
+            override_code=$((EXPECTED_ANDROID_VERSION_CODE + 1))
+          else
+            override_code=$((EXPECTED_ANDROID_VERSION_CODE - 1))
+          fi
+          overridden="$(ANDROID_VERSION_CODE="$override_code" gradle --no-daemon -q -p android :app:printAndroidVersion)"
+          grep -Fx "versionName=$EXPECTED_ANDROID_VERSION_NAME" <<< "$overridden"
+          grep -Fx "versionCode=$override_code" <<< "$overridden"
+
+      - name: Install native build helpers
+        run: |
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo install uniffi --version 0.32.0 --features cli --locked
+
+      - name: Android checks and artifacts
+        run: bash scripts/build-android.sh all
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-unsigned
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+  signed-release:
+    name: Signed release
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.signed_release
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            autoconf automake build-essential cmake curl git gperf libtool \
+            meson nasm ninja-build pkg-config python3 unzip wget xz-utils yasm
+
+      - name: Install Android SDK and NDK
+        run: >-
+          sdkmanager
+          "platforms;android-${ANDROID_API}"
+          "build-tools;${ANDROID_BUILD_TOOLS}"
+          "ndk;${ANDROID_NDK}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2.9.1
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Install native build helpers
+        run: |
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo install uniffi --version 0.32.0 --features cli --locked
+
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          test -n "$ANDROID_RELEASE_STORE_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_ALIAS"
+          test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+          ANDROID_RELEASE_STORE_FILE="$RUNNER_TEMP/proton-stream-release.jks"
+          echo "ANDROID_RELEASE_STORE_FILE=$ANDROID_RELEASE_STORE_FILE" >> "$GITHUB_ENV"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ANDROID_RELEASE_STORE_FILE"
+
+      - name: Build signed APK and AAB
+        run: bash scripts/build-android.sh signed
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signed
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error

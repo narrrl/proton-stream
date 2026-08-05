@@ -345,6 +345,7 @@ fn add_form(ui: &mut egui::Ui, form: &mut ShareForm, actions: &mut Vec<Action>) 
             ui.label(ui::muted("Link"));
             ui.add(
                 egui::TextEdit::singleline(&mut form.url)
+                    .password(true)
                     .hint_text("https://drive.proton.me/urls/…#…")
                     .desired_width(f32::INFINITY),
             );

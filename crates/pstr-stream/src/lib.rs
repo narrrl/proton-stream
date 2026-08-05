@@ -39,7 +39,7 @@ pub use error::{Error, Result};
 /// returns it and `StreamSource::open` takes it — and taking a dependency on the
 /// whole SDK for a newtype is not a reasonable price for that.
 pub use proton_sdk::ids::NodeUid;
-pub use reader::{LibraryOpener, RevisionBlocks};
+pub use reader::{FileBlocks, LibraryOpener, RevisionBlocks};
 pub use ring::{DEFAULT_RING_BYTES, RingStats};
 pub use source::{RevisionOpener, StreamConfig, StreamSource};
 pub use stream::{DEFAULT_READAHEAD_BLOCKS, StreamStats, VideoStream};

@@ -121,6 +121,10 @@ struct Inner {
 }
 
 impl VideoStream {
+    /// Build a seekable stream from complete local content.
+    pub fn offline(uid: NodeUid, blocks: SharedBlocks, ring_bytes: u64) -> Self {
+        Self::new(uid, blocks, Arc::new(BlockRing::new(ring_bytes)), None, 0)
+    }
     pub(crate) fn new(
         uid: NodeUid,
         blocks: SharedBlocks,

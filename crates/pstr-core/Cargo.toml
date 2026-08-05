@@ -19,7 +19,6 @@ thiserror.workspace = true
 tracing.workspace = true
 directories.workspace = true
 rusqlite.workspace = true
-keyring.workspace = true
 sha2.workspace = true
 
 # The credential store, per platform. Without the target's feature `keyring`

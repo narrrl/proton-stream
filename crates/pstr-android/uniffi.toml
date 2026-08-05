@@ -1,0 +1,4 @@
+[bindings.kotlin]
+# UniFFI's default JVM cleaner references java.lang.ref.Cleaner (API 33).
+# Android uses the JNA cleaner, which is available on our minSdk 31 runtime.
+disable_java_cleaner = true

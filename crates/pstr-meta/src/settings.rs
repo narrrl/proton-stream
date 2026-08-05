@@ -6,23 +6,18 @@
 //! and the same rule that keeps share fragments out of the config keeps this out
 //! too.
 
+use pstr_core::SecretStore;
 use pstr_core::config::{AppDirs, read_json, write_json};
 use pstr_core::metadata::{MetadataConfig, ProviderId};
 
-use crate::error::{Error, Result};
-
-/// The credential-store service name, shared with [`pstr_core::shares`]. Keys
-/// are namespaced by provider, so two providers' keys can coexist and switching
-/// back does not mean typing one in again.
-const KEYRING_SERVICE: &str = "proton-stream";
+use crate::error::Result;
 
 fn settings_file(dirs: &AppDirs) -> std::path::PathBuf {
     dirs.config.join("metadata.json")
 }
 
-fn keyring_entry(provider: ProviderId) -> Result<keyring::Entry> {
-    keyring::Entry::new(KEYRING_SERVICE, &format!("metadata-{}", provider.as_str()))
-        .map_err(|error| Error::Config(format!("open the credential store: {error}")))
+fn secret_key(provider: ProviderId) -> String {
+    format!("metadata-{}", provider.as_str())
 }
 
 /// The stored settings, or the defaults on a first run.
@@ -42,16 +37,18 @@ pub fn save(dirs: &AppDirs, config: &MetadataConfig) -> Result<()> {
 /// than as an error: the caller's next move is the same either way — tell the
 /// viewer the provider needs a key — and a keyring failure phrased as one is a
 /// worse message than that.
+#[cfg(not(target_os = "android"))]
 pub fn api_key(provider: ProviderId) -> Option<String> {
+    api_key_in(&pstr_core::KeyringSecretStore, provider)
+}
+
+/// The API key through a platform-provided secret store.
+pub fn api_key_in(secrets: &dyn SecretStore, provider: ProviderId) -> Option<String> {
     if !provider.needs_api_key() {
         return None;
     }
-    match keyring_entry(provider).and_then(|entry| {
-        entry
-            .get_password()
-            .map_err(|error| Error::Config(error.to_string()))
-    }) {
-        Ok(key) => Some(key),
+    match secrets.get(&secret_key(provider)) {
+        Ok(key) => key,
         Err(error) => {
             tracing::debug!("no stored API key for {}: {error}", provider.label());
             None
@@ -60,18 +57,19 @@ pub fn api_key(provider: ProviderId) -> Option<String> {
 }
 
 /// Store an API key, or forget it when `key` is empty.
+#[cfg(not(target_os = "android"))]
 pub fn set_api_key(provider: ProviderId, key: &str) -> Result<()> {
-    let entry = keyring_entry(provider)?;
-    let result = if key.trim().is_empty() {
-        match entry.delete_credential() {
-            // Clearing a key that was never set is what the viewer asked for.
-            Err(keyring::Error::NoEntry) => Ok(()),
-            other => other,
-        }
+    set_api_key_in(&pstr_core::KeyringSecretStore, provider, key)
+}
+
+/// Store an API key through a platform-provided secret store.
+pub fn set_api_key_in(secrets: &dyn SecretStore, provider: ProviderId, key: &str) -> Result<()> {
+    if key.trim().is_empty() {
+        secrets.delete(&secret_key(provider))?;
     } else {
-        entry.set_password(key)
-    };
-    result.map_err(|error| Error::Config(format!("store the API key: {error}")))
+        secrets.set(&secret_key(provider), key)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

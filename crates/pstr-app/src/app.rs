@@ -14,7 +14,9 @@ use pstr_core::config::AppDirs;
 use pstr_core::library::Library;
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord};
 
-use crate::engine::{Engine, Event, ImageCache, describe_failures, watch_state};
+use crate::engine::{
+    DownloadItem, DownloadKey, Engine, Event, ImageCache, describe_failures, watch_state,
+};
 use crate::playback::{Playback, PlaybackTarget};
 use crate::ui::player::UpNextCard;
 use crate::{theme, ui};
@@ -48,6 +50,7 @@ impl FrameTimer {
                 Page::Library => "library",
                 Page::Title(_) => "title",
                 Page::Shares => "shares",
+                Page::Downloads => "downloads",
                 Page::Player => "player",
             },
         }
@@ -81,6 +84,7 @@ pub enum Page {
     /// One title, by [`pstr_core::library::Title::key`].
     Title(String),
     Shares,
+    Downloads,
     /// The picture, filling the window. Leaving this page does not stop
     /// playback — the transport bar at the bottom is how you get back to it.
     Player,
@@ -90,6 +94,12 @@ pub enum Page {
 pub enum Action {
     Goto(Page),
     Play(PlaybackTarget),
+    /// Download one or more files as complete local copies.
+    MakeOffline(Vec<PlaybackTarget>),
+    PauseDownload(DownloadKey),
+    ResumeDownload(DownloadKey),
+    CancelDownload(DownloadKey),
+    RemoveDownload(DownloadKey, bool),
     /// Crawl one share, or every share.
     Crawl(Option<String>),
     AddShare {
@@ -280,6 +290,9 @@ pub struct App {
     pub opening: Option<String>,
     pub connecting: bool,
     pub crawling: bool,
+    pub downloads: Vec<DownloadItem>,
+    pub offline_files: std::collections::HashSet<DownloadKey>,
+    pub confirm_partial_delete: Option<DownloadKey>,
     pub status: Option<Status>,
 }
 
@@ -293,6 +306,7 @@ impl App {
         // theme, and a window that paints one frame in the default palette
         // before switching is a window that flashes on every launch.
         let (engine, events) = Engine::new(runtime, dirs, cc.egui_ctx.clone())?;
+        theme::install_font_fallbacks(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, engine.appearance());
 
         // Paint from the catalog immediately; the network catches up. A library
@@ -326,6 +340,9 @@ impl App {
             opening: None,
             connecting: true,
             crawling: false,
+            downloads: Vec::new(),
+            offline_files: std::collections::HashSet::new(),
+            confirm_partial_delete: None,
             status: None,
         })
     }
@@ -507,6 +524,8 @@ impl App {
                     self.note(ctx, text, true);
                 }
                 Event::Status(text) => self.note(ctx, text, false),
+                Event::Downloads(downloads) => self.downloads = downloads,
+                Event::OfflineFiles(files) => self.offline_files = files,
             }
         }
     }
@@ -674,8 +693,26 @@ impl App {
                 // click on a row, a keypress, autoplay — so the episode's name
                 // is looked up here rather than in each of them.
                 target.episode_name = self.episode_name(&target);
+                target.track_prefs = self
+                    .engine
+                    .title_track_prefs(&target.title_key)
+                    .map(Box::new);
                 self.opening = Some(target.name.clone());
                 self.engine.play(target);
+            }
+            Action::MakeOffline(targets) => {
+                self.note(ctx, "downloading for offline use…", false);
+                self.engine.make_offline(targets);
+            }
+            Action::PauseDownload(key) => self.engine.pause_download(&key),
+            Action::ResumeDownload(key) => self.engine.resume_download(&key),
+            Action::CancelDownload(key) => self.engine.cancel_download(&key),
+            Action::RemoveDownload(key, remove_partial) => {
+                if remove_partial {
+                    self.confirm_partial_delete = Some(key);
+                } else {
+                    self.engine.remove_download(key, false);
+                }
             }
             Action::SetMetadataConfig(config) => {
                 self.settings = config.clone();
@@ -832,22 +869,24 @@ impl App {
                             .and_then(|track| track.language.clone())
                     })
                 });
-                let mut prefs = self.engine.playback_prefs();
-                match kind {
-                    pstr_player::TrackKind::Audio => prefs.audio_language = language,
-                    pstr_player::TrackKind::Subtitle => {
-                        prefs.subtitles = id.is_some();
-                        // Subtitles turned off keep the language they were
-                        // last shown in, so turning them back on picks up
-                        // where the viewer left off rather than at whatever
-                        // the file defaults to.
-                        if id.is_some() {
-                            prefs.subtitle_language = language;
+                if let Some(playback) = &self.playback {
+                    let mut show = self
+                        .engine
+                        .title_track_prefs(&playback.target.title_key)
+                        .unwrap_or_default();
+                    match kind {
+                        pstr_player::TrackKind::Audio => show.audio_language = language,
+                        pstr_player::TrackKind::Subtitle => {
+                            show.subtitles = id.is_some();
+                            if id.is_some() {
+                                show.subtitle_language = language;
+                            }
                         }
+                        pstr_player::TrackKind::Video => {}
                     }
-                    pstr_player::TrackKind::Video => {}
+                    self.engine
+                        .set_title_track_prefs(playback.target.title_key.clone(), show);
                 }
-                self.engine.set_playback_prefs(prefs, true);
             }
         }
     }
@@ -870,6 +909,26 @@ impl App {
             }
             if ui::tab(ui, self.page == Page::Shares, "Shares").clicked() {
                 actions.push(Action::Goto(Page::Shares));
+            }
+            let active = self
+                .downloads
+                .iter()
+                .filter(|download| {
+                    matches!(
+                        download.state,
+                        crate::engine::DownloadState::Queued
+                            | crate::engine::DownloadState::Running
+                            | crate::engine::DownloadState::Paused
+                    )
+                })
+                .count();
+            let label = if active == 0 {
+                "Downloads".to_owned()
+            } else {
+                format!("Downloads ({active})")
+            };
+            if ui::tab(ui, self.page == Page::Downloads, &label).clicked() {
+                actions.push(Action::Goto(Page::Downloads));
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1017,6 +1076,9 @@ impl eframe::App for App {
                 playback,
                 opening,
                 status,
+                downloads,
+                offline_files,
+                confirm_partial_delete,
                 ..
             } = self;
 
@@ -1086,9 +1148,17 @@ impl eframe::App for App {
                         Page::Library => {
                             ui::library::show(ui, &mut art, library, search, &mut actions)
                         }
-                        Page::Title(key) => {
-                            ui::title::show(ui, &mut art, library, key, &mut actions)
-                        }
+                        Page::Title(key) => ui::title::show(
+                            ui,
+                            &mut art,
+                            library,
+                            key,
+                            ui::title::OfflineView {
+                                downloads,
+                                files: offline_files,
+                            },
+                            &mut actions,
+                        ),
                         Page::Shares => ui::shares::show(
                             ui,
                             shares,
@@ -1098,6 +1168,7 @@ impl eframe::App for App {
                             api_key,
                             &mut actions,
                         ),
+                        Page::Downloads => ui::downloads::show(ui, downloads, &mut actions),
                         // Drawn above, without any of these panels.
                         Page::Player => {}
                     }
@@ -1115,6 +1186,27 @@ impl eframe::App for App {
                     episodes,
                 };
                 ui::matcher::show(ctx, open, &mut art, settings.provider, &mut actions);
+            }
+
+            if let Some(key) = confirm_partial_delete.clone() {
+                egui::Window::new("Delete partial download?")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                    .show(ctx, |ui| {
+                        ui.label(
+                            "This discards downloaded partial bytes. The online source is not changed.",
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("Keep partial").clicked() {
+                                *confirm_partial_delete = None;
+                            }
+                            if ui.button("Delete partial").clicked() {
+                                engine.remove_download(key.clone(), true);
+                                *confirm_partial_delete = None;
+                            }
+                        });
+                    });
             }
         }
 
@@ -1136,6 +1228,8 @@ impl eframe::App for App {
             playback.stop_and_wait(std::time::Duration::from_secs(2));
         }
         self.playback = None;
+        self.engine
+            .shutdown_downloads(std::time::Duration::from_secs(3));
     }
 }
 

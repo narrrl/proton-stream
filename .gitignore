@@ -1,4 +1,5 @@
 /target
+/.build/
 *.db
 *.db-wal
 *.db-shm
@@ -6,6 +7,13 @@
 
 # Build artifacts.
 /dist
+
+# Android and Gradle generated state.
+/android/.gradle/
+/android/build/
+/android/*/build/
+/android/local.properties
+/android/.cxx/
 
 # makepkg leftovers.
 /packaging/pkg/

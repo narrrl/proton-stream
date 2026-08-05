@@ -1,0 +1,39 @@
+[package]
+name = "pstr-android"
+description = "Android language bridge for proton-stream."
+version.workspace = true
+edition.workspace = true
+license-file = "LICENSE"
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dependencies]
+pstr-core.workspace = true
+pstr-meta.workspace = true
+pstr-stream.workspace = true
+tokio.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+uniffi.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Match rustls-platform-verifier's JNI types: Java objects from different
+# major `jni` releases cannot be passed across the verifier's API boundary.
+jni = "0.21.1"
+rustls-platform-verifier = "0.6.2"
+android_logger = "0.14"
+log = "0.4"

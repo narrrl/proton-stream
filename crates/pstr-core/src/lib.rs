@@ -16,7 +16,9 @@ pub mod prefs;
 pub mod shares;
 
 pub use error::{Error, Result};
-pub use shares::{Share, ShareStore, SharedLibrary};
+#[cfg(not(target_os = "android"))]
+pub use shares::KeyringSecretStore;
+pub use shares::{SecretStore, Share, ShareStore, SharedLibrary};
 
 pub use proton_drive_rs;
 pub use proton_sdk;

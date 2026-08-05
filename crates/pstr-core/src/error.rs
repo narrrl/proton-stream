@@ -15,6 +15,7 @@ pub enum Error {
     ///
     /// Boxed because `keyring::Error` is large and this variant is rare; an
     /// un-boxed one would inflate every `Result` in the crate.
+    #[cfg(not(target_os = "android"))]
     #[error("credential store: {0}")]
     Keyring(#[from] Box<keyring::Error>),
 
@@ -31,6 +32,7 @@ pub enum Error {
     NotFound(String),
 }
 
+#[cfg(not(target_os = "android"))]
 impl From<keyring::Error> for Error {
     fn from(error: keyring::Error) -> Self {
         Self::Keyring(Box::new(error))

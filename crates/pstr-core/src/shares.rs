@@ -16,6 +16,7 @@
 //! regardless of how many links it was given.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use proton_drive_rs::{Node, ProtonDrivePublicLinkClient};
 use proton_sdk::config::ProtonClientConfiguration;
@@ -26,7 +27,54 @@ use crate::config::{AppDirs, read_json, write_json};
 use crate::error::{Error, Result};
 
 /// The credential-store service name. One entry per share, keyed by share id.
+#[cfg(not(target_os = "android"))]
 const KEYRING_SERVICE: &str = "proton-stream";
+
+/// Secret persistence supplied by the platform.
+///
+/// Desktop builds use [`KeyringSecretStore`]. Android supplies an
+/// implementation backed by a non-exportable Android Keystore key through the
+/// language bridge, keeping platform APIs out of this portable crate.
+pub trait SecretStore: Send + Sync {
+    fn set(&self, key: &str, value: &str) -> Result<()>;
+    fn get(&self, key: &str) -> Result<Option<String>>;
+    fn delete(&self, key: &str) -> Result<()>;
+}
+
+/// The desktop OS credential store.
+#[cfg(not(target_os = "android"))]
+#[derive(Debug, Default)]
+pub struct KeyringSecretStore;
+
+#[cfg(not(target_os = "android"))]
+impl KeyringSecretStore {
+    fn entry(key: &str) -> Result<keyring::Entry> {
+        Ok(keyring::Entry::new(KEYRING_SERVICE, key)?)
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl SecretStore for KeyringSecretStore {
+    fn set(&self, key: &str, value: &str) -> Result<()> {
+        Self::entry(key)?.set_password(value)?;
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Result<Option<String>> {
+        match Self::entry(key)?.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        match Self::entry(key)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
 
 /// What the app records about a share, minus its secrets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,11 +107,17 @@ struct ShareSecrets {
 /// The configured shares, and their secrets.
 pub struct ShareStore {
     dirs: AppDirs,
+    secrets: Arc<dyn SecretStore>,
 }
 
 impl ShareStore {
+    #[cfg(not(target_os = "android"))]
     pub fn new(dirs: AppDirs) -> Self {
-        Self { dirs }
+        Self::with_secret_store(dirs, Arc::new(KeyringSecretStore))
+    }
+
+    pub fn with_secret_store(dirs: AppDirs, secrets: Arc<dyn SecretStore>) -> Self {
+        Self { dirs, secrets }
     }
 
     /// Every configured share, in the order they were added.
@@ -121,10 +175,7 @@ impl ShareStore {
         write_json(&self.dirs.shares_file(), &shares)?;
 
         // A missing entry is the desired end state, not a failure.
-        match self.entry(id)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        self.secrets.delete(id)
     }
 
     /// Open a share as a visitor.
@@ -143,27 +194,18 @@ impl ShareStore {
         Ok(client)
     }
 
-    fn entry(&self, id: &str) -> Result<keyring::Entry> {
-        Ok(keyring::Entry::new(KEYRING_SERVICE, id)?)
-    }
-
     fn store_secrets(&self, id: &str, secrets: &ShareSecrets) -> Result<()> {
         let encoded = serde_json::to_string(secrets)
             .map_err(|e| Error::Config(format!("serialize share secrets: {e}")))?;
-        self.entry(id)?.set_password(&encoded)?;
-        Ok(())
+        self.secrets.set(id, &encoded)
     }
 
     fn load_secrets(&self, id: &str) -> Result<ShareSecrets> {
-        let encoded = match self.entry(id)?.get_password() {
-            Ok(encoded) => encoded,
-            Err(keyring::Error::NoEntry) => {
-                return Err(Error::NotFound(format!(
-                    "share {id} has no stored credentials; remove and re-add it"
-                )));
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let encoded = self.secrets.get(id)?.ok_or_else(|| {
+            Error::NotFound(format!(
+                "share {id} has no stored credentials; remove and re-add it"
+            ))
+        })?;
         serde_json::from_str(&encoded)
             .map_err(|e| Error::Config(format!("stored share secrets are unreadable: {e}")))
     }
@@ -204,6 +246,17 @@ impl SharedLibrary {
     /// Every opened share id.
     pub fn share_ids(&self) -> impl Iterator<Item = &str> {
         self.clients.keys().map(String::as_str)
+    }
+
+    /// Replay a public-link handshake before performing a user-requested
+    /// refresh. Visitor sessions are short-lived, so a cached client is still
+    /// useful for streaming but must not be assumed valid for a later crawl.
+    pub async fn refresh_session(&self, share_id: &str) -> Result<()> {
+        let client = self
+            .client(share_id)
+            .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
+        client.refresh_session().await?;
+        Ok(())
     }
 
     /// Walk one share's whole subtree, depth first, yielding every node.
@@ -266,7 +319,7 @@ fn client_configuration() -> ProtonClientConfiguration {
 fn token_from_url(url: &str) -> Result<String> {
     let (_, tail) = url
         .split_once("/urls/")
-        .ok_or_else(|| Error::Config(format!("{url} is not a Proton share URL")))?;
+        .ok_or_else(|| Error::Config("not a Proton share URL".to_owned()))?;
 
     let token = tail
         .split(['#', '?'])
@@ -275,12 +328,14 @@ fn token_from_url(url: &str) -> Result<String> {
         .trim_end_matches('/');
 
     if token.is_empty() {
-        return Err(Error::Config(format!("{url} carries no share token")));
+        return Err(Error::Config(
+            "Proton share URL carries no share token".to_owned(),
+        ));
     }
     if !url.contains('#') {
-        return Err(Error::Config(format!(
-            "{url} has no #password fragment; copy the full share link"
-        )));
+        return Err(Error::Config(
+            "Proton share URL has no #password fragment; copy the full share link".to_owned(),
+        ));
     }
     Ok(token.to_string())
 }
@@ -320,6 +375,25 @@ mod tests {
     fn a_url_that_is_not_a_share_link_is_refused() {
         assert!(token_from_url("https://example.com/thing#x").is_err());
         assert!(token_from_url("https://drive.proton.me/urls/#s3cr3t").is_err());
+    }
+
+    #[test]
+    fn malformed_share_errors_never_repeat_the_secret_url_fragment() {
+        const SECRET: &str = "fragment-secret-that-must-not-leak";
+        for url in [
+            format!("https://example.com/not-a-share#{SECRET}"),
+            format!("https://drive.proton.me/urls/#{SECRET}"),
+        ] {
+            let error = token_from_url(&url).unwrap_err().to_string();
+            assert!(
+                !error.contains(SECRET),
+                "error exposed URL fragment: {error}"
+            );
+            assert!(
+                !error.contains(&url),
+                "error repeated the full URL: {error}"
+            );
+        }
     }
 
     /// The id must be derivable from the token alone — deriving it from the URL

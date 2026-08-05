@@ -21,7 +21,7 @@ use crate::metadata::{EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId,
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 7;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -127,6 +127,46 @@ CREATE TABLE episode_metadata (
 const MIGRATION_V5: &str = r#"
 ALTER TABLE title_metadata ADD COLUMN manual INTEGER NOT NULL DEFAULT 0;
 "#;
+
+/// Content kept explicitly by the viewer.  Unlike the block cache, these rows
+/// describe complete local files and therefore survive a disconnected launch.
+const MIGRATION_V6: &str = r#"
+CREATE TABLE offline_files (
+    share_id TEXT NOT NULL, link_id TEXT NOT NULL, revision_id TEXT NOT NULL,
+    block_sizes TEXT NOT NULL,
+    PRIMARY KEY (share_id, link_id)
+);
+"#;
+
+/// Language choices are a property of a show, not of an episode's muxing.
+const MIGRATION_V7: &str = r#"
+CREATE TABLE title_track_prefs (
+    title_key TEXT PRIMARY KEY, audio_language TEXT, subtitle_language TEXT,
+    subtitles INTEGER NOT NULL DEFAULT 1
+);
+"#;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineFile {
+    pub revision_id: String,
+    pub block_sizes: Vec<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TitleTrackPrefs {
+    pub audio_language: Option<String>,
+    pub subtitle_language: Option<String>,
+    pub subtitles: bool,
+}
+impl Default for TitleTrackPrefs {
+    fn default() -> Self {
+        Self {
+            audio_language: None,
+            subtitle_language: None,
+            subtitles: true,
+        }
+    }
+}
 
 /// What `season = -1` means in `episode_metadata`: no season at all.
 const ABSOLUTE_SEASON: i64 = -1;
@@ -235,6 +275,18 @@ impl Catalog {
             tx.pragma_update(None, "user_version", 5)?;
             tx.commit()?;
         }
+        if version < 6 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V6)?;
+            tx.pragma_update(None, "user_version", 6)?;
+            tx.commit()?;
+        }
+        if version < 7 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V7)?;
+            tx.pragma_update(None, "user_version", 7)?;
+            tx.commit()?;
+        }
 
         Ok(())
     }
@@ -245,6 +297,25 @@ impl Catalog {
     /// intact rather than a half-replaced one. Watch state is keyed separately
     /// and deliberately untouched — a recrawl must not lose where you were.
     pub fn replace_share(&mut self, share_id: &str, nodes: &[CatalogNode]) -> Result<()> {
+        self.replace_share_inner(share_id, nodes, false)
+    }
+
+    /// Replace nodes while retaining stale offline path keys for explicit
+    /// filesystem cleanup by a front end.
+    pub fn replace_share_retaining_offline(
+        &mut self,
+        share_id: &str,
+        nodes: &[CatalogNode],
+    ) -> Result<()> {
+        self.replace_share_inner(share_id, nodes, true)
+    }
+
+    fn replace_share_inner(
+        &mut self,
+        share_id: &str,
+        nodes: &[CatalogNode],
+        retain_offline: bool,
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
 
@@ -274,6 +345,10 @@ impl Catalog {
                     node.parsed.episode_title,
                 ])?;
             }
+        }
+
+        if !retain_offline {
+            tx.execute("DELETE FROM offline_files WHERE share_id = ?1 AND NOT EXISTS (SELECT 1 FROM nodes WHERE nodes.share_id = offline_files.share_id AND nodes.link_id = offline_files.link_id AND nodes.active_revision_id = offline_files.revision_id)", params![share_id])?;
         }
 
         tx.commit()?;
@@ -314,14 +389,139 @@ impl Catalog {
     /// state alone — this is the viewer saying they are done with the share.
     /// Keeping positions for files they can no longer reach would only leave
     /// the "continue watching" row pointing at nothing.
-    pub fn remove_share(&self, share_id: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
-        self.conn.execute(
+    pub fn remove_share(&mut self, share_id: &str) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
+        tx.execute(
             "DELETE FROM watch_state WHERE share_id = ?1",
             params![share_id],
         )?;
+        tx.execute(
+            "DELETE FROM offline_files WHERE share_id = ?1",
+            params![share_id],
+        )?;
+        tx.commit()?;
         Ok(())
+    }
+
+    pub fn offline_file(&self, share_id: &str, link_id: &str) -> Result<Option<OfflineFile>> {
+        self.conn.query_row("SELECT revision_id, block_sizes FROM offline_files WHERE share_id=?1 AND link_id=?2", params![share_id, link_id], |row| {
+            let sizes: String = row.get(1)?;
+            Ok(OfflineFile { revision_id: row.get(0)?, block_sizes: serde_json::from_str(&sizes).map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))? })
+        }).optional().map_err(Into::into)
+    }
+
+    pub fn set_offline_file(
+        &self,
+        share_id: &str,
+        link_id: &str,
+        file: &OfflineFile,
+    ) -> Result<()> {
+        let sizes = serde_json::to_string(&file.block_sizes)
+            .map_err(|e| crate::error::Error::Config(e.to_string()))?;
+        self.conn.execute("INSERT INTO offline_files (share_id,link_id,revision_id,block_sizes) VALUES (?1,?2,?3,?4) ON CONFLICT(share_id,link_id) DO UPDATE SET revision_id=excluded.revision_id,block_sizes=excluded.block_sizes", params![share_id,link_id,file.revision_id,sizes])?;
+        Ok(())
+    }
+
+    /// Record a completed download and force its WAL transaction to stable
+    /// storage before the caller discards its recovery journal.
+    pub fn set_offline_file_durable(
+        &self,
+        share_id: &str,
+        link_id: &str,
+        file: &OfflineFile,
+    ) -> Result<()> {
+        self.set_offline_file(share_id, link_id, file)?;
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(FULL)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    /// Every completed local revision, keyed like watch state.
+    pub fn all_offline_files(&self) -> Result<HashMap<(String, String), OfflineFile>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT share_id, link_id, revision_id, block_sizes FROM offline_files")?;
+        let rows = statement.query_map([], |row| {
+            let sizes: String = row.get(3)?;
+            let block_sizes = serde_json::from_str(&sizes).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok((
+                (row.get(0)?, row.get(1)?),
+                OfflineFile {
+                    revision_id: row.get(2)?,
+                    block_sizes,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<HashMap<_, _>, _>>()?)
+    }
+
+    /// Completed local revisions belonging to one share.
+    ///
+    /// Callers that replace or remove a share need the paths before deleting
+    /// the index rows. Keeping this query explicit prevents an SQL cascade
+    /// from orphaning opaque media files on disk.
+    pub fn offline_files_for_share(&self, share_id: &str) -> Result<HashMap<String, OfflineFile>> {
+        let mut statement = self.conn.prepare(
+            "SELECT link_id, revision_id, block_sizes FROM offline_files WHERE share_id=?1",
+        )?;
+        let rows = statement.query_map(params![share_id], |row| {
+            let sizes: String = row.get(2)?;
+            let block_sizes = serde_json::from_str(&sizes).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok((
+                row.get(0)?,
+                OfflineFile {
+                    revision_id: row.get(1)?,
+                    block_sizes,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<HashMap<_, _>, _>>()?)
+    }
+
+    pub fn remove_offline_file(&self, share_id: &str, link_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM offline_files WHERE share_id=?1 AND link_id=?2",
+            params![share_id, link_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn title_track_prefs(&self, title_key: &str) -> Result<Option<TitleTrackPrefs>> {
+        self.conn.query_row("SELECT audio_language, subtitle_language, subtitles FROM title_track_prefs WHERE title_key=?1", params![title_key], |r| Ok(TitleTrackPrefs { audio_language:r.get(0)?, subtitle_language:r.get(1)?, subtitles:r.get::<_,i64>(2)? != 0 })).optional().map_err(Into::into)
+    }
+    pub fn set_title_track_prefs(&self, title_key: &str, prefs: &TitleTrackPrefs) -> Result<()> {
+        self.conn.execute("INSERT INTO title_track_prefs (title_key,audio_language,subtitle_language,subtitles) VALUES (?1,?2,?3,?4) ON CONFLICT(title_key) DO UPDATE SET audio_language=excluded.audio_language,subtitle_language=excluded.subtitle_language,subtitles=excluded.subtitles", params![title_key,prefs.audio_language,prefs.subtitle_language,prefs.subtitles as i64])?;
+        Ok(())
+    }
+
+    pub fn all_title_track_prefs(&self) -> Result<HashMap<String, TitleTrackPrefs>> {
+        let mut statement = self.conn.prepare(
+            "SELECT title_key, audio_language, subtitle_language, subtitles FROM title_track_prefs",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                TitleTrackPrefs {
+                    audio_language: row.get(1)?,
+                    subtitle_language: row.get(2)?,
+                    subtitles: row.get::<_, i64>(3)? != 0,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<HashMap<_, _>, _>>()?)
     }
 
     /// Every watch position there is, keyed by `(share_id, link_id)`.
@@ -1494,6 +1694,96 @@ mod tests {
         let catalog = Catalog::in_memory().expect("open");
         assert_eq!(
             catalog.watch_state("s1", "never-played").expect("read"),
+            None
+        );
+    }
+
+    #[test]
+    fn removing_an_offline_record_keeps_the_online_catalog_and_other_downloads() {
+        let catalog = Catalog::in_memory().expect("open");
+        let first = OfflineFile {
+            revision_id: "revision-1".to_owned(),
+            block_sizes: vec![3, 5],
+        };
+        let second = OfflineFile {
+            revision_id: "revision-2".to_owned(),
+            block_sizes: vec![7],
+        };
+        catalog
+            .set_offline_file("share", "first", &first)
+            .expect("record first");
+        catalog
+            .set_offline_file("share", "second", &second)
+            .expect("record second");
+
+        catalog
+            .remove_offline_file("share", "first")
+            .expect("remove first");
+
+        assert_eq!(
+            catalog.offline_file("share", "first").expect("read first"),
+            None
+        );
+        assert_eq!(
+            catalog
+                .offline_file("share", "second")
+                .expect("read second"),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn recrawl_retains_stale_offline_index_until_bytes_can_be_removed() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let mut old = file("share", "episode", "Show.S01E01.mkv");
+        old.active_revision_id = Some("old".to_owned());
+        catalog.replace_share("share", &[old]).expect("first crawl");
+        let offline = OfflineFile {
+            revision_id: "old".to_owned(),
+            block_sizes: vec![4, 7],
+        };
+        catalog
+            .set_offline_file("share", "episode", &offline)
+            .expect("record offline revision");
+
+        let mut new = file("share", "episode", "Show.S01E01.mkv");
+        new.active_revision_id = Some("new".to_owned());
+        catalog
+            .replace_share_retaining_offline("share", &[new])
+            .expect("recrawl");
+
+        assert_eq!(
+            catalog
+                .offline_file("share", "episode")
+                .expect("read retained path key"),
+            Some(offline),
+            "filesystem owner must delete old bytes before dropping this path key"
+        );
+    }
+
+    #[test]
+    fn ordinary_recrawl_prunes_stale_offline_index_for_legacy_callers() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let mut old = file("share", "episode", "Show.S01E01.mkv");
+        old.active_revision_id = Some("old".to_owned());
+        catalog.replace_share("share", &[old]).expect("first crawl");
+        catalog
+            .set_offline_file(
+                "share",
+                "episode",
+                &OfflineFile {
+                    revision_id: "old".to_owned(),
+                    block_sizes: vec![4],
+                },
+            )
+            .expect("offline row");
+        let mut new = file("share", "episode", "Show.S01E01.mkv");
+        new.active_revision_id = Some("new".to_owned());
+        catalog.replace_share("share", &[new]).expect("recrawl");
+        assert_eq!(
+            catalog
+                .offline_file("share", "episode")
+                .expect("read offline row"),
             None
         );
     }

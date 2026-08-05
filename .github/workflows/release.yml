@@ -20,6 +20,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Android remains a workflow artifact only until the native libmpv adapter,
+  # corresponding-source bundle, and on-device verification are complete.
+  ANDROID_PUBLIC_RELEASE_ENABLED: 'false'
 
 jobs:
   verify:
@@ -56,6 +59,11 @@ jobs:
         run: |
           ! grep -q '^\[patch\.crates-io\]' Cargo.toml ||
             { echo "::error::Cargo.toml carries [patch.crates-io]; releases build against the registry"; exit 1; }
+
+      - name: Android publication remains blocked
+        run: |
+          test "$ANDROID_PUBLIC_RELEASE_ENABLED" = false
+          echo "Android APK/AAB publication is blocked until native playback is release-ready."
 
   linux:
     name: Linux artifacts
@@ -141,7 +149,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish
+    name: Publish desktop artifacts
     if: startsWith(github.ref, 'refs/tags/')
     needs: [linux, windows]
     runs-on: ubuntu-24.04
@@ -152,6 +160,13 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Refuse mobile artifacts while Android publishing is blocked
+        run: |
+          if find artifacts -type f \( -name '*.apk' -o -name '*.aab' \) -print -quit | grep -q .; then
+            echo "::error::Android publishing is disabled while native playback remains incomplete"
+            exit 1
+          fi
 
       - name: Checksums
         run: |
