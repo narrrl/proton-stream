@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -53,6 +55,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
@@ -261,6 +266,10 @@ private fun TitleScreen(
     var subtitlesEnabled by remember(title.key) { mutableStateOf(false) }
     var playing by remember(title.key) { mutableStateOf<EpisodeRecord?>(null) }
     var showMatch by remember(title.key) { mutableStateOf(false) }
+    var expandedSeasons by remember(title.key) { mutableStateOf(setOf(title.seasons.firstOrNull()?.label)) }
+    
+    BackHandler(enabled = playing == null, onBack = onBack)
+    
     LaunchedEffect(title.key) {
         runCatching {
             withContext(Dispatchers.IO) {
@@ -422,32 +431,50 @@ private fun TitleScreen(
             }) { Text("Save track preferences") }
         }
         title.seasons.forEach { season ->
+            val isExpanded = expandedSeasons.contains(season.label)
             item {
                 Row(
-                    Modifier.fillMaxWidth().padding(top = 12.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                        .clickable {
+                            expandedSeasons = if (isExpanded) expandedSeasons - season.label else expandedSeasons + season.label
+                        }
+                        .padding(vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(season.label, style = MaterialTheme.typography.titleLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(season.label, style = MaterialTheme.typography.titleLarge)
+                    }
                     FilledTonalButton(onClick = { DownloadCoordinator.enqueue(context, season.episodes) }) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text("Download season")
                     }
                 }
             }
-            items(season.episodes, key = { it.linkId }) { episode ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { playing = episode }, enabled = playerHost != null) {
-                            Text(if (playerHost == null) "Player loading…" else "Play")
+            if (isExpanded) {
+                items(season.episodes, key = { it.linkId }) { episode ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = { playing = episode }, enabled = playerHost != null) {
+                                Text(if (playerHost == null) "Player loading…" else "Play")
+                            }
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                Text(episode.label, fontWeight = FontWeight.SemiBold)
+                                Text(episode.detail, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                            }
+                            FilledTonalButton(
+                                onClick = { DownloadCoordinator.enqueue(context, episode) },
+                                enabled = !episode.offline,
+                            ) { Text(if (episode.offline) "Offline" else "Download") }
                         }
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text(episode.label, fontWeight = FontWeight.SemiBold)
-                            Text(episode.detail, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                        }
-                        FilledTonalButton(
-                            onClick = { DownloadCoordinator.enqueue(context, episode) },
-                            enabled = !episode.offline,
-                        ) { Text(if (episode.offline) "Offline" else "Download") }
                     }
                 }
             }
@@ -611,7 +638,7 @@ private fun DownloadsScreen(
     // Reading retained metadata on every WorkInfo transition also hydrates
     // paused/failed/cancelled entries after WorkManager history is pruned.
     val retained = remember(downloads) { DownloadStateStore(context).records() }
-    Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+    Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
         Text("Offline downloads", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(16.dp))
         if (retained.isEmpty() && state.offline.isEmpty()) {
@@ -625,7 +652,11 @@ private fun DownloadsScreen(
                         Text(episode?.label ?: file.linkId, fontWeight = FontWeight.SemiBold)
                         Text(formatBytes(file.size))
                     }
-                    FilledTonalButton(onClick = { onRemove(file) }) { Text("Make online only") }
+                    FilledTonalButton(onClick = { onRemove(file) }) { 
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Delete") 
+                    }
                 }
             }
         }
@@ -674,7 +705,7 @@ private fun SettingsScreen(
     var backgroundAudio by remember { mutableStateOf(settings.backgroundAudio) }
     var showMetadata by remember { mutableStateOf(false) }
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
-    Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+    Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
         Text("Settings", style = MaterialTheme.typography.titleLarge)
         SettingToggle("Download on Wi-Fi only", wifiOnly) { wifiOnly = it; settings.wifiOnly = it }
         HorizontalDivider()

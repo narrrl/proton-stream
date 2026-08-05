@@ -1,6 +1,6 @@
 # proton-stream
 
-A Netflix-style desktop client for **Proton Drive public links**.
+A Netflix-style cross-platform client for **Proton Drive public links**.
 
 Paste a share URL and its password; get a browsable, streamable library. No
 Proton account, no server to host, no download step — episodes start playing in
@@ -29,8 +29,9 @@ countdown, optional metadata, themes and share management. What is left is mostl
 macOS packaging on a real Mac. See `docs/DEVELOPMENT.md`.
 
 A native Android 12+ client is under `android/`, sharing the Rust catalog and
-streaming implementation through UniFFI. Its toolchain, emulator, signing, and
-release instructions are in [`docs/ANDROID.md`](docs/ANDROID.md).
+streaming implementation through UniFFI. It features a modern Material 3 interface,
+an immersive fullscreen player with auto-hiding controls, and offline downloads.
+Its toolchain, emulator, signing, and release instructions are in [`docs/ANDROID.md`](docs/ANDROID.md).
 
 ```bash
 cargo run --release -p pstr-app          # the app
@@ -68,7 +69,7 @@ against the SDK's own range download.
 | UI | egui/eframe on glow; mpv renders into the same GL context. |
 | Themes | The shipped near-black palette plus Catppuccin Latte, Frappé, Macchiato and Mocha, each with a choice of eight accents — pink and sky among them — drawn as a gradient unless you turn that off. Picked on the Shares page, applied without a restart. |
 | Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses and per-episode titles; a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. |
-| Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. The Android 12+ phone/tablet client is under active development. |
+| Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. A native Android 12+ client is available featuring a Material 3 UI and immersive fullscreen playback. |
 
 ## Building
 
