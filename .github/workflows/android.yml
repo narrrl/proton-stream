@@ -32,6 +32,7 @@ env:
   ANDROID_API: '36'
   ANDROID_BUILD_TOOLS: '37.0.0'
   ANDROID_NDK: '29.0.14206865'
+  ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/29.0.14206865
 
 jobs:
   build:
@@ -123,18 +124,9 @@ jobs:
       - name: Android checks and artifacts
         run: bash scripts/build-android.sh all
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: android-unsigned
-          path: |
-            android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/bundle/release/*.aab
-          if-no-files-found: error
-
   signed-release:
     name: Signed release
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.signed_release
+    if: false
     needs: build
     runs-on: ubuntu-24.04
     env:
