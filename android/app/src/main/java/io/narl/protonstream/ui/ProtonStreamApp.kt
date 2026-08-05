@@ -1,5 +1,7 @@
 package io.narl.protonstream.ui
 
+import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -41,8 +43,20 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,6 +68,8 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -82,11 +98,11 @@ import uniffi.pstr_android.MetadataProvider
 import io.narl.protonstream.playback.NativeMpvHost
 import io.narl.protonstream.playback.LibmpvPlayerSurface
 
-private enum class Destination(val label: String, val glyph: String) {
-    Library("Library", "▦"),
-    Shares("Shares", "⇄"),
-    Downloads("Downloads", "⇩"),
-    Settings("Settings", "⚙"),
+private enum class Destination(val label: String, val icon: ImageVector) {
+    Library("Library", Icons.Default.VideoLibrary),
+    Shares("Shares", Icons.Default.Share),
+    Downloads("Downloads", Icons.Default.Download),
+    Settings("Settings", Icons.Default.Settings),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,7 +139,7 @@ fun ProtonStreamApp(
                 item(
                     selected = destination == item,
                     onClick = { destination = item; selectedTitle = null },
-                    icon = { Text(item.glyph) },
+                    icon = { Icon(item.icon, contentDescription = item.label) },
                     label = { Text(item.label) },
                 )
             }
@@ -136,10 +152,14 @@ fun ProtonStreamApp(
                     title = { Text(selectedTitle?.name ?: "proton-stream") },
                     actions = {
                         if (destination == Destination.Library) {
-                            FilledTonalButton(onClick = model::refresh, enabled = !state.refreshing) {
-                                Text(if (state.refreshing) "Refreshing…" else "Refresh")
+                            if (state.refreshing) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(16.dp))
+                            } else {
+                                IconButton(onClick = model::refresh) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                                }
                             }
-                            Spacer(Modifier.width(12.dp))
                         }
                     },
                 )
@@ -190,6 +210,7 @@ private fun LibraryScreen(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             placeholder = { Text("Search library") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
         )
         Spacer(Modifier.height(16.dp))
         if (state.loading) {
@@ -252,9 +273,73 @@ private fun TitleScreen(
         }.onFailure(onPreferenceError)
     }
     if (playing != null) {
-        Box(Modifier.fillMaxSize().padding(padding).background(Color.Black)) {
-            LibmpvPlayerSurface(title.key, playing!!, playerHost)
-            FilledTonalButton(onClick = { playerHost?.stop(); playing = null }, Modifier.padding(16.dp)) { Text("Back") }
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {
+                playerHost?.stop()
+                playing = null
+            },
+            properties = androidx.compose.ui.window.DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false
+            )
+        ) {
+            val configuration = LocalConfiguration.current
+            val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            var isFullscreen by remember { mutableStateOf(isLandscape) }
+            val activity = context as? android.app.Activity
+            
+            LaunchedEffect(isLandscape, isFullscreen) {
+                val window = activity?.window ?: return@LaunchedEffect
+                val controller = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                if (isLandscape || isFullscreen) {
+                    controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                    controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    if (isFullscreen && !isLandscape) {
+                        activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    }
+                } else {
+                    controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                    activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+            
+            DisposableEffect(Unit) {
+                onDispose {
+                    val window = activity?.window
+                    if (window != null) {
+                        val controller = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                        controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                    }
+                    activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+
+            BackHandler {
+                if (isFullscreen && !isLandscape) {
+                    isFullscreen = false
+                } else {
+                    playerHost?.stop()
+                    playing = null
+                }
+            }
+
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                LibmpvPlayerSurface(
+                    title.key, 
+                    playing!!, 
+                    playerHost,
+                    isFullscreen = isLandscape || isFullscreen,
+                    onToggleFullscreen = { isFullscreen = !isFullscreen }
+                )
+                if (!isLandscape && !isFullscreen) {
+                    IconButton(
+                        onClick = { playerHost?.stop(); playing = null }, 
+                        Modifier.padding(padding).padding(16.dp).background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
+                    ) { 
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close player", tint = Color.White) 
+                    }
+                }
+            }
         }
         return
     }
@@ -264,7 +349,11 @@ private fun TitleScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            FilledTonalButton(onClick = onBack) { Text("Back to library") }
+            TextButton(onClick = onBack) { 
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Back to library") 
+            }
             RemoteArtwork(
                 title.backdropUrl ?: title.posterUrl,
                 title.canonicalName ?: title.name,
@@ -286,9 +375,15 @@ private fun TitleScreen(
             title.overview?.let { Text(it, modifier = Modifier.padding(top = 10.dp)) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
                 Button(onClick = { DownloadCoordinator.enqueue(context, title.seasons.flatMap { it.episodes }) }) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text("Download show")
                 }
-                FilledTonalButton(onClick = { showMatch = true }) { Text("Change match") }
+                FilledTonalButton(onClick = { showMatch = true }) { 
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Change match") 
+                }
             }
             Text("${title.watchedCount} of ${title.episodeCount} watched", Modifier.padding(vertical = 12.dp))
             Text("Preferred tracks", style = MaterialTheme.typography.titleMedium)

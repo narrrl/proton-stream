@@ -14,12 +14,27 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import io.narl.protonstream.native.NativeRuntime
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.pstr_android.AndroidEngine
@@ -113,7 +129,13 @@ private data class PlaybackStartup(
 )
 
 @Composable
-fun LibmpvPlayerSurface(titleKey: String, episode: EpisodeRecord, host: LibmpvHost? = null) {
+fun LibmpvPlayerSurface(
+    titleKey: String,
+    episode: EpisodeRecord,
+    host: LibmpvHost? = null,
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: () -> Unit = {}
+) {
     if (host == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Playback is unavailable: this build does not include libmpv.", color = Color.White)
@@ -156,7 +178,20 @@ fun LibmpvPlayerSurface(titleKey: String, episode: EpisodeRecord, host: LibmpvHo
             scope.launch { session.closeEngine() }
         }
     }
-    Box(Modifier.fillMaxSize()) {
+    
+    var showControls by remember { mutableStateOf(true) }
+    LaunchedEffect(showControls) {
+        if (showControls) {
+            delay(4000)
+            showControls = false
+        }
+    }
+
+    Box(Modifier.fillMaxSize().clickable(
+        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+        indication = null,
+        onClick = { showControls = !showControls }
+    )) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
@@ -169,7 +204,20 @@ fun LibmpvPlayerSurface(titleKey: String, episode: EpisodeRecord, host: LibmpvHo
                 }
             },
         )
-        if (host is NativeMpvHost) PlayerControls(titleKey, episode, host, Modifier.align(Alignment.BottomCenter))
+        AnimatedVisibility(
+            visible = showControls,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            if (host is NativeMpvHost) PlayerControls(
+                titleKey,
+                episode,
+                host,
+                isFullscreen,
+                onToggleFullscreen
+            )
+        }
         playbackError?.let { message ->
             Text(message, color = Color.White, modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = 0.8f)).padding(16.dp))
         }
@@ -179,7 +227,14 @@ fun LibmpvPlayerSurface(titleKey: String, episode: EpisodeRecord, host: LibmpvHo
 private fun sessionKey(episode: EpisodeRecord) = "${episode.shareId}:${episode.linkId}"
 
 @Composable
-private fun PlayerControls(titleKey: String, episode: EpisodeRecord, host: NativeMpvHost, modifier: Modifier = Modifier) {
+private fun PlayerControls(
+    titleKey: String,
+    episode: EpisodeRecord,
+    host: NativeMpvHost,
+    isFullscreen: Boolean,
+    onToggleFullscreen: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val state by host.state.collectAsState()
     val tracks by host.tracks.collectAsState()
     val scope = rememberCoroutineScope()
@@ -199,17 +254,32 @@ private fun PlayerControls(titleKey: String, episode: EpisodeRecord, host: Nativ
             valueRange = 0f..state.duration.toFloat().coerceAtLeast(1f),
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { host.setPaused(!state.paused) }) { Text(if (state.paused) "Play" else "Pause") }
+            IconButton(onClick = { host.setPaused(!state.paused) }) { 
+                Icon(if (state.paused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = "Play/Pause", tint = Color.White) 
+            }
             Text("${formatTime(state.position)} / ${formatTime(state.duration)}", color = Color.White)
-            Button(onClick = { host.setMuted(!state.muted) }) { Text(if (state.muted) "Unmute" else "Mute") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconButton(onClick = { host.setMuted(!state.muted) }) { 
+                    Icon(if (state.muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp, contentDescription = "Mute", tint = Color.White) 
+                }
+                IconButton(onClick = onToggleFullscreen) { 
+                    Icon(if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, contentDescription = "Fullscreen", tint = Color.White) 
+                }
+            }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { choosing = "audio" }) {
-                Text("Audio: ${tracks.firstOrNull { it.type == "audio" && it.selected }?.label ?: "default"}", maxLines = 1)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { choosing = "audio" }) {
+                Icon(Icons.Default.Audiotrack, contentDescription = "Audio", tint = Color.White)
             }
-            Button(onClick = { choosing = "sub" }) {
-                Text("Subtitles: ${tracks.firstOrNull { it.type == "sub" && it.selected }?.label ?: "off"}", maxLines = 1)
+            IconButton(onClick = { choosing = "sub" }) {
+                Icon(Icons.Default.Subtitles, contentDescription = "Subtitles", tint = Color.White)
             }
+            Text(
+                "Audio: ${tracks.firstOrNull { it.type == "audio" && it.selected }?.label ?: "default"}  •  " +
+                "Subtitles: ${tracks.firstOrNull { it.type == "sub" && it.selected }?.label ?: "off"}",
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
     choosing?.let { type ->

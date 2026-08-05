@@ -4262,7 +4262,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-android"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "android_logger",
  "jni 0.21.1",
@@ -4281,7 +4281,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -4303,7 +4303,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4321,7 +4321,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "directories",
  "futures",
@@ -4339,7 +4339,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-meta"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pstr-core",
  "reqwest",
@@ -4352,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-player"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "libloading",
@@ -4366,7 +4366,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-stream"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
