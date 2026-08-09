@@ -196,7 +196,38 @@ pub struct PaletteRecord {
     pub accent_dim: u32,
     pub on_accent: u32,
     pub danger: u32,
+    /// One step further from the page than `card_hover`.
+    ///
+    /// Not a colour the palette names, and not one the desktop needs: Material's
+    /// containment ladder has five rungs where the palette has three, and the
+    /// top one is what `Card` fills with. Derived here rather than in Kotlin so
+    /// that the blend is still the shared one — mixing in sRGB rather than in
+    /// linear light would put this rung on a different curve to every other
+    /// colour in the app.
+    pub elevated: u32,
+    /// `danger` taken down towards the page, for an error *container* rather
+    /// than error ink.
+    pub danger_dim: u32,
     pub light: bool,
+}
+
+/// The stored palette, read without building an engine.
+///
+/// [`AndroidEngine`] opens SQLite, spins a Tokio runtime and unlocks a Keystore
+/// key — far too much to block an activity's `onCreate` on, and blocking it is
+/// the point: a palette that arrives one frame late is a flash of the wrong
+/// theme on every cold start. The choice is one small JSON file, so this reads
+/// exactly that and resolves it.
+///
+/// Infallible on purpose. A theme file that will not parse falls back to the
+/// defaults here exactly as it does everywhere else — it must never be a reason
+/// the library does not open.
+#[uniffi::export]
+pub fn stored_palette(paths: AndroidPaths) -> PaletteRecord {
+    let appearance = AppDirs::from_paths(paths.config, paths.data, paths.cache)
+        .and_then(|dirs| pstr_core::appearance::load(&dirs))
+        .unwrap_or_default();
+    palette_record(&appearance_record(appearance))
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -2357,6 +2388,13 @@ fn appearance_choice(record: AppearanceRecord) -> Appearance {
 
 fn palette_record(record: &AppearanceRecord) -> PaletteRecord {
     let palette = Palette::resolve(appearance_choice(record.clone()));
+    // The flavour's own step, taken once more: `card` to `card_hover` is the
+    // size of one rung as the flavour drew it, so extrapolating past the end of
+    // that pair gives a rung the same size and — unlike a fixed blend towards
+    // the ink — one that works in both polarities. A light flavour's ladder
+    // descends, and this descends with it.
+    let elevated = pstr_core::appearance::mix(palette.card, palette.card_hover, 2.0);
+    let danger_dim = pstr_core::appearance::mix(palette.danger, palette.background, 0.72);
     PaletteRecord {
         background: palette.background.argb(),
         surface: palette.surface.argb(),
@@ -2371,6 +2409,8 @@ fn palette_record(record: &AppearanceRecord) -> PaletteRecord {
         accent_dim: palette.accent_dim.argb(),
         on_accent: palette.on_accent.argb(),
         danger: palette.danger.argb(),
+        elevated: elevated.argb(),
+        danger_dim: danger_dim.argb(),
         light: palette.light,
     }
 }
@@ -2567,12 +2607,106 @@ mod tests {
     use pstr_stream::{MemoryBlocks, VideoStream};
 
     use super::{
-        AndroidEngine, AndroidPaths, AndroidSecretStore, AndroidStream, BridgeError, ChapterKind,
-        ChapterRecord, PartialMarker, chapter_plan, match_record, node_uid, normalized_language,
+        AccentChoice, AndroidEngine, AndroidPaths, AndroidSecretStore, AndroidStream,
+        AppearanceRecord, BridgeError, ChapterKind, ChapterRecord, FlavorChoice, PartialMarker,
+        chapter_plan, match_record, node_uid, normalized_language, palette_record,
         prepare_partial_file, pstr_android_stream_read, pstr_android_stream_release,
         pstr_android_stream_size, read_partial_marker, resume_position, skip_offer, title_metadata,
         write_partial_marker,
     };
+
+    fn appearance_of(flavor: FlavorChoice) -> AppearanceRecord {
+        AppearanceRecord {
+            flavor,
+            accent: AccentChoice::Mauve,
+            gradients: true,
+        }
+    }
+
+    /// Every flavour, so that a rung that only behaves on the dark ones is
+    /// caught: Latte's ladder descends, and a derived colour written as "a bit
+    /// brighter" would climb out of it.
+    const FLAVORS: [FlavorChoice; 5] = [
+        FlavorChoice::Proton,
+        FlavorChoice::Latte,
+        FlavorChoice::Frappe,
+        FlavorChoice::Macchiato,
+        FlavorChoice::Mocha,
+    ];
+
+    fn luminance(argb: u32) -> f32 {
+        pstr_core::appearance::luminance(pstr_core::appearance::Rgb::new(
+            ((argb >> 16) & 0xff) as u8,
+            ((argb >> 8) & 0xff) as u8,
+            (argb & 0xff) as u8,
+        ))
+    }
+
+    /// Material's containment ladder has five rungs where the palette names
+    /// three, and Kotlin lays them out in this order. A rung that is not past
+    /// the one below it is a rung that reads as the same surface.
+    #[test]
+    fn the_derived_rung_continues_the_ladder_in_both_polarities() {
+        for flavor in FLAVORS {
+            let palette = palette_record(&appearance_of(flavor));
+            let (card, hover, elevated) = (
+                luminance(palette.card),
+                luminance(palette.card_hover),
+                luminance(palette.elevated),
+            );
+            if palette.light {
+                assert!(
+                    elevated < hover && hover < card,
+                    "{flavor:?}: a light flavour's ladder descends, got {card} → {hover} → {elevated}"
+                );
+            } else {
+                assert!(
+                    elevated > hover && hover > card,
+                    "{flavor:?}: a dark flavour's ladder climbs, got {card} → {hover} → {elevated}"
+                );
+            }
+        }
+    }
+
+    /// An error *container* is a surface, not ink: it has to sit near the page
+    /// so that `text` reads on it, which is what Kotlin pairs it with.
+    #[test]
+    fn the_dim_danger_sits_between_the_danger_and_the_page() {
+        for flavor in FLAVORS {
+            let palette = palette_record(&appearance_of(flavor));
+            let (danger, dim, page) = (
+                luminance(palette.danger),
+                luminance(palette.danger_dim),
+                luminance(palette.background),
+            );
+            let between = (dim - danger).abs() > f32::EPSILON && (dim - page).abs() > f32::EPSILON;
+            assert!(between, "{flavor:?}: the dim danger is one of its own ends");
+            assert!(
+                dim > danger.min(page) && dim < danger.max(page),
+                "{flavor:?}: {dim} is outside {danger}..{page}"
+            );
+        }
+    }
+
+    /// The read that runs before the first frame. A directory with no theme
+    /// file in it is a first launch, and it has to answer with the defaults
+    /// rather than fail — the whole point of it is that it cannot be a reason
+    /// the window does not open.
+    #[test]
+    fn the_stored_palette_falls_back_to_the_shipped_default() {
+        let root = std::env::temp_dir().join(format!("pstr-palette-{}", std::process::id()));
+        let paths = AndroidPaths {
+            config: root.join("config").to_string_lossy().into_owned(),
+            data: root.join("data").to_string_lossy().into_owned(),
+            cache: root.join("cache").to_string_lossy().into_owned(),
+        };
+        let palette = super::stored_palette(paths);
+        let default = palette_record(&appearance_of(FlavorChoice::Proton));
+        assert_eq!(palette.background, default.background);
+        assert_eq!(palette.accent, default.accent);
+        assert_eq!(palette.elevated, default.elevated);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[derive(Default)]
     struct MemorySecrets(Mutex<HashMap<String, String>>);

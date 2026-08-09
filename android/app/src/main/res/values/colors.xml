@@ -1,0 +1,9 @@
+<resources>
+    <!--
+      `pstr_core::appearance::Palette::PROTON.background` — the shipped default,
+      and the only colour in this file. It is what the window is painted before
+      the stored palette has been read; from then on
+      MainActivity.dressWindow overrides it with the flavour in force.
+    -->
+    <color name="window_background">#0E0E12</color>
+</resources>

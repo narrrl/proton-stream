@@ -25,19 +25,25 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.playback.MpvPlaybackState
 import io.narl.protonstream.playback.NativeMpvHost
 import io.narl.protonstream.playback.PlaybackService
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.ProtonStreamApp
+import io.narl.protonstream.ui.theme.AppearanceState
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import uniffi.pstr_android.PaletteRecord
 
 class MainActivity : ComponentActivity() {
     private val playerHost = mutableStateOf<NativeMpvHost?>(null)
@@ -85,7 +91,19 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Before anything draws. The palette decides the window's own
+        // background and which way round the system bars' icons go, and both
+        // are wrong for a frame if they are set from a composition instead.
+        // Infallible by construction — an unreadable theme file resolves to the
+        // shipped default rather than throwing.
+        runCatching { NativeRuntime.storedPalette() }.onSuccess(AppearanceState::seed)
         enableEdgeToEdge()
+        // Re-applied on every change, not just at startup: picking Latte from
+        // the settings page has to turn the status bar's icons dark in the same
+        // frame the page behind them turns light.
+        lifecycleScope.launch {
+            AppearanceState.palette.filterNotNull().distinctUntilChanged().collect(::dressWindow)
+        }
         bound = bindService(
             Intent(this, PlaybackService::class.java),
             playbackConnection,
@@ -118,6 +136,26 @@ class MainActivity : ComponentActivity() {
             ProtonStreamTheme {
                 ProtonStreamApp(playerHost.value, inPictureInPicture.value)
             }
+        }
+    }
+
+    /**
+     * The parts of the window Compose does not reach: the background behind the
+     * whole activity, and the polarity of the system bars' icons.
+     *
+     * The background matters for the frames before and between compositions —
+     * the launch frame, and a rotation. It used to be a hex literal in
+     * `themes.xml`, which meant every cold start showed a colour from one
+     * flavour regardless of which one was chosen.
+     *
+     * The icons matter because the app ships a light flavour. Pinned dark, as
+     * they were, Latte drew white status-bar icons onto a near-white page.
+     */
+    private fun dressWindow(palette: PaletteRecord) {
+        window.setBackgroundDrawable(palette.background.toInt().toDrawable())
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = palette.light
+            isAppearanceLightNavigationBars = palette.light
         }
     }
 

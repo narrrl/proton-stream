@@ -1,8 +1,23 @@
 <resources>
+    <!--
+      The window before Compose owns it.
+
+      Everything about the *look* is decided by the stored palette and applied
+      in MainActivity.dressWindow: the background colour here is only the one
+      the shipped default resolves to, so that a first-ever launch — before
+      there is a theme file to read — starts on the right colour rather than on
+      the platform's white. The bar polarity is likewise set from the palette;
+      what is left here is the dark reading, which is right for four of the five
+      flavours and is corrected in the same frame for the fifth.
+
+      A hex literal from one specific flavour used to live here, and it was the
+      reason every cold start flashed Catppuccin Mocha's base regardless of what
+      the viewer had chosen.
+    -->
     <style name="Theme.ProtonStream" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
-        <item name="android:windowBackground">#1E1E2E</item>
+        <item name="android:windowBackground">@color/window_background</item>
     </style>
 </resources>

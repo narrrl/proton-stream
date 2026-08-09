@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.pstr_android.AndroidEngine
 import uniffi.pstr_android.AndroidPaths
+import uniffi.pstr_android.PaletteRecord
 
 /** Process-wide owner of the Rust engine; records and decrypted media remain app-private. */
 object NativeRuntime {
@@ -36,14 +37,24 @@ object NativeRuntime {
         }
     }
 
-    private fun createEngine(): AndroidEngine {
+    /**
+     * The stored palette, without building the engine.
+     *
+     * Callable from the main thread, and meant to be: it is the only palette
+     * read early enough to decide what the first frame is painted in, and
+     * [engine] is not — that opens SQLite, spins a Tokio runtime and unlocks a
+     * Keystore key. This reads one small JSON file and resolves it.
+     */
+    fun storedPalette(): PaletteRecord = uniffi.pstr_android.storedPalette(paths())
+
+    private fun paths(): AndroidPaths {
         check(::appContext.isInitialized) { "NativeRuntime is not initialized" }
         val config = File(appContext.noBackupFilesDir, "config")
         val data = File(appContext.filesDir, "data")
         val cache = File(appContext.cacheDir, "stream")
-        return AndroidEngine(
-            AndroidPaths(config.absolutePath, data.absolutePath, cache.absolutePath),
-            KeystoreSecretStore(appContext),
-        )
+        return AndroidPaths(config.absolutePath, data.absolutePath, cache.absolutePath)
     }
+
+    private fun createEngine(): AndroidEngine =
+        AndroidEngine(paths(), KeystoreSecretStore(appContext))
 }
