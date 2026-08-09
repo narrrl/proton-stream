@@ -146,6 +146,104 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B52 — "paint the accent as a gradient" did nothing on Android
+
+**Symptom.** The appearance page on Android offers a *Paint the accent as a
+gradient* switch, stores it, and repaints the app when it is flipped — and
+nothing on the screen changed either way. The same stored setting visibly
+changed the desktop client, so one file meant two things depending on which
+client read it. `PinkSky`, whose whole point is that it is a gradient before it
+is a colour, arrived on Android as one flat pink.
+
+**Cause.** No gradient was ever drawn. Nothing under `android/app/src/main`
+referenced `Brush`, `linearGradient` or `verticalGradient`. `accent_alt` reached
+Compose only as `secondary`, where it fills tonal containers — so the second hue
+existed in the scheme but never sat next to the first one.
+
+**Fix.** `ui/theme/Accent.kt` draws the ramp on the surfaces the desktop draws it
+on: the primary button, the seek bar, the watch-progress bar under a tile and
+under an episode row. Nothing there reads the toggle, because it does not need
+to — `Palette::resolve` already sets `accent_alt` equal to `accent` when
+gradients are off, so the ramp collapses to a flat fill by itself and the two
+clients cannot disagree about what the setting means.
+
+Two surfaces are deliberately not ramps. A download in flight keeps a solid
+`tertiary`, because it is drawn directly under the watch-progress bar of the same
+row and two ramps in the same colour two pixels apart say nothing. The navigation
+pill is solid `primary`: `NavigationSuiteScaffold` takes its indicator as a
+`Color` with no slot to draw into, so a gradient there would mean reimplementing
+the bar — but the accent itself is still nearer the desktop's rule than
+`secondaryContainer`, which is the accent taken most of the way back to the page.
+
+**Verified.** `./gradlew :app:testDebugUnitTest :app:lintDebug`. Still wants a
+device: the ramp is the one thing here a screenshot on Proton and on Latte
+settles, and the panel-banding case the toggle exists for cannot be judged from
+a build at all.
+
+### B51 — the Android client wore only part of the palette it was given
+
+**Symptom.** Every flavour looked half-applied on Android. The page was the
+flavour's colour and the tiles on it were not: the library grid, the
+continue-watching row, every episode row, every share, every download and the
+mini transport were all a flat neutral grey that belonged to no flavour and did
+not change when one was picked. Latte additionally drew white status-bar icons
+onto its near-white page, and every cold start flashed a dark blue-grey before
+the app appeared — including for viewers who had chosen Latte.
+
+**Cause.** Four, all in how the resolved palette reached the platform.
+
+`schemeOf` (`ui/theme/Theme.kt`) built a `ColorScheme` by copying
+`darkColorScheme()`/`lightColorScheme()` and overriding 22 roles. Material names
+roughly fifty. A role nobody overrides keeps Material's own baseline value, and
+`Card`'s container is `surfaceContainerHighest`
+(`FilledCardTokens.ContainerColor`), which was one of the twenty-seven nobody
+overrode. `Card` is what draws every repeated surface in the app, so the app's
+most common surface was the one surface that ignored the theme. `inverseSurface`
+and `inverseOnSurface` — the snackbar, which is the client's only error channel
+— and `scrim`, the dim behind every dialog, were in the same set. `surfaceTint`
+was too, so raised surfaces were tinted with Material's baseline purple.
+
+`themes.xml` hardcoded `windowBackground` to `#1E1E2E`, which is Catppuccin
+Mocha's base: not the shipped default, and not the viewer's choice either. It
+also pinned `windowLightStatusBar` and `windowLightNavigationBar` to `false`,
+and nothing anywhere synced either to `palette.light`.
+
+`ProtonStreamTheme` read the palette in a `LaunchedEffect` that hopped to
+`Dispatchers.IO`, so the first composition was always painted in a hardcoded
+dark default — the same flash-of-the-wrong-theme the desktop client had on
+Windows, for the same reason.
+
+**Fix.** `schemeOf` maps every role Material names. Two colours the palette does
+not name are derived in Rust so the blend behind them is the shared, tested one:
+`elevated`, which continues the flavour's own `card` → `card_hover` step by
+extrapolating past it — so a light flavour's ladder descends and a dark one's
+climbs — and `danger_dim`, an error *container* rather than error ink. Both are
+new fields on `PaletteRecord`. `outline` and `outlineVariant` were also swapped
+to match what Material draws with each: the visible border takes `muted`, the
+divider takes the fainter `border`. `surfaceTint` is transparent, because the
+desktop draws no elevation tint and its rule is that the accent is the only
+strong colour in the window.
+
+A new `stored_palette` bridge function resolves the stored choice without
+building an engine — no SQLite, no Tokio runtime, no Keystore unlock — so
+`MainActivity.onCreate` can seed the palette before `setContent` rather than one
+frame after it. It also sets the window background and the system bars' icon
+polarity from that palette, and re-applies both whenever the flavour changes, so
+picking Latte turns the status-bar icons dark in the same frame the page turns
+light. `themes.xml` keeps only the shipped default's background, as a first-ever
+launch has no theme file to read.
+
+**Verified.** `cargo test --workspace --locked`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `./gradlew :app:testDebugUnitTest :app:lintDebug`
+(lint clean; the two unmatched baseline entries it reports pre-date this change
+— the same run on the unmodified tree reports them). The Kotlin side is pinned
+by `SchemeRolesTest`, which sweeps `ColorScheme` reflectively rather than from a
+list and fails if any role carries a value the palette did not supply, so a role
+added by a future Material version fails the day the dependency moves. The Rust
+side asserts the derived rung continues the ladder in all five flavours, both
+polarities. The appearance itself still wants a device: screenshots on Proton
+and on Latte.
+
 ### B50 — every episode of a show was named after the show
 
 **Symptom.** All fifty-nine Attack on Titan rows read `Attack On Titan` on both

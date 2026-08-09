@@ -170,6 +170,38 @@ reads an external subtitle through the same protocol); the work is in
   rustls. Separately a browser cannot reach the Proton API at all (CORS) without
   a proxy server, which the fat-client decision rules out.
 
+- **One palette, one type ramp, one shape radius — named, not repeated.**
+  `pstr_core::appearance` already settled colour for both clients;
+  `pstr_app::theme::Role` settles size the same way. A `.size(17.0)` at a call
+  site is not a scale, it is one of forty independent decisions that happen to
+  sit near each other, and it is why the two clients read as different apps even
+  when their colours agreed. Anything new asks for a role.
+- **Depth and motion are the theme's, not the widget's.** Shadows come from
+  `theme::tile_shadow` / `theme::bar_shadow`, which halve themselves on a light
+  flavour — the same black that separates a card from a dark page is a smudge on
+  a near-white one. Transitions go through `Context::animate_*`, which is driven
+  by wall-clock time and keeps no state of its own, so a hover that fades needs
+  no field anywhere.
+- **The grid flexes; `CARD_WIDTH` is a minimum.** `ui::columns` hands back the
+  column count *and* the width they should be drawn at. Dividing by the constant
+  and flooring leaves up to a full card of dead space at the right of every row.
+- **Android copies the ramp; a test says so.** `ui/theme/Type.kt` and
+  `ui/theme/Shape.kt` are `Role` and radius 8 restated for Compose, because
+  Material's own defaults are a different scale (57sp displays, a five-step
+  corner ramp ending in a fully-round button) and there is no bridge to resolve
+  type the way `appearance` resolves colour. `TypeRampTest` names all fifteen
+  Material styles and fails on a sixteenth, so the copy cannot drift quietly.
+  Note that Material's filled buttons read their own shape token rather than
+  `MaterialTheme.shapes` — that is what `AccentButton`/`TonalButton`/
+  `EdgedButton`/`QuietButton` in `ui/theme/Accent.kt` exist for, and new call
+  sites should use them rather than Material's directly.
+- **The gradient toggle is not read where the gradient is drawn.**
+  `Palette::resolve` sets `accent_alt` equal to `accent` when gradients are off,
+  so a two-stop brush collapses to a flat fill on its own. Both clients rely on
+  that instead of branching on the flag, which is what keeps them from
+  disagreeing about what the stored setting means (see
+  [B52](BUGS.md#b52--paint-the-accent-as-a-gradient-did-nothing-on-android)).
+
 ## Traps
 
 - **Block sizes are not uniform.** Always `RevisionReader::block_sizes()`; never

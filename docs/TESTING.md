@@ -202,6 +202,15 @@ the two decode fallbacks that are easy to get backwards — a missing `label`
 falling back to the link id, and a blank `error` reading as *no* error rather
 than as a permanently failed download.
 
+The other two host tests pin the half of `docs/DESIGN-TOKENS.md` that no bridge
+enforces. `SchemeRolesTest` sweeps `ColorScheme` reflectively and fails on any
+role carrying a value the palette did not supply — including a role a future
+Material version adds, the day the dependency moves. `TypeRampTest` names all
+fifteen Material text styles against the shared ramp and fails on a sixteenth,
+and checks the corner radius the desktop draws at. Both are lists of the *other*
+client's decisions, so a change to `pstr_app::theme::Role` that nobody carried
+across fails here rather than being noticed in a screenshot.
+
 **Instrumentation tests** (`app/src/androidTest`) are the things with no host
 equivalent:
 
