@@ -18,6 +18,11 @@ use crate::error::Result;
 /// referenced here because `pstr-core` does not depend on the player.
 const MAX_VOLUME: f64 = 100.0;
 
+/// The range of playback rates offered. Past these, audio stops being speech
+/// and video stops being watchable, and mpv's own resampler gives up first.
+const MIN_SPEED: f64 = 0.25;
+const MAX_SPEED: f64 = 4.0;
+
 /// How playback should sound, and in which language.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 // A file written by an older version, or hand-edited, is missing fields rather
@@ -43,6 +48,18 @@ pub struct PlaybackPrefs {
     /// does and what a season of anything is watched like. Off is one checkbox
     /// away for someone who falls asleep to it.
     pub autoplay_next: bool,
+    /// Whether an opening or ending is seeked past rather than offered.
+    ///
+    /// Off by default, and deliberately: chapter names are a guess about a file
+    /// somebody else muxed, and a wrong guess that only greys out a button
+    /// costs nothing while a wrong guess that seeks costs the scene.
+    pub auto_skip: bool,
+    /// How fast playback runs, 1.0 being the file's own rate.
+    ///
+    /// Kept across episodes deliberately: someone who watches at 1.25 watches
+    /// everything at 1.25, and a speed that reset every episode would be a
+    /// setting nobody could use.
+    pub speed: f64,
 }
 
 impl Default for PlaybackPrefs {
@@ -54,6 +71,8 @@ impl Default for PlaybackPrefs {
             subtitle_language: None,
             subtitles: true,
             autoplay_next: true,
+            auto_skip: false,
+            speed: 1.0,
         }
     }
 }
@@ -68,6 +87,10 @@ impl PlaybackPrefs {
             self.volume = MAX_VOLUME;
         }
         self.volume = self.volume.clamp(0.0, MAX_VOLUME);
+        if !self.speed.is_finite() {
+            self.speed = 1.0;
+        }
+        self.speed = self.speed.clamp(MIN_SPEED, MAX_SPEED);
         self.audio_language = self.audio_language.filter(|tag| !tag.trim().is_empty());
         self.subtitle_language = self.subtitle_language.filter(|tag| !tag.trim().is_empty());
         self
@@ -124,6 +147,8 @@ mod tests {
             subtitle_language: Some("eng".into()),
             subtitles: true,
             autoplay_next: false,
+            auto_skip: true,
+            speed: 1.5,
         };
         save(&dirs, &prefs).unwrap();
         assert_eq!(load(&dirs).unwrap(), prefs);

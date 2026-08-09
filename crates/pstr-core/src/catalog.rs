@@ -227,6 +227,16 @@ impl Catalog {
         Ok(catalog)
     }
 
+    /// How many rows this connection has written since it was opened.
+    ///
+    /// A cache key, not a statistic: anything derived from the catalog stays
+    /// valid exactly as long as this does not move. SQLite counts it for us, so
+    /// no write path has to remember to invalidate anything — which is the
+    /// failure mode a hand-maintained counter has.
+    pub fn writes(&self) -> u64 {
+        self.conn.total_changes()
+    }
+
     fn migrate(&mut self) -> Result<()> {
         let version: i64 = self
             .conn

@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.pm.ServiceInfo
 import android.content.Context
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.Data
@@ -23,6 +24,7 @@ class OfflineDownloadWorker(
     parameters: WorkerParameters,
 ) : CoroutineWorker(appContext, parameters) {
     override suspend fun doWork(): Result {
+        createNotificationChannel()
         setForeground(createForegroundInfo(0))
         val shareId = inputData.getString(KEY_SHARE_ID) ?: return Result.failure(error("missing share"))
         val volumeId = inputData.getString(KEY_VOLUME_ID) ?: return Result.failure(error("missing volume"))
@@ -35,20 +37,43 @@ class OfflineDownloadWorker(
         store.put(retained)
 
         val observer = object : DownloadObserver {
+            private var reportedAt = 0L
+            private var reportedPercent = -1
+
+            /**
+             * Called once per 4 MiB block — a dozen times a second on a fast
+             * link, each one a WorkManager database write, a notification post
+             * and a preferences write. Nothing the viewer can see changes that
+             * often, so a report is only made when the percentage moves or a
+             * second has passed. The final one is never suppressed.
+             */
             override fun onProgress(downloaded: ULong, total: ULong) {
                 val percent = if (total == 0UL) 0 else ((downloaded * 100UL) / total).toInt()
+                val now = SystemClock.elapsedRealtime()
+                val complete = total > 0UL && downloaded >= total
+                if (!complete && percent == reportedPercent && now - reportedAt < PROGRESS_INTERVAL_MS) {
+                    return
+                }
+                reportedAt = now
+                reportedPercent = percent
                 setProgressAsync(workDataOf(KEY_DOWNLOADED to downloaded.toLong(), KEY_TOTAL to total.toLong()))
                 setForegroundAsync(createForegroundInfo(percent))
-                val requested = store.get(shareId, linkId)
-                val requestedStatus = requested?.status
-                retained = (requested ?: retained).copy(
-                    downloaded = downloaded.toLong(),
-                    total = total.toLong(),
-                    status = if (requestedStatus == RetainedDownload.STATUS_PAUSED ||
-                        requestedStatus == RetainedDownload.STATUS_CANCELLED
-                    ) requestedStatus else RetainedDownload.STATUS_RUNNING,
-                )
-                store.put(retained)
+                // Under the store's lock: `pause()` is a concurrent writer, and
+                // this read-modify-write used to put RUNNING back over the
+                // viewer's PAUSED and then report the download as cancelled.
+                store.update(shareId, linkId) { stored ->
+                    val current = stored ?: retained
+                    current.copy(
+                        downloaded = downloaded.toLong(),
+                        total = total.toLong(),
+                        status = when (current.status) {
+                            RetainedDownload.STATUS_PAUSED,
+                            RetainedDownload.STATUS_CANCELLED,
+                            -> current.status
+                            else -> RetainedDownload.STATUS_RUNNING
+                        },
+                    ).also { retained = it }
+                }
             }
 
             override fun isCancelled(): Boolean = isStopped
@@ -62,9 +87,12 @@ class OfflineDownloadWorker(
             },
             onFailure = { failure ->
                 if (isStopped) {
-                    val current = store.get(shareId, linkId) ?: retained
-                    if (current.status != RetainedDownload.STATUS_PAUSED) {
-                        store.put(current.copy(status = RetainedDownload.STATUS_CANCELLED))
+                    // A pause is also a stop. Under the lock, so the record read
+                    // here is the one the write lands on.
+                    store.update(shareId, linkId) { stored ->
+                        val current = stored ?: retained
+                        current.takeIf { it.status != RetainedDownload.STATUS_PAUSED }
+                            ?.copy(status = RetainedDownload.STATUS_CANCELLED)
                     }
                     Result.failure(error("cancelled"))
                 } else if (runAttemptCount < MAX_RETRIES) {
@@ -79,11 +107,14 @@ class OfflineDownloadWorker(
         )
     }
 
-    private fun createForegroundInfo(progress: Int): ForegroundInfo {
-        val manager = applicationContext.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
+    /** Once per run, rather than once per 4 MiB block. */
+    private fun createNotificationChannel() {
+        applicationContext.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Offline downloads", NotificationManager.IMPORTANCE_LOW),
         )
+    }
+
+    private fun createForegroundInfo(progress: Int): ForegroundInfo {
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(io.narl.protonstream.R.drawable.ic_launcher_foreground)
             .setContentTitle("Making episode available offline")
@@ -109,6 +140,9 @@ class OfflineDownloadWorker(
         const val KEY_TOTAL = "total"
         private const val MAX_RETRIES = 3
         private const val CHANNEL_ID = "offline-downloads"
+
+        /** Shortest gap between two identical-looking progress reports. */
+        private const val PROGRESS_INTERVAL_MS = 1_000L
     }
 }
 

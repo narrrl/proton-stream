@@ -35,18 +35,59 @@ class DownloadStateStore(context: Context) {
     fun get(shareId: String, linkId: String): RetainedDownload? =
         preferences.getString(key(shareId, linkId), null)?.let { runCatching { decode(it) }.getOrNull() }
 
-    fun put(record: RetainedDownload) {
-        preferences.edit().putString(record.key, encode(record)).commit()
+    fun put(record: RetainedDownload) = synchronized(WRITES) {
+        edit { putString(record.key, encode(record)) }
     }
 
-    fun remove(shareId: String, linkId: String) {
-        preferences.edit().remove(key(shareId, linkId)).commit()
+    /**
+     * Read-modify-write one record, excluding every other writer.
+     *
+     * The worker's progress update reads the stored record to decide whether the
+     * viewer has paused, then writes it back. `pause()` is another writer, and
+     * without this a `put` landing between those two halves puts `RUNNING` back
+     * over `PAUSED` — after which the worker's own cancellation handler sees a
+     * status that is not `PAUSED` and records `CANCELLED`. The pause is simply
+     * lost, which is the visible bug.
+     *
+     * Returning null from [change] leaves the record alone.
+     */
+    fun update(shareId: String, linkId: String, change: (RetainedDownload?) -> RetainedDownload?) =
+        synchronized(WRITES) {
+            change(get(shareId, linkId))?.let { edit { putString(it.key, encode(it)) } }
+        }
+
+    /**
+     * Write a whole queue in one go.
+     *
+     * Queueing a season is one call, not one per episode: `commit()` per record
+     * on a 200-episode series was 200 synchronous fsyncs, and the callers are
+     * click handlers.
+     */
+    fun putAll(records: Collection<RetainedDownload>) = synchronized(WRITES) {
+        edit { records.forEach { putString(it.key, encode(it)) } }
     }
 
-    fun removeShare(shareId: String) {
-        val edit = preferences.edit()
-        records().filter { it.shareId == shareId }.forEach { edit.remove(it.key) }
-        edit.commit()
+    fun remove(shareId: String, linkId: String) = synchronized(WRITES) {
+        edit { remove(key(shareId, linkId)) }
+    }
+
+    /** Forget every retained download. Callers cancel the work first. */
+    fun clear() = synchronized(WRITES) { edit { clear() } }
+
+    fun removeShare(shareId: String) = synchronized(WRITES) {
+        edit { records().filter { it.shareId == shareId }.forEach { remove(it.key) } }
+    }
+
+    /**
+     * `apply()`, not `commit()`.
+     *
+     * The in-memory map is updated before this returns, so a read that follows a
+     * write in the same process still sees it; only the disk write is deferred,
+     * and losing the newest progress reading to a kill is not worth an fsync on
+     * whichever thread happened to be writing.
+     */
+    private inline fun edit(block: android.content.SharedPreferences.Editor.() -> Unit) {
+        preferences.edit().apply(block).apply()
     }
 
     private fun encode(record: RetainedDownload) = JSONObject()
@@ -78,5 +119,11 @@ class DownloadStateStore(context: Context) {
 
     private companion object {
         const val NAME = "offline_download_state"
+
+        /**
+         * One lock for the whole process. Instances of this class are created
+         * ad hoc from a `Context`, so the lock cannot live on one of them.
+         */
+        val WRITES = Any()
     }
 }

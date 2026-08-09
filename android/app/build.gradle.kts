@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ktlint)
 }
 
 val repositoryRoot = rootProject.projectDir.parentFile
@@ -53,6 +54,7 @@ android {
         targetSdk = 36
         versionCode = releaseVersionCode
         versionName = releaseVersionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -103,7 +105,51 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             if (releaseStore != null) signingConfig = signingConfigs.getByName("release")
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+                // Applied to the shipping APK on purpose; the file explains the
+                // trade-off and what each keep is repairing.
+                "proguard-instrumentation.pro",
+            )
+            testProguardFiles("proguard-test-rules.pro")
+        }
+    }
+
+    // The minified path is what ships, and R8 breaks reflective UniFFI/JNA
+    // surfaces in ways no debug run can see. CI sets this to `release` and runs
+    // connectedAndroidTest against it; locally the default keeps builds fast.
+    testBuildType = providers.environmentVariable("ANDROID_TEST_BUILD_TYPE").orNull ?: "debug"
+
+    lint {
+        warningsAsErrors = true
+        abortOnError = true
+        checkDependencies = true
+        // The baseline records what was already here when the gate went in, so
+        // anything *new* fails. It is not a permanent exemption: every entry in
+        // it maps to an open bug in docs/BUGS.md (the SharedPreferences
+        // `commit()` calls are B20, the PiP one is B40), and the file should get
+        // shorter as those land. Regenerate with `gradlew updateLintBaseline`
+        // after a fix, and never to make an unrelated failure go away.
+        baseline = file("lint-baseline.xml")
+        // Generated UniFFI bindings are not ours to fix.
+        disable += setOf("UnusedIds")
+        // Dependency freshness is not a defect, and as errors these break the
+        // gate whenever someone else cuts a release. Upgrades are a deliberate
+        // act with their own verification; `gradlew lintDebug -Dlint...` or a
+        // dependency bot is the right place to surface them, not CI.
+        informational += setOf(
+            "GradleDependency",
+            "NewerVersionAvailable",
+            "AndroidGradlePluginVersion",
+        )
+        sarifReport = true
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
         }
     }
 
@@ -209,7 +255,6 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.jna) { artifact { type = "aar" } }
 
-
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
@@ -219,5 +264,36 @@ dependencies {
     implementation(libs.androidx.compose.material3.adaptive)
     implementation(libs.androidx.compose.material3.navigation.suite)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.work.testing)
+
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.work.testing)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+ktlint {
+    version.set("1.5.0")
+    android.set(true)
+    ignoreFailures.set(false)
+    filter {
+        // UniFFI writes these; they are regenerated on every build.
+        exclude { it.file.path.contains("${File.separator}generated${File.separator}") }
+        // Vendored from rustls-platform-verifier. Restyling it would make the
+        // next sync with upstream a merge conflict for no benefit.
+        exclude { it.file.path.contains("${File.separator}org${File.separator}rustls${File.separator}") }
+    }
+}
+
+// The generated UniFFI directory is a main source dir, so ktlint reads it even
+// though the filter above drops every file in it. Without this, Gradle refuses
+// the build for an undeclared dependency between the two tasks.
+tasks.matching { it.name.startsWith("runKtlintCheckOver") || it.name.startsWith("runKtlintFormatOver") }
+    .configureEach { dependsOn(generateUniFfiBindings) }

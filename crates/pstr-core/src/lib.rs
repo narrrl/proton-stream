@@ -7,6 +7,7 @@
 
 pub mod appearance;
 pub mod catalog;
+pub mod chapters;
 pub mod config;
 pub mod error;
 pub mod library;

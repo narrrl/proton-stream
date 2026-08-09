@@ -170,6 +170,114 @@ one failure the smoke test can see but a short run cannot.
 `Cannot load libcuda.so.1` on stderr is mpv's `hwdec=auto-safe` probe declining a
 backend. Not an error.
 
+## Android
+
+Three layers, and the split is deliberate: anything that can run on a host does,
+anything that needs Android's own implementations runs on a device, and anything
+that needs a viewer's eyes is a scripted case rather than a paragraph in a
+checklist.
+
+```bash
+bash scripts/build-android.sh check            # ktlint, Android lint, host tests
+bash scripts/android-acceptance.sh --list      # what the device suite covers
+bash scripts/android-acceptance.sh             # debug APK, one attached device
+bash scripts/android-acceptance.sh --release   # the signed minified APK that ships
+```
+
+Prefer `--release`. R8 is the step that has actually broken this app, in five
+distinct ways no debug run could reproduce (B44), and the release path is the
+only one that exercises it. It needs the four `ANDROID_RELEASE_*` signing
+variables from `docs/ANDROID.md` and a release APK built beforehand.
+
+`check` needs no device and no account. It picks JDK 17 itself — a newer JVM
+does not report a version error, it throws `IllegalArgumentException: 26.0.2` out
+of a Kotlin version parser, which reads as a broken build.
+
+**Host tests** (`app/src/test`) run under Robolectric, pinned to API 34 because
+Robolectric ships no image for the app's targetSdk of 36, and against a plain
+`Application` because the real one calls `System.loadLibrary("pstr_android")`,
+which has no host build. What is pinned today is `DownloadStateStore`: the JSON
+round trip, a corrupt row being skipped rather than failing the whole list, and
+the two decode fallbacks that are easy to get backwards — a missing `label`
+falling back to the link id, and a blank `error` reading as *no* error rather
+than as a permanently failed download.
+
+**Instrumentation tests** (`app/src/androidTest`) are the things with no host
+equivalent:
+
+- **`KeystoreSecretStore`** — round trip including non-ASCII, that the stored
+  form is not the plaintext, and that **every write draws a fresh IV** (GCM under
+  IV reuse leaks the XOR of two plaintexts). Then the failure modes, which are
+  the point: a tampered payload, a truncated one, and a *destroyed key* — the
+  lockscreen-change and device-restore case — must fail the read without taking
+  the process down, and the store must still accept a re-entered secret.
+- **`UniFfiBoundaryTest`** — the first thing to cross the FFI on real hardware,
+  deliberately offline. It proves the ABI, the generated bindings, the callback
+  interface and the SQLite open, so a failure here with a green Rust workspace
+  means packaging: a missing ABI in `jniLibs`, a stale binding, or an R8 rule.
+  Under `--release` this is the direct evidence that R8 does not break the FFI —
+  the question `proguard-rules.pro` exists to answer, and which nothing else in
+  the tree checks.
+- **`DownloadCoordinatorInstrumentedTest`** — what reaches WorkManager: the
+  unique-work identity pause and resume depend on, cancel-by-share not touching
+  another share, and the exact tag set, since tags are persisted unencrypted and
+  pinning them is what makes an accidental addition visible in review.
+
+**The device suite** (`scripts/android-acceptance.sh`) is the matrix
+`docs/ANDROID.md` requires before Android work is submitted. Cases carry one of
+three dispositions, and the third is the one to read:
+
+| | meaning |
+|---|---|
+| `xfail` | a known-open bug in `docs/BUGS.md`. Failing is expected; **passing fails the run**, because the bug is fixed and the case should be promoted |
+| `pending` | specified but not implemented. Never passes, and the summary reports the matrix as incomplete until it is gone |
+| `skip` | needs a share that was not configured |
+
+Today `process-recreation` is `xfail` against B35, and `picture-in-picture` is
+`pending` against B40 — asserting today's behaviour would encode the bug rather
+than catch it. **The matrix is not complete, and the runner says so on every
+run.**
+
+The five live cases need a share, given as environment variables that reach the
+device as instrumentation arguments and are written nowhere:
+
+```bash
+PSTR_ACCEPTANCE_SHARE_URL='https://drive.proton.me/urls/...#...' \
+PSTR_ACCEPTANCE_SHARE_PASSWORD='...' \
+  bash scripts/android-acceptance.sh --release
+```
+
+Without them those cases report `skip`. They are read-only against the share —
+nothing uploads, renames or deletes anything remote — but `download-cancel-resume`
+does pull real bytes, so expect traffic. `playback` is the one that matters most:
+it asserts libmpv's position advances, which only happens if decrypted bytes
+crossed block storage, the Rust C ABI and the JNI adapter into the decoder. All
+five share a single instrumentation run, because each one re-crawls the share
+from an empty catalog otherwise — about six minutes apiece.
+
+Lint runs against a **baseline**, which is not an exemption: every entry in
+`android/app/lint-baseline.xml` maps to an open bug — the four
+SharedPreferences `commit()` calls are B20, the PiP one is B40 — and the file
+should get shorter as those land. Regenerate it with `gradlew updateLintBaseline`
+after a fix, never to silence something unrelated. ktlint runs a narrow ruleset
+for the same reason: the full standard set reports ~540 findings on this tree,
+almost all line-wrapping preference, and a mechanical reformat would bury the
+changes that matter. `android/.editorconfig` says which rules are on and why.
+
+Two things about the release path worth knowing before they surprise you. The
+lint baseline is generated by the `lint` task, and `lintVitalRelease` reports it
+as created for a different variant, so the release lint run is not actually
+baseline-checked — it currently finds nothing either way, but do not read a green
+`lintVitalRelease` as the baseline holding. And `proguard-instrumentation.pro`
+holds keeps that exist *only* so the instrumentation APK can link against the
+minified app; they ship. The file explains each one and the fidelity it costs.
+Adding to it is the normal response to a `NoSuchMethodError` or
+`NoClassDefFoundError` that appears only under `--release`.
+
+Cases that start the app wake and unlock the screen first, and a device behind a
+PIN reports `skip` rather than a misleading failure — a dark screen has no
+resumed activity, which looks exactly like a crashed app.
+
 ## SDK-side
 
 The streaming surface this app depends on is tested in `../proton-sdk-rs`:

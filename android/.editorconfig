@@ -1,0 +1,29 @@
+# ktlint configuration.
+#
+# The whole standard ruleset is off, and rules are enabled one at a time. That
+# is deliberate: turning it all on reports ~540 findings on the existing tree,
+# almost all of them line-wrapping preference, and a mechanical reformat of
+# every file would bury the changes that matter in review. The rules kept here
+# are the ones whose violation is a defect or a real maintenance cost rather
+# than a matter of taste — starting with the unused imports that were the
+# evidence no gate ran at all.
+#
+# Adding a rule is cheap. Do it with the reformat it implies in its own commit.
+
+[*.{kt,kts}]
+ktlint_standard = disabled
+ktlint_standard_no-unused-imports = enabled
+ktlint_standard_no-wildcard-imports = enabled
+ktlint_standard_no-semi = enabled
+ktlint_standard_no-trailing-spaces = enabled
+ktlint_standard_no-consecutive-blank-lines = enabled
+ktlint_standard_no-empty-file = enabled
+ktlint_standard_final-newline = enabled
+ktlint_standard_filename = enabled
+ktlint_standard_no-line-break-before-assignment = enabled
+ktlint_standard_no-multi-spaces = enabled
+
+# Vendored from rustls-platform-verifier. Restyling it would turn the next sync
+# with upstream into a merge conflict for no benefit.
+[**/org/rustls/**.kt]
+ktlint = disabled

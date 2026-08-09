@@ -165,6 +165,10 @@ impl StreamSource {
             uid: uid.clone(),
         };
         if let Some(stream) = self.inner.lock().pop(&key) {
+            // Before the ring is cleared, not after: a prefetch still in flight
+            // would otherwise re-insert into the ring this just emptied, and
+            // keep downloading for a stream nobody is reading.
+            stream.cancel_read_ahead();
             self.inner.ring.forget(uid, stream.revision_id());
         }
     }

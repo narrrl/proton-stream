@@ -43,9 +43,32 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Before submitting Android work, run the Rust workspace gate from the repository
-root and `bash scripts/build-android.sh check`. Test phone and tablet layouts,
-rotation, process recreation, playback/background controls, Picture-in-Picture,
-download cancellation/resume, and an offline launch with networking disabled.
+root, then:
+
+```bash
+bash scripts/build-android.sh check          # ktlint, Android lint, host tests
+bash scripts/android-acceptance.sh --release # the on-device matrix, minified APK
+```
+
+`check` needs no device. Run the matrix with `--release` where you can: it
+installs the signed minified APK and runs instrumentation against it, which is
+the only path that exercises R8 — the step that has broken this app five distinct
+ways that a debug build cannot reproduce. Without the `ANDROID_RELEASE_*`
+variables below, drop `--release` and the debug APK is used instead. The matrix — phone and tablet layouts, rotation,
+process recreation, playback and background controls, Picture-in-Picture,
+download cancellation/resume, and an offline launch with networking disabled —
+is `scripts/android-acceptance.sh`; `--list` prints every case and what it
+needs, and `PSTR_ACCEPTANCE_ONLY=name` runs one. Five cases need a real share,
+given as `PSTR_ACCEPTANCE_SHARE_URL` and `PSTR_ACCEPTANCE_SHARE_PASSWORD`; they
+reach the device as instrumentation arguments and are stored nowhere. Without
+them those cases report `skip`. `picture-in-picture` is still `pending`, so the
+run tells you the matrix is incomplete — but no longer because of B40, which is
+fixed; the case now just needs writing. `docs/TESTING.md` has the layer-by-layer
+detail, including why lint runs against a baseline.
+
+Requires JDK 17. `build-android.sh` locates it, because a newer JVM does not
+fail with a version message — the Kotlin compiler throws
+`IllegalArgumentException: 26.0.2` from an IntelliJ version parser.
 
 ## Release Signing
 

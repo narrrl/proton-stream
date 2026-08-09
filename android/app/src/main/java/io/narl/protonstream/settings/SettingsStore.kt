@@ -2,6 +2,13 @@ package io.narl.protonstream.settings
 
 import android.content.Context
 
+/**
+ * The settings that are Android's alone.
+ *
+ * Playback preferences — volume, languages, autoplay, auto-skip — deliberately
+ * do *not* live here: they are `pstr_core::prefs`, reached over the bridge, so
+ * there is one definition of them rather than one per front end.
+ */
 class SettingsStore(context: Context) {
     private val preferences = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 

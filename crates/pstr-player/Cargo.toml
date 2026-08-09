@@ -9,6 +9,9 @@ rust-version.workspace = true
 authors.workspace = true
 
 [dependencies]
+# For `chapters`, which Android reaches through its own bridge and so cannot
+# live here. Already in the tree via pstr-stream.
+pstr-core.workspace = true
 pstr-stream.workspace = true
 tokio.workspace = true
 thiserror.workspace = true

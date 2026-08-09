@@ -160,6 +160,49 @@ impl ShareStore {
         Ok(share)
     }
 
+    /// Re-supply a configured share's secrets, keeping everything else.
+    ///
+    /// A secret store can lose the ability to read what it wrote: an Android
+    /// Keystore key is invalidated by a lockscreen change or a device restore,
+    /// and a desktop keyring can be reset. After that every open of the share
+    /// fails — and so, often, does removing it, because removal deletes a
+    /// secret the store can no longer touch. Re-entering the link is the way
+    /// back that does not cost the catalog and the offline files.
+    ///
+    /// The link must be the same one: a different token is a different share,
+    /// and quietly repointing an existing library at it would leave every
+    /// catalog row describing files that are no longer there.
+    pub fn replace_secrets(
+        &self,
+        id: &str,
+        url: &str,
+        custom_password: Option<&str>,
+    ) -> Result<Share> {
+        let token = token_from_url(url)?;
+        let mut shares = self.list()?;
+        let share = shares
+            .iter_mut()
+            .find(|share| share.id == id)
+            .ok_or_else(|| Error::NotFound(format!("no share with id {id}")))?;
+        if share.token != token {
+            return Err(Error::Config(
+                "that link is for a different share; add it as a new one".to_owned(),
+            ));
+        }
+
+        let secrets = ShareSecrets {
+            url: url.to_string(),
+            custom_password: custom_password
+                .filter(|password| !password.is_empty())
+                .map(str::to_string),
+        };
+        self.store_secrets(id, &secrets)?;
+        share.has_custom_password = secrets.custom_password.is_some();
+        let updated = share.clone();
+        write_json(&self.dirs.shares_file(), &shares)?;
+        Ok(updated)
+    }
+
     /// Forget a share and its secrets.
     ///
     /// The config entry goes first here, for the mirror-image reason: if the
@@ -223,10 +266,28 @@ impl SharedLibrary {
     /// the whole library — one revoked link should not make the other three
     /// unwatchable.
     pub async fn open_all(store: &ShareStore) -> Result<(Self, Vec<(Share, Error)>)> {
+        Self::open_all_reusing(store, BTreeMap::new()).await
+    }
+
+    /// Open every configured share, reusing the clients in `reusable`.
+    ///
+    /// Adding or removing one link should not cost a fresh handshake for the
+    /// shares that were already open, so a caller that still holds them can
+    /// hand them back here. A share whose stored secrets changed must *not*
+    /// appear in `reusable` — its old client authenticates against the old
+    /// link.
+    pub async fn open_all_reusing(
+        store: &ShareStore,
+        mut reusable: BTreeMap<String, ProtonDrivePublicLinkClient>,
+    ) -> Result<(Self, Vec<(Share, Error)>)> {
         let mut clients = BTreeMap::new();
         let mut failures = Vec::new();
 
         for share in store.list()? {
+            if let Some(client) = reusable.remove(&share.id) {
+                clients.insert(share.id, client);
+                continue;
+            }
             match store.open(&share).await {
                 Ok(client) => {
                     clients.insert(share.id.clone(), client);
@@ -236,6 +297,23 @@ impl SharedLibrary {
         }
 
         Ok((Self { clients }, failures))
+    }
+
+    /// The opened clients, minus `dropping`, ready to hand to
+    /// [`SharedLibrary::open_all_reusing`].
+    ///
+    /// The excluded share is the one whose credentials or membership just
+    /// changed; leaving it out is what makes a removed share's live client
+    /// unreachable rather than merely stale.
+    pub fn reusable_clients(
+        &self,
+        dropping: &str,
+    ) -> BTreeMap<String, ProtonDrivePublicLinkClient> {
+        self.clients
+            .iter()
+            .filter(|(id, _)| id.as_str() != dropping)
+            .map(|(id, client)| (id.clone(), client.clone()))
+            .collect()
     }
 
     /// The client for one share.
@@ -394,6 +472,105 @@ mod tests {
                 "error repeated the full URL: {error}"
             );
         }
+    }
+
+    /// A store that has forgotten how to read what it wrote, which is what an
+    /// invalidated Android Keystore key looks like from Rust.
+    #[derive(Default)]
+    struct Unreadable {
+        entries: std::sync::Mutex<BTreeMap<String, String>>,
+        readable: std::sync::atomic::AtomicBool,
+    }
+
+    impl SecretStore for Unreadable {
+        fn set(&self, key: &str, value: &str) -> Result<()> {
+            self.entries
+                .lock()
+                .unwrap()
+                .insert(key.to_owned(), value.to_owned());
+            self.readable
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn get(&self, key: &str) -> Result<Option<String>> {
+            if !self.readable.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(Error::Config("key permanently invalidated".into()));
+            }
+            Ok(self.entries.lock().unwrap().get(key).cloned())
+        }
+
+        fn delete(&self, key: &str) -> Result<()> {
+            self.entries.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    fn store_in(name: &str) -> (ShareStore, Arc<Unreadable>) {
+        let root = std::env::temp_dir().join(format!("pstr-shares-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dirs = AppDirs::from_paths(root.join("config"), root.join("data"), root.join("cache"))
+            .expect("app directories");
+        let secrets = Arc::new(Unreadable::default());
+        (
+            ShareStore::with_secret_store(dirs, secrets.clone()),
+            secrets,
+        )
+    }
+
+    /// The way back from an unreadable secret store. The share keeps its id, so
+    /// the catalog rows and offline files keyed by it stay valid — which is the
+    /// whole reason this exists rather than Remove-and-re-add.
+    #[test]
+    fn a_re_entered_link_restores_a_share_whose_secret_cannot_be_read() {
+        let (store, secrets) = store_in("repair");
+        let url = "https://drive.proton.me/urls/ABC123#s3cr3t";
+        let added = store.add("Library", url, None).expect("add");
+
+        secrets
+            .readable
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(store.load_secrets(&added.id).is_err());
+
+        let repaired = store
+            .replace_secrets(&added.id, url, Some("new-password"))
+            .expect("replace");
+        assert_eq!(repaired.id, added.id);
+        assert!(repaired.has_custom_password);
+        assert!(
+            store
+                .list()
+                .expect("list")
+                .iter()
+                .any(|share| share.id == added.id && share.has_custom_password)
+        );
+    }
+
+    /// A different link is a different share. Repointing this one at it would
+    /// leave every catalog row and offline file describing files that are not
+    /// there.
+    #[test]
+    fn a_re_entered_link_for_a_different_share_is_refused() {
+        let (store, _) = store_in("repair-mismatch");
+        let added = store
+            .add(
+                "Library",
+                "https://drive.proton.me/urls/ABC123#s3cr3t",
+                None,
+            )
+            .expect("add");
+
+        let error = store
+            .replace_secrets(
+                &added.id,
+                "https://drive.proton.me/urls/DEF456#s3cr3t",
+                None,
+            )
+            .expect_err("a different token must be refused");
+        assert!(
+            error.to_string().contains("different share"),
+            "says what is wrong: {error}"
+        );
     }
 
     /// The id must be derivable from the token alone — deriving it from the URL

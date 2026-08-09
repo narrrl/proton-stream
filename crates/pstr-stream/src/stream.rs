@@ -259,20 +259,12 @@ impl VideoStream {
     /// wants an aborted block simply refetches it — the single-flight entry is
     /// released by its guard when the task is dropped, so nothing waits on a
     /// call that will never finish.
-    fn cancel_read_ahead(&self) {
-        let tasks = std::mem::take(&mut *self.inner.tasks());
-        let mut cancelled = 0_u64;
-        for task in tasks {
-            if !task.is_finished() {
-                task.abort();
-                cancelled += 1;
-            }
-        }
-        if cancelled > 0 {
-            self.inner
-                .readahead_cancelled
-                .fetch_add(cancelled, Ordering::Relaxed);
-        }
+    ///
+    /// Public because a seek is not the only reason to stop speculating: a
+    /// stream nobody is reading any more should not keep spending a phone's
+    /// data plan, which is what [`crate::StreamSource::close`] uses this for.
+    pub fn cancel_read_ahead(&self) {
+        self.inner.cancel_read_ahead();
     }
 
     /// Queue the next few blocks after `from`.
@@ -300,10 +292,15 @@ impl VideoStream {
             };
 
             inner.readahead_started.fetch_add(1, Ordering::Relaxed);
-            let spawned = Arc::clone(inner);
+            // Weak, so that a queue of prefetches cannot keep the stream they
+            // are speculating for alive — see `impl Drop for Inner`.
+            let spawned = Arc::downgrade(inner);
             let task = tokio::spawn(async move {
                 let _slot = slot;
-                if let Err(e) = block_at(spawned, index).await {
+                let Some(inner) = spawned.upgrade() else {
+                    return;
+                };
+                if let Err(e) = block_at(inner, index).await {
                     tracing::debug!(index, error = %e, "read-ahead block failed");
                 }
             });
@@ -351,6 +348,39 @@ impl Inner {
         self.readahead_tasks
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn cancel_read_ahead(&self) {
+        let tasks = std::mem::take(&mut *self.tasks());
+        let mut cancelled = 0_u64;
+        for task in tasks {
+            if !task.is_finished() {
+                task.abort();
+                cancelled += 1;
+            }
+        }
+        if cancelled > 0 {
+            self.readahead_cancelled
+                .fetch_add(cancelled, Ordering::Relaxed);
+        }
+    }
+}
+
+/// A stream nobody holds any more stops speculating.
+///
+/// Read-ahead tasks hold a [`Weak`] rather than an [`Arc`], so their existence
+/// does not keep this alive and this can run while they are still in flight —
+/// which is the point. Without it, closing the player mid-episode leaves up to a
+/// full read-ahead window downloading for a stream nobody is watching, and those
+/// blocks then evict the ones the *next* stream has already fetched.
+///
+/// A prefetch that has already upgraded its handle keeps this alive for the one
+/// block it is fetching. That block is the residue; the window behind it is not.
+impl Drop for Inner {
+    fn drop(&mut self) {
+        for task in std::mem::take(&mut *self.tasks()) {
+            task.abort();
+        }
     }
 }
 
@@ -788,6 +818,31 @@ mod tests {
         assert!(
             stats.readahead_cancelled > 0,
             "seek did not cancel the stale prefetches"
+        );
+    }
+
+    /// Closing the player mid-episode must stop the speculation too. On a phone
+    /// on cellular this is up to a full read-ahead window downloaded for a
+    /// stream nobody is watching — and those blocks then evict the ones the next
+    /// stream has already fetched.
+    #[tokio::test]
+    async fn abandoning_a_stream_stops_its_read_ahead() {
+        let fake = Fake::slow(&[1024 * 1024; 200], std::time::Duration::from_millis(200));
+        let stream = stream_over(Arc::clone(&fake), 4);
+
+        stream.read_range(0, 1_000).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(stream.stats().readahead_blocks > 0, "nothing to cancel");
+        let started = fake.fetches();
+
+        drop(stream);
+        // Long enough that every prefetch in flight would have completed.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        assert!(
+            fake.fetches() <= started + 1,
+            "read-ahead outlived the stream: {} fetches after {started}",
+            fake.fetches(),
         );
     }
 

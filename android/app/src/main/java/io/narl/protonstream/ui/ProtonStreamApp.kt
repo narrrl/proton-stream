@@ -1,10 +1,11 @@
 package io.narl.protonstream.ui
 
-import android.content.res.Configuration
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,13 +21,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -48,6 +50,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Download
@@ -55,26 +59,30 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -84,6 +92,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.WorkManager
 import io.narl.protonstream.settings.SettingsStore
@@ -94,14 +103,36 @@ import io.narl.protonstream.download.DownloadCoordinator
 import io.narl.protonstream.download.DownloadStateStore
 import io.narl.protonstream.download.RetainedDownload
 import io.narl.protonstream.native.NativeRuntime
+import io.narl.protonstream.ui.theme.AppearanceState
 import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TrackPreferencesRecord
 import uniffi.pstr_android.EpisodeRecord
+import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.MatchRecord
 import uniffi.pstr_android.MetadataProvider
+import uniffi.pstr_android.FlavorChoice
+import uniffi.pstr_android.AppearanceRecord
+import uniffi.pstr_android.AccentChoice
+import uniffi.pstr_android.PlaybackPrefsRecord
+import io.narl.protonstream.playback.LibmpvHost
 import io.narl.protonstream.playback.NativeMpvHost
-import io.narl.protonstream.playback.LibmpvPlayerSurface
+import io.narl.protonstream.playback.PlayerScreen
+
+/**
+ * How many shows the continue-watching shelf holds.
+ *
+ * A shelf is a shortcut, not a second library: past about this many it is
+ * quicker to search for the thing than to scroll the shelf looking for it.
+ */
+private const val CONTINUE_WATCHING_MAX = 12
+
+/** What the player was asked to open: a title's episodes, and which one. */
+private data class PlayRequest(
+    val title: TitleRecord,
+    val episodes: List<EpisodeRecord>,
+    val index: Int,
+)
 
 private enum class Destination(val label: String, val icon: ImageVector) {
     Library("Library", Icons.Default.VideoLibrary),
@@ -113,7 +144,8 @@ private enum class Destination(val label: String, val icon: ImageVector) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProtonStreamApp(
-    playerHost: NativeMpvHost? = null,
+    playerHost: LibmpvHost? = null,
+    inPictureInPicture: Boolean = false,
     model: AppViewModel = viewModel(
         factory = AppViewModel.Factory(
             LocalContext.current,
@@ -123,14 +155,27 @@ fun ProtonStreamApp(
 ) {
     val state by model.state.collectAsState()
     val snackbars = remember { SnackbarHostState() }
-    var destination by remember { mutableStateOf(Destination.Library) }
-    var selectedTitle by remember { mutableStateOf<TitleRecord?>(null) }
+    // Keys, not records: what has to survive process recreation is *which* title
+    // and which episode, and a `TitleRecord` is neither parcelable nor still
+    // current after the library reloads. Everything else is derived, so a reload
+    // that renames a season updates the open screen rather than pinning a stale
+    // copy of it.
+    var destination by rememberSaveable { mutableStateOf(Destination.Library) }
+    var selectedTitleKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var playingTitleKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var playingIndex by rememberSaveable { mutableIntStateOf(0) }
+    // Playing, but not on screen: the episode keeps going and the mini transport
+    // is what says so. Saved, because a rotation must not throw the viewer back
+    // into the video they had just left.
+    var playerMinimized by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(state.titles, selectedTitle?.key) {
-        selectedTitle?.let { selected ->
-            selectedTitle = state.titles.firstOrNull { it.key == selected.key } ?: selected
+    val selectedTitle = state.titles.firstOrNull { it.key == selectedTitleKey }
+    val playing = playingTitleKey
+        ?.let { key -> state.titles.firstOrNull { it.key == key } }
+        ?.let { title ->
+            val episodes = title.seasons.flatMap(SeasonRecord::episodes)
+            PlayRequest(title, episodes, playingIndex.coerceIn(0, (episodes.size - 1).coerceAtLeast(0)))
         }
-    }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -143,7 +188,7 @@ fun ProtonStreamApp(
             Destination.entries.forEach { item ->
                 item(
                     selected = destination == item,
-                    onClick = { destination = item; selectedTitle = null },
+                    onClick = { destination = item; selectedTitleKey = null },
                     icon = { Icon(item.icon, contentDescription = item.label) },
                     label = { Text(item.label) },
                 )
@@ -170,21 +215,52 @@ fun ProtonStreamApp(
                 )
             },
         ) { padding ->
+            // Back from a secondary tab returns to the library rather than
+            // leaving the app; the library's own back is the system's, which is
+            // what a top-level destination should do.
+            BackHandler(enabled = destination != Destination.Library) {
+                destination = Destination.Library
+            }
+            val minimizedHost = (playerHost as? NativeMpvHost)?.takeIf { playing != null && playerMinimized }
+            Box(Modifier.fillMaxSize()) {
             AnimatedContent(destination, label = "primary navigation") { target ->
                 when (target) {
                     Destination.Library -> if (selectedTitle == null) {
-                        LibraryScreen(state, model::search, { selectedTitle = it }, padding)
+                        LibraryScreen(
+                            state,
+                            model::search,
+                            { title, index ->
+                                playingTitleKey = title.key
+                                playingIndex = index
+                                playerMinimized = false
+                            },
+                            { selectedTitleKey = it.key },
+                            padding,
+                        )
                     } else {
                         TitleScreen(
-                            selectedTitle!!,
-                            playerHost,
-                            { selectedTitle = null },
+                            selectedTitle,
+                            playerHost != null,
+                            { _, index ->
+                                playingTitleKey = selectedTitle.key
+                                playingIndex = index
+                                playerMinimized = false
+                            },
+                            { selectedTitleKey = null },
                             model::reportError,
                             model::reloadAfterMetadataChange,
+                            model::setWatched,
                             padding,
                         )
                     }
-                    Destination.Shares -> SharesScreen(state.shares, model::addShare, model::removeShare, padding)
+                    Destination.Shares -> SharesScreen(
+                        state.shares,
+                        model::addShare,
+                        model::repairShare,
+                        model::refreshShare,
+                        model::removeShare,
+                        padding,
+                    )
                     Destination.Downloads -> DownloadsScreen(
                         state,
                         model::removeOffline,
@@ -193,21 +269,126 @@ fun ProtonStreamApp(
                         model::deletePartial,
                         padding,
                     )
-                    Destination.Settings -> SettingsScreen(state, model::saveMetadataSettings, padding)
+                    Destination.Settings -> SettingsScreen(
+                        state,
+                        model::saveMetadataSettings,
+                        { model.matchTitles(force = true) },
+                        model::clearBlockCache,
+                        model::removeAllOffline,
+                        padding,
+                    )
                 }
+            }
+            minimizedHost?.let { core ->
+                MiniTransport(
+                    host = core,
+                    onRestore = { playerMinimized = false },
+                    onClose = {
+                        playingTitleKey = null
+                        playerMinimized = false
+                        model.reloadAfterMetadataChange()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = padding.calculateBottomPadding() + 8.dp),
+                )
+            }
             }
         }
     }
 
+    // Drawn over the scaffold rather than instead of it. The player owns the
+    // whole window while it is up — it is a screen, not a dialog over one, which
+    // is what lets it draw into the cutout and hand the right window to
+    // Picture-in-Picture — but the page behind it stays composed, so leaving the
+    // player finds the title page where it was rather than rebuilt from the top.
+    playing?.let { request ->
+        PlayerScreen(
+            title = request.title,
+            episodes = request.episodes,
+            index = request.index,
+            host = playerHost,
+            inPictureInPicture = inPictureInPicture,
+            minimized = playerMinimized,
+            onIndexChange = { playingIndex = it },
+            onSaveProgress = model::saveProgress,
+            onMinimize = { playerMinimized = true },
+            onClose = {
+                playingTitleKey = null
+                playerMinimized = false
+                model.reloadAfterMetadataChange()
+            },
+        )
+    }
 }
+
+/**
+ * The bar that says playback is still going, and gets back to it.
+ *
+ * Leaving the player does not stop it — the episode keeps playing, which is the
+ * whole point of the background-audio setting — so there has to be something on
+ * screen that says so and takes one tap to return to. Without it, the only way
+ * back to a playing episode is to find it in the library again.
+ */
+@Composable
+private fun MiniTransport(
+    host: NativeMpvHost,
+    onRestore: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val state by host.state.collectAsState()
+    val playing by host.nowPlaying.collectAsState()
+    val episode = playing ?: return
+    Card(modifier.fillMaxWidth().padding(horizontal = 8.dp).clickable(onClick = onRestore)) {
+        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            RemoteArtwork(
+                episode.artworkUrl,
+                episode.show ?: episode.title,
+                Modifier.width(64.dp).aspectRatio(16f / 9f).clip(MaterialTheme.shapes.small),
+                fallback = episode.artworkFile,
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(episode.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                episode.show?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            IconButton(onClick = { host.setPaused(!state.paused) }) {
+                Icon(
+                    if (state.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    contentDescription = if (state.paused) "Play" else "Pause",
+                )
+            }
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, contentDescription = "Stop playback")
+            }
+        }
+    }
+}
+
+/** One row of the continue-watching shelf: which episode, and where it sits. */
+private data class Resumable(val title: TitleRecord, val episode: EpisodeRecord, val index: Int)
 
 @Composable
 private fun LibraryScreen(
     state: AppUiState,
     onSearch: (String) -> Unit,
+    onResume: (TitleRecord, Int) -> Unit,
     onTitle: (TitleRecord) -> Unit,
     padding: PaddingValues,
 ) {
+    // Most recently played first, one episode per show: a shelf that lists four
+    // episodes of the same series is a shelf with room for nothing else.
+    val resumable = remember(state.titles) {
+        state.titles.mapNotNull { title ->
+            val playlist = title.seasons.flatMap(SeasonRecord::episodes)
+            playlist.withIndex()
+                .filter { it.value.resumeAt != null && !it.value.watched }
+                .maxByOrNull { it.value.lastPlayed }
+                ?.let { Resumable(title, it.value, it.index) }
+        }.sortedByDescending { it.episode.lastPlayed }.take(CONTINUE_WATCHING_MAX)
+    }
     Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
         OutlinedTextField(
             value = state.query,
@@ -218,6 +399,49 @@ private fun LibraryScreen(
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
         )
         Spacer(Modifier.height(16.dp))
+        // Above the grid, and only when there is something in it: what a viewer
+        // opening the app wants is almost always the thing they were part way
+        // through, and finding it in an alphabetical grid is the long way round.
+        if (!state.loading && state.query.isBlank() && resumable.isNotEmpty()) {
+            Text("Continue watching", style = MaterialTheme.typography.titleMedium)
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 12.dp),
+            ) {
+                items(resumable, key = { "${it.episode.shareId}/${it.episode.linkId}" }) { entry ->
+                    Card(
+                        Modifier.width(200.dp).clickable { onResume(entry.title, entry.index) },
+                    ) {
+                        RemoteArtwork(
+                            entry.episode.stillUrl ?: entry.title.backdropUrl,
+                            entry.title.canonicalName ?: entry.title.name,
+                            Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                            fallback = entry.episode.thumbnailSource,
+                        )
+                        Column(Modifier.padding(10.dp)) {
+                            Text(
+                                entry.title.canonicalName ?: entry.title.name,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                entry.episode.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            entry.episode.progress?.let { progress ->
+                                LinearProgressIndicator(
+                                    progress = { progress.toFloat().coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if (state.loading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         } else if (state.titles.isEmpty()) {
@@ -235,6 +459,7 @@ private fun LibraryScreen(
                             title.backdropUrl ?: title.posterUrl,
                             title.canonicalName ?: title.name,
                             Modifier.fillMaxWidth().height(210.dp),
+                            fallback = title.thumbnailSource,
                         )
                         Column(Modifier.padding(12.dp)) {
                             Text(title.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -253,10 +478,12 @@ private fun LibraryScreen(
 @Composable
 private fun TitleScreen(
     title: TitleRecord,
-    playerHost: NativeMpvHost?,
+    playerReady: Boolean,
+    onPlay: (List<EpisodeRecord>, Int) -> Unit,
     onBack: () -> Unit,
     onPreferenceError: (Throwable) -> Unit,
     onMetadataChanged: () -> Unit,
+    onSetWatched: (EpisodeRecord, Boolean) -> Unit,
     padding: PaddingValues,
 ) {
     val context = LocalContext.current
@@ -264,109 +491,57 @@ private fun TitleScreen(
     var audioLanguage by remember(title.key) { mutableStateOf("") }
     var subtitleLanguage by remember(title.key) { mutableStateOf("") }
     var subtitlesEnabled by remember(title.key) { mutableStateOf(false) }
-    var playing by remember(title.key) { mutableStateOf<EpisodeRecord?>(null) }
     var showMatch by remember(title.key) { mutableStateOf(false) }
     var expandedSeasons by remember(title.key) { mutableStateOf(setOf(title.seasons.firstOrNull()?.label)) }
-    
-    BackHandler(enabled = playing == null, onBack = onBack)
-    
+
+    BackHandler(onBack = onBack)
+
     LaunchedEffect(title.key) {
         runCatching {
             withContext(Dispatchers.IO) {
                 NativeRuntime.engine().titleTrackPreferences(title.key)
             }
         }.onSuccess { preferences ->
-            audioLanguage = preferences.audioLanguage.orEmpty()
-            subtitleLanguage = preferences.subtitleLanguage.orEmpty()
-            subtitlesEnabled = preferences.subtitles
+            // Absent means this title has never been given a choice; the fields
+            // are then empty and the global preference is what plays.
+            audioLanguage = preferences?.audioLanguage.orEmpty()
+            subtitleLanguage = preferences?.subtitleLanguage.orEmpty()
+            subtitlesEnabled = preferences?.subtitles ?: true
         }.onFailure(onPreferenceError)
     }
-    if (playing != null) {
-        androidx.compose.ui.window.Dialog(
-            onDismissRequest = {
-                playerHost?.stop()
-                playing = null
-            },
-            properties = androidx.compose.ui.window.DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false
-            )
-        ) {
-            val configuration = LocalConfiguration.current
-            val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-            var isFullscreen by remember { mutableStateOf(isLandscape) }
-            val activity = context as? android.app.Activity
-            
-            LaunchedEffect(isLandscape, isFullscreen) {
-                val window = activity?.window ?: return@LaunchedEffect
-                val controller = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-                if (isLandscape || isFullscreen) {
-                    controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-                    controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    if (isFullscreen && !isLandscape) {
-                        activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                    }
-                } else {
-                    controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-                    activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                }
-            }
-            
-            DisposableEffect(Unit) {
-                onDispose {
-                    val window = activity?.window
-                    if (window != null) {
-                        val controller = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-                        controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-                    }
-                    activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                }
-            }
-
-            BackHandler {
-                if (isFullscreen && !isLandscape) {
-                    isFullscreen = false
-                } else {
-                    playerHost?.stop()
-                    playing = null
-                }
-            }
-
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
-                LibmpvPlayerSurface(
-                    title.key, 
-                    playing!!, 
-                    playerHost,
-                    isFullscreen = isLandscape || isFullscreen,
-                    onToggleFullscreen = { isFullscreen = !isFullscreen }
-                )
-                if (!isLandscape && !isFullscreen) {
-                    IconButton(
-                        onClick = { playerHost?.stop(); playing = null }, 
-                        Modifier.padding(padding).padding(16.dp).background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
-                    ) { 
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close player", tint = Color.White) 
-                    }
-                }
-            }
-        }
-        return
+    // Display order across seasons: what previous/next and autoplay walk, and
+    // the same order the desktop client uses.
+    val playlist = remember(title) { title.seasons.flatMap(SeasonRecord::episodes) }
+    // Where a press on Play lands. Part-watched wins over unwatched, most
+    // recently played first, which is the order the desktop client resumes in.
+    val nextUp = remember(playlist) {
+        val resumable = playlist.withIndex().filter { it.value.resumeAt != null }
+        resumable.maxByOrNull { it.value.lastPlayed }?.index
+            ?: playlist.indexOfFirst { !it.watched }.takeIf { it >= 0 }
+            ?: 0
     }
+    // Live download state per episode, so a row can show progress and be paused
+    // without a trip to the Downloads tab.
+    val work by WorkManager.getInstance(context)
+        .getWorkInfosByTagLiveData(DownloadCoordinator.TAG).observeAsState(emptyList())
+    val downloads = remember(work) { DownloadStateStore(context).records() }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            TextButton(onClick = onBack) { 
+            TextButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Back to library") 
+                Text("Back to library")
             }
             RemoteArtwork(
                 title.backdropUrl ?: title.posterUrl,
                 title.canonicalName ?: title.name,
                 Modifier.fillMaxWidth().aspectRatio(16f / 9f).padding(top = 12.dp),
+                fallback = title.thumbnailSource,
             )
             Text(title.canonicalName ?: title.name, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 12.dp))
             title.originalName?.takeIf { it != title.canonicalName }?.let {
@@ -383,16 +558,57 @@ private fun TitleScreen(
             )
             title.overview?.let { Text(it, modifier = Modifier.padding(top = 10.dp)) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
-                Button(onClick = { DownloadCoordinator.enqueue(context, title.seasons.flatMap { it.episodes }) }) {
+                // What a press on the poster should play: whatever was left
+                // part-watched, else the first unwatched episode, else the
+                // first — the desktop client's `next_up`.
+                Button(onClick = { onPlay(playlist, nextUp) }, enabled = playerReady && playlist.isNotEmpty()) {
+                    Text(
+                        when {
+                            !playerReady -> "Player loading…"
+                            playlist.getOrNull(nextUp)?.resumeAt != null -> "Resume"
+                            title.watchedCount > 0uL -> "Continue"
+                            else -> "Play"
+                        },
+                    )
+                }
+                // Only where it would do something different: an unstarted show
+                // already starts at the beginning.
+                if (playlist.getOrNull(nextUp)?.resumeAt != null || title.watchedCount > 0uL) {
+                    FilledTonalButton(
+                        onClick = { onPlay(playlist, 0) },
+                        enabled = playerReady && playlist.isNotEmpty(),
+                    ) { Text("Start over") }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                FilledTonalButton(onClick = { DownloadCoordinator.enqueue(context, playlist) }) {
                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Download show")
                 }
-                FilledTonalButton(onClick = { showMatch = true }) { 
+                FilledTonalButton(onClick = { showMatch = true }) {
                     Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Change match") 
+                    Text("Change match")
                 }
+                // The provider's own page for this title: where a viewer goes to
+                // check that the thing the app matched is the thing they have.
+                title.externalUrl?.let { url ->
+                    TextButton(onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+                        }.onFailure(onPreferenceError)
+                    }) { Text("More on ${title.metadataProvider?.displayName() ?: "the provider"}") }
+                }
+            }
+            // Said plainly, because it changes what a re-match will do: a
+            // hand-picked match is not overwritten by an automatic pass.
+            if (title.manualMatch) {
+                Text(
+                    "Matched by hand",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
             }
             Text("${title.watchedCount} of ${title.episodeCount} watched", Modifier.padding(vertical = 12.dp))
             Text("Preferred tracks", style = MaterialTheme.typography.titleMedium)
@@ -461,21 +677,18 @@ private fun TitleScreen(
             }
             if (isExpanded) {
                 items(season.episodes, key = { it.linkId }) { episode ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Button(onClick = { playing = episode }, enabled = playerHost != null) {
-                                Text(if (playerHost == null) "Player loading…" else "Play")
-                            }
-                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                                Text(episode.label, fontWeight = FontWeight.SemiBold)
-                                Text(episode.detail, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                            }
-                            FilledTonalButton(
-                                onClick = { DownloadCoordinator.enqueue(context, episode) },
-                                enabled = !episode.offline,
-                            ) { Text(if (episode.offline) "Offline" else "Download") }
-                        }
-                    }
+                    EpisodeRow(
+                        episode = episode,
+                        download = downloads.firstOrNull {
+                            it.shareId == episode.shareId && it.linkId == episode.linkId
+                        },
+                        playerReady = playerReady,
+                        onPlay = { onPlay(playlist, playlist.indexOfFirst { it.linkId == episode.linkId }) },
+                        onDownload = { DownloadCoordinator.enqueue(context, episode) },
+                        onPause = { DownloadCoordinator.pause(context, it) },
+                        onResume = { DownloadCoordinator.resume(context, it) },
+                        onSetWatched = { onSetWatched(episode, it) },
+                    )
                 }
             }
         }
@@ -487,6 +700,110 @@ private fun TitleScreen(
             onChanged = { showMatch = false; onMetadataChanged() },
             onError = onPreferenceError,
         )
+    }
+}
+
+/**
+ * One episode: play it, see where it was left, and drive its download.
+ *
+ * A row carries the things a viewer acts on — resume, mark seen, download,
+ * pause — so they are controls, not a menu: the download button becomes the
+ * progress readout while it runs, which is the same space either way.
+ */
+@Composable
+private fun EpisodeRow(
+    episode: EpisodeRecord,
+    download: RetainedDownload?,
+    playerReady: Boolean,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit,
+    onPause: (RetainedDownload) -> Unit,
+    onResume: (RetainedDownload) -> Unit,
+    onSetWatched: (Boolean) -> Unit,
+) {
+    val running = download?.status == RetainedDownload.STATUS_RUNNING ||
+        download?.status == RetainedDownload.STATUS_QUEUED
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // The still, and the largest target on the row for the thing the
+                // row is for. With metadata off the provider has no still, and
+                // Proton's own thumbnail is a frame of this very episode.
+                RemoteArtwork(
+                    episode.stillUrl,
+                    episode.providerName ?: episode.label,
+                    Modifier
+                        .width(96.dp)
+                        .aspectRatio(16f / 9f)
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable(enabled = playerReady, onClick = onPlay),
+                    fallback = episode.thumbnailSource,
+                )
+                Spacer(Modifier.width(12.dp))
+                Button(onClick = onPlay, enabled = playerReady) {
+                    Text(
+                        when {
+                            !playerReady -> "Player loading…"
+                            episode.watched -> "Replay"
+                            episode.resumeAt != null -> "Resume"
+                            else -> "Play"
+                        },
+                    )
+                }
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(episode.label, fontWeight = FontWeight.SemiBold)
+                    // The provider's name for the episode when there is one:
+                    // "The Cave of Skulls" says more than the filename it was
+                    // parsed out of. The filename detail stays as the fallback.
+                    Text(
+                        episode.providerName ?: episode.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                    )
+                }
+                // Watched is a judgement the viewer is allowed to overrule: a
+                // half-watched episode they are done with, or one the 90 % rule
+                // marked seen because they sat through the credits.
+                IconButton(onClick = { onSetWatched(!episode.watched) }) {
+                    Icon(
+                        if (episode.watched) Icons.Default.CheckCircle else Icons.Outlined.CheckCircle,
+                        contentDescription = if (episode.watched) "Mark unwatched" else "Mark watched",
+                        tint = if (episode.watched) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outline
+                        },
+                    )
+                }
+                when {
+                    episode.offline -> Text("Offline", style = MaterialTheme.typography.labelMedium)
+                    running -> FilledTonalButton(onClick = { onPause(download!!) }) { Text("Pause") }
+                    download != null -> FilledTonalButton(onClick = { onResume(download) }) { Text("Resume") }
+                    else -> FilledTonalButton(onClick = onDownload) {
+                        Icon(Icons.Default.Download, contentDescription = "Download", modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+            // Where the episode was left, under the row it belongs to.
+            episode.progress?.takeIf { !episode.watched }?.let { progress ->
+                LinearProgressIndicator(
+                    progress = { progress.toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+            }
+            download?.takeIf { it.total > 0L && !episode.offline }?.let { active ->
+                LinearProgressIndicator(
+                    progress = { (active.downloaded.toFloat() / active.total).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+                Text(
+                    "${active.status.replaceFirstChar { it.uppercase() }} · " +
+                        "${formatBytes(active.downloaded.toULong())} of ${formatBytes(active.total.toULong())}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 
@@ -554,10 +871,13 @@ private fun ChangeMatchDialog(
 private fun SharesScreen(
     shares: List<ShareRecord>,
     onAdd: (String, String, String?) -> Unit,
+    onRepair: (String, String, String?) -> Unit,
+    onRefresh: (String) -> Unit,
     onRemove: (String) -> Unit,
     padding: PaddingValues,
 ) {
     var showAdd by remember { mutableStateOf(false) }
+    var repairing by remember { mutableStateOf<ShareRecord?>(null) }
     Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Proton Drive public links", style = MaterialTheme.typography.titleLarge)
@@ -571,6 +891,17 @@ private fun SharesScreen(
                             Text(share.name, fontWeight = FontWeight.SemiBold)
                             Text(if (share.hasCustomPassword) "Custom password stored securely" else "Public link")
                         }
+                        // One share, not the library: a link that has just had
+                        // files added to it should not cost a walk of every
+                        // other one, and a link that has expired should not stop
+                        // the ones that still work from being refreshed.
+                        IconButton(onClick = { onRefresh(share.id) }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh this share")
+                        }
+                        // Not a remove: a share whose secret has become
+                        // unreadable cannot be removed either, since removal
+                        // deletes a secret the store can no longer touch.
+                        TextButton(onClick = { repairing = share }) { Text("Re-enter link") }
                         FilledTonalButton(onClick = { onRemove(share.id) }) { Text("Remove") }
                     }
                 }
@@ -578,6 +909,68 @@ private fun SharesScreen(
         }
     }
     if (showAdd) AddShareDialog(onDismiss = { showAdd = false }, onAdd = onAdd)
+    repairing?.let { share ->
+        RepairShareDialog(
+            share = share,
+            onDismiss = { repairing = null },
+            onRepair = { url, password -> onRepair(share.id, url, password) },
+        )
+    }
+}
+
+/**
+ * Re-enter the link for a share the app can no longer decrypt its secret for.
+ *
+ * It has to be the *same* link — a different token is a different share, and
+ * repointing this one at it would leave every catalog row and every offline file
+ * describing something that is not there. Rust enforces that; this only says so.
+ */
+@Composable
+private fun RepairShareDialog(
+    share: ShareRecord,
+    onDismiss: () -> Unit,
+    onRepair: (String, String?) -> Unit,
+) {
+    var url by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        title = { Text("Re-enter link for ${share.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The stored credentials for this share cannot be read — usually after a " +
+                        "screen-lock change or a device restore. Entering the same link again " +
+                        "restores access without losing the library or anything downloaded.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    url,
+                    { url = it },
+                    label = { Text("Public share URL") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+                OutlinedTextField(
+                    password,
+                    { password = it },
+                    label = { Text("Custom password (optional)") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onRepair(url.trim(), password); onDismiss() },
+                enabled = url.isNotBlank(),
+            ) { Text("Restore") }
+        },
+        dismissButton = { FilledTonalButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -638,29 +1031,59 @@ private fun DownloadsScreen(
     // Reading retained metadata on every WorkInfo transition also hydrates
     // paused/failed/cancelled entries after WorkManager history is pruned.
     val retained = remember(downloads) { DownloadStateStore(context).records() }
-    Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
-        Text("Offline downloads", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(16.dp))
-        if (retained.isEmpty() && state.offline.isEmpty()) {
-            EmptyState("No downloads", "Episodes, seasons, and shows saved offline appear here.")
+    // Which show each saved file is from. The offline record knows its episode
+    // but not its show, and the library is the only thing that does.
+    val groups = remember(state.offline, state.titles) {
+        val shows = state.titles.flatMap { title ->
+            title.seasons.flatMap(SeasonRecord::episodes).map {
+                "${it.shareId}/${it.linkId}" to (title.canonicalName ?: title.name)
+            }
+        }.toMap()
+        state.offline
+            .groupBy { shows["${it.shareId}/${it.linkId}"] ?: "Not in the library" }
+            .toSortedMap()
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
+        contentPadding = PaddingValues(bottom = 16.dp),
+    ) {
+        item {
+            Text("Offline downloads", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(16.dp))
         }
-        state.offline.forEach { file ->
-            val episode = file.episode
-            Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(episode?.label ?: file.linkId, fontWeight = FontWeight.SemiBold)
-                        Text(formatBytes(file.size))
-                    }
-                    FilledTonalButton(onClick = { onRemove(file) }) { 
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Delete") 
+        if (retained.isEmpty() && state.offline.isEmpty()) {
+            item { EmptyState("No downloads", "Episodes, seasons, and shows saved offline appear here.") }
+        }
+        // Under the show they belong to, as on desktop: a saved season is
+        // fourteen rows, and fourteen rows of "Episode 3" name nothing.
+        groups.forEach { (show, files) ->
+            item(key = "group/$show") {
+                Text(show, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp))
+                Text(
+                    "${files.size} ${if (files.size == 1) "episode" else "episodes"} · " +
+                        formatBytes(files.sumOf { it.size }),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
+            items(files, key = { "${it.shareId}/${it.linkId}" }) { file ->
+                val episode = file.episode
+                Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(episode?.label ?: file.linkId, fontWeight = FontWeight.SemiBold)
+                            Text(formatBytes(file.size))
+                        }
+                        FilledTonalButton(onClick = { onRemove(file) }) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Delete")
+                        }
                     }
                 }
             }
         }
-        retained.forEach { download ->
+        items(retained, key = { "${it.shareId}/${it.linkId}" }) { download ->
             val progress = if (download.total > 0L) download.downloaded.toFloat() / download.total else 0f
             Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                 Column(Modifier.padding(16.dp)) {
@@ -697,17 +1120,43 @@ private fun DownloadsScreen(
 private fun SettingsScreen(
     state: AppUiState,
     onSaveMetadata: (Boolean, MetadataProvider, String, String) -> Unit,
+    onMatchAgain: () -> Unit,
+    onClearCache: () -> Unit,
+    onRemoveAllOffline: () -> Unit,
     padding: PaddingValues,
 ) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
     var wifiOnly by remember { mutableStateOf(settings.wifiOnly) }
     var backgroundAudio by remember { mutableStateOf(settings.backgroundAudio) }
+    // Playback preferences are the shared store's, not this app's: they are the
+    // same file the desktop client reads, so a language chosen on one is the
+    // language the other starts in.
+    var prefs by remember { mutableStateOf<PlaybackPrefsRecord?>(null) }
+    val scope = rememberCoroutineScope()
+    fun update(change: (PlaybackPrefsRecord) -> PlaybackPrefsRecord) {
+        val next = change(prefs ?: return)
+        prefs = next
+        scope.launch(Dispatchers.IO) {
+            runCatching { NativeRuntime.engine().setPlaybackPrefs(next) }
+        }
+    }
+    LaunchedEffect(Unit) {
+        runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().playbackPrefs() } }
+            .onSuccess { prefs = it }
+    }
+    var confirmDelete by remember { mutableStateOf(false) }
     var showMetadata by remember { mutableStateOf(false) }
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
     Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
         Text("Settings", style = MaterialTheme.typography.titleLarge)
-        SettingToggle("Download on Wi-Fi only", wifiOnly) { wifiOnly = it; settings.wifiOnly = it }
+        SettingToggle("Download on Wi-Fi only", wifiOnly) {
+            wifiOnly = it
+            settings.wifiOnly = it
+            // Constraints are baked in at enqueue time, so a queue that already
+            // exists keeps the policy it was queued under until it is re-issued.
+            DownloadCoordinator.applyNetworkPolicy(context)
+        }
         HorizontalDivider()
         SettingToggle("Continue audio in the background", backgroundAudio) {
             backgroundAudio = it
@@ -719,6 +1168,44 @@ private fun SettingsScreen(
             modifier = Modifier.padding(bottom = 14.dp),
         )
         HorizontalDivider()
+        Text("Playback", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
+        prefs?.let { current ->
+            SettingToggle("Play the next episode automatically", current.autoplayNext) { on ->
+                update { it.copy(autoplayNext = on) }
+            }
+            SettingToggle("Skip openings and endings automatically", current.autoSkip) { on ->
+                update { it.copy(autoSkip = on) }
+            }
+            Text(
+                "Openings and endings are read from the chapters a release was muxed with. " +
+                    "With this off you get a Skip button instead, which is the safer default: " +
+                    "a mis-named chapter then costs a tap rather than a scene.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 14.dp),
+            )
+            SettingToggle("Show subtitles", current.subtitles) { on ->
+                update { it.copy(subtitles = on) }
+            }
+            // Language tags, not a picker: which languages exist is a property
+            // of each file, and a list built from one episode is wrong for the
+            // next. A show that has been given its own choice keeps it.
+            LanguageField("Preferred audio language", current.audioLanguage) { tag ->
+                update { it.copy(audioLanguage = tag) }
+            }
+            LanguageField("Preferred subtitle language", current.subtitleLanguage) { tag ->
+                update { it.copy(subtitleLanguage = tag) }
+            }
+            Text(
+                "Three-letter tags as they appear in the file — \"jpn\", \"eng\". Used for every " +
+                    "title that has not been given a track choice of its own.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 14.dp),
+            )
+        }
+        HorizontalDivider()
+        Text("Appearance", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
+        AppearancePicker()
+        HorizontalDivider()
         Text("Metadata enrichment", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
         Text(
             if (state.metadataSettings.enabled) "On · ${state.metadataSettings.provider.displayName()}"
@@ -728,12 +1215,42 @@ private fun SettingsScreen(
             "Enabling this sends library title names to the selected third-party provider over HTTPS.",
             style = MaterialTheme.typography.bodySmall,
         )
-        FilledTonalButton(onClick = { showMetadata = true }, modifier = Modifier.padding(vertical = 10.dp)) {
-            Text("Configure metadata")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 10.dp)) {
+            FilledTonalButton(onClick = { showMetadata = true }) { Text("Configure metadata") }
+            // Every title looked up again, matched ones included: the way out of
+            // a library the provider answered wrong, which otherwise stays wrong
+            // for as long as the match is remembered.
+            FilledTonalButton(
+                onClick = { onMatchAgain() },
+                enabled = state.metadataSettings.enabled && !state.refreshing,
+            ) { Text("Match everything again") }
         }
         HorizontalDivider()
         Text("Storage", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
         Text("Offline media is encrypted at rest by Android and kept in app-private storage.")
+        Text(
+            "${state.storage.offlineCount} episodes offline · ${formatBytes(state.storage.offlineBytes)}",
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        if (state.storage.partialBytes > 0uL) {
+            Text(
+                "Unfinished downloads · ${formatBytes(state.storage.partialBytes)}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Text(
+            "Streaming cache · ${formatBytes(state.storage.cacheBytes)}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
+            // The cache is rebuildable, so it goes without asking. Offline
+            // episodes are a choice the viewer made, so that one asks.
+            FilledTonalButton(onClick = onClearCache) { Text("Clear cache") }
+            FilledTonalButton(
+                onClick = { confirmDelete = true },
+                enabled = state.storage.offlineCount > 0uL,
+            ) { Text("Delete all offline") }
+        }
         Text("proton-stream Android · GPL-3.0-or-later", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 24.dp))
         Text(
             "This program comes with absolutely no warranty. You may redistribute it under the GNU GPL.",
@@ -748,6 +1265,23 @@ private fun SettingsScreen(
                 legalDocument = LegalDocument("Third-party notices", "licenses/THIRD_PARTY_NOTICES.md")
             }) { Text("View notices") }
         }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete all offline episodes?") },
+            text = {
+                Text(
+                    "${state.storage.offlineCount} episodes (${formatBytes(state.storage.offlineBytes)}) " +
+                        "will be removed from this device. Watch history is kept, and anything " +
+                        "deleted can be downloaded again.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = { confirmDelete = false; onRemoveAllOffline() }) { Text("Delete") }
+            },
+            dismissButton = { FilledTonalButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
     }
     legalDocument?.let { document ->
         LegalDocumentDialog(document, onDismiss = { legalDocument = null })
@@ -854,6 +1388,120 @@ private fun SettingToggle(label: String, checked: Boolean, onChecked: (Boolean) 
     }
 }
 
+/**
+ * Flavour, accent and gradients — the same three the desktop client offers.
+ *
+ * Every colour is resolved by Rust, so a swatch here is the colour the app will
+ * actually paint rather than an approximation of it, and the choice is stored in
+ * the file both clients read.
+ */
+@Composable
+private fun AppearancePicker() {
+    val scope = rememberCoroutineScope()
+    var choice by remember { mutableStateOf<AppearanceRecord?>(null) }
+    var swatches by remember { mutableStateOf<Map<AccentChoice, Color>>(emptyMap()) }
+
+    suspend fun repaint(next: AppearanceRecord, store: Boolean) {
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val engine = NativeRuntime.engine()
+                if (store) engine.setAppearance(next)
+                val palette = engine.previewPalette(next)
+                // Every accent as it would look in *this* flavour: a swatch row
+                // that keeps Mocha's pastels while Latte is selected is a row
+                // that lies about what the next tap does.
+                val row = AccentChoice.entries.associateWith { accent ->
+                    Color(engine.previewPalette(next.copy(accent = accent)).accent.toInt())
+                }
+                palette to row
+            }
+        }.onSuccess { (palette, row) ->
+            choice = next
+            swatches = row
+            AppearanceState.apply(palette)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().appearance() } }
+            .onSuccess { repaint(it, store = false) }
+    }
+
+    val current = choice ?: return
+    Text("Palette", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+        items(FlavorChoice.entries.toList(), key = { it.name }) { flavor ->
+            val selected = flavor == current.flavor
+            if (selected) {
+                Button(onClick = {}) { Text(flavor.label()) }
+            } else {
+                OutlinedButton(onClick = {
+                    scope.launch { repaint(current.copy(flavor = flavor), store = true) }
+                }) { Text(flavor.label()) }
+            }
+        }
+    }
+    Text("Accent", style = MaterialTheme.typography.bodyMedium)
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+        items(AccentChoice.entries.toList(), key = { it.name }) { accent ->
+            val swatch = swatches[accent] ?: MaterialTheme.colorScheme.surfaceVariant
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(swatch)
+                    .border(
+                        width = if (accent == current.accent) 3.dp else 1.dp,
+                        color = if (accent == current.accent) {
+                            MaterialTheme.colorScheme.onBackground
+                        } else {
+                            MaterialTheme.colorScheme.outline
+                        },
+                        shape = CircleShape,
+                    )
+                    .clickable {
+                        scope.launch { repaint(current.copy(accent = accent), store = true) }
+                    },
+            )
+        }
+    }
+    SettingToggle("Paint the accent as a gradient", current.gradients) { on ->
+        scope.launch { repaint(current.copy(gradients = on), store = true) }
+    }
+    Text(
+        "Off is the safer setting on a panel that bands: a slow ramp across a wide bar " +
+            "shows every step it is drawn from, and flat is better than striped.",
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(bottom = 14.dp),
+    )
+}
+
+/** What each palette family is called. The desktop client says the same. */
+private fun FlavorChoice.label() = when (this) {
+    FlavorChoice.PROTON -> "Proton"
+    FlavorChoice.LATTE -> "Catppuccin Latte"
+    FlavorChoice.FRAPPE -> "Catppuccin Frappé"
+    FlavorChoice.MACCHIATO -> "Catppuccin Macchiato"
+    FlavorChoice.MOCHA -> "Catppuccin Mocha"
+}
+
+/**
+ * One language tag, committed as it is typed.
+ *
+ * Blank is a real answer and means "no preference" — the bridge stores it as
+ * absent, which is what leaves the choice to the container's own default track.
+ */
+@Composable
+private fun LanguageField(label: String, value: String?, onChange: (String?) -> Unit) {
+    OutlinedTextField(
+        value = value.orEmpty(),
+        onValueChange = { onChange(it.trim().takeIf(String::isNotEmpty)) },
+        label = { Text(label) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+    )
+}
+
 @Composable
 private fun EmptyState(title: String, body: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -864,11 +1512,12 @@ private fun EmptyState(title: String, body: String) {
     }
 }
 
-private fun formatBytes(bytes: ULong): String {
+internal fun formatBytes(bytes: ULong): String {
     val value = bytes.toDouble()
     return when {
         value >= 1024 * 1024 * 1024 -> "%.1f GiB".format(value / (1024 * 1024 * 1024))
         value >= 1024 * 1024 -> "%.1f MiB".format(value / (1024 * 1024))
-        else -> "${bytes} bytes"
+        value >= 1024 -> "%.1f KiB".format(value / 1024)
+        else -> "$bytes bytes"
     }
 }

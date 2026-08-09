@@ -7,10 +7,883 @@ verified. Reference entries from PRs.
 
 ## Open
 
-_None yet — the app is young enough that everything known is in
-`docs/DEVELOPMENT.md` as unbuilt rather than broken._
+All of B14–B33 came out of a static review of the Android client
+(`android/` and `crates/pstr-android`) on 2026-08-07. **None was reproduced on a
+device** — there was no Android acceptance harness to reproduce them with, which
+is itself B42. Each states the reasoning that identifies it; treat the
+reproduction step as part of the fix. The remediation order is `plan.md` at the
+repository root; Phases 1 to 5 of it have landed except for the tail of B41 and
+one row of Phase 5's table — everything from B14 to B39 is below in **Fixed**,
+and B41 states which of its items are done.
+
+### B41 — assorted correctness and hygiene defects
+
+Individually small, grouped so they are not lost. The items marked **Landed**
+came with Phases 4 and 5; the rest are still open, which is why this entry is.
+What remains is one item — the asynchronous track-list read-back — plus the
+`SettingsStore` construction on the main thread.
+
+- `NativeMpvHost.kt:131-135` reads the track list back immediately after an
+  asynchronous property set, so the selection tick lags by up to a second;
+  `alang`/`slang` are applied only at load (`pstr_mpv.cpp:225-227`), so a
+  language change takes effect one episode late.
+- **Landed.** `NativeMpvHost.kt` polled on `Dispatchers.Main.immediate`, and
+  `tracks_json` issues five `mpv_get_property` calls per track — 51 synchronous
+  property reads on the UI thread for a 10-track file, contending on the core
+  lock the demuxer holds during a fetch. The poll loop now runs on
+  `Dispatchers.Default` and hops to the main thread only to invoke the state
+  listener.
+- **Landed.** `PlaybackService` constructed `NativeMpvHost` in `onCreate` with
+  a `check(it != 0L)` in the constructor, so a libmpv init failure crashed the
+  process and left the graceful "this build does not include libmpv" path
+  unreachable. The constructor is private behind `NativeMpvHost.createOrNull()`,
+  the service holds a nullable host, and the binder hands back a nullable one —
+  which is what `PlayerScreen` was already written for.
+- `PlaybackService.kt:43` constructs `SettingsStore` on the main thread inside a
+  hot callback; the first SharedPreferences access is disk I/O.
+- **Landed.** `MainActivity` set `bound` only in `onServiceConnected`, so an
+  activity destroyed with a bind still pending never unbound. It is now set from
+  the `bindService` return value.
+- **Landed.** The title screen held the only `BackHandler`, so on Shares,
+  Downloads and Settings the system back button exited the app. Back from a
+  secondary tab now returns to the library.
+- **Landed.** `formatBytes` had no KiB branch — a 512 KiB partial rendered as
+  `524288 bytes`.
+- **Landed.** `ui/theme/Theme.kt` overrode ten roles of `darkColorScheme()` and
+  left `surfaceContainer*` (what Card and NavigationSuite draw with) at the
+  Material baseline, with no light scheme at all. The scheme is now built from
+  the palette `pstr_core::appearance` resolves — the same flavours, accent
+  pairings and contrast rule the desktop client uses — so both `surfaceContainer*`
+  and a light flavour are covered. Dynamic colour is deliberately still not
+  used: the app has a palette of its own and a picker for it, and taking the
+  wallpaper's hues instead would override the choice the viewer just made.
+- **Landed.** `native_handle()` minted a fresh id per call, so two calls on one
+  stream leaked a registry entry permanently. It now remembers the id it
+  published under and returns it again.
+- **Landed.** `directory_bytes` recursed with no depth limit, so a symlink
+  cycle in the cache was an uncatchable stack overflow reached from the settings
+  screen. It stops at 16 levels.
+- **Landed.** `reject_null_surface` leaked the `jclass` from `FindClass`; it is
+  released. `nativeTracks`/`nativeChapters` were declared non-null on the Kotlin
+  side, so a null from `NewStringUTF` became an NPE swallowed by `runCatching`
+  into a silently empty track list; both are nullable now. `escape()` passed
+  4-byte UTF-8 to `NewStringUTF`, which takes Modified UTF-8 — an emoji in a
+  track title was mojibake and aborted under CheckJNI. It now decodes the input
+  and re-encodes astral characters as surrogate pairs, dropping anything
+  malformed rather than passing it on.
+- **Landed.** `SettingsStore.kt` duplicated `pstr_core::prefs::PlaybackPrefs`
+  (`autoplay` most visibly), which `docs/ANDROID.md:7` says not to do. Playback
+  preferences are now read and written over the bridge, and `SettingsStore` holds
+  only what is Android's alone — the Wi-Fi-only and background-audio settings.
+  `autoSkip` went the other way, into `PlaybackPrefs`, where the desktop client
+  can pick it up.
+- **Landed.** `ProtonStreamApp.kt` carried five unused imports, which was
+  evidence that no lint gate ran. ktlint runs in `check`.
+
+### B42 — nothing verifies any of the above on a device
+
+**Symptom.** Every entry from B14 to B41 was found by reading, because there was
+no way to run it.
+
+**Cause.** `android/app/src/test/` held one file, `DownloadCoordinatorTest.kt`,
+whose five tests cover pure helpers. There was no `src/androidTest/` directory at
+all, so nothing exercised the Keystore, WorkManager, or the UniFFI boundary on
+hardware. `scripts/build-android.sh` mapped `check` to `lintDebug
+testDebugUnitTest`, and neither `build.gradle.kts` had a `lint { }` block, a
+baseline, or ktlint/detekt. `docs/ANDROID.md` mandates a manual matrix — tablet
+layout, rotation, process recreation, PiP, download cancel/resume, offline launch
+— and `.github/workflows/release.yml:63,164` blocks Android publication until an
+"on-device playback matrix" passes. Neither existed as a script; compare
+`proton-drive-linux/scripts/fuse-acceptance.sh`. `docs/TESTING.md` did not
+contain the word Android.
+
+**Fix, partly landed.** `scripts/android-acceptance.sh` now drives the
+device-side matrix, `src/androidTest/` covers the Keystore, the UniFFI boundary
+and WorkManager, host tests run under Robolectric, and `check` runs ktlint and a
+lint gate with `warningsAsErrors`. Enabling that gate immediately paid for
+itself: it reported the four `commit()` calls of
+[B20](#b20--queueing-a-season-blocked-the-ui-thread) as `ApplySharedPref` and
+the PiP omission of [B40](#b40--picture-in-picture-was-entered-but-never-adapted-to)
+as `PictureInPictureIssue`, without being told to look for either. Both have
+since landed and both left `lint-baseline.xml`, which is down from 34 entries to
+25 and shrinks as the rest land.
+
+**The live cases now exist.** `LiveShareTest` takes the share link as an
+instrumentation argument — never a constant, never a file — and covers
+`catalog`, `stream-open`, `playback`, `download-cancel-resume` and `watch-state`.
+`playback` is the load-bearing one: it drives Proton block storage, decryption,
+the Rust stream C ABI, the JNI adapter and libmpv's demuxer, and asserts the
+position advances, which can only happen if real decrypted bytes reached the
+decoder. One live run serves all five cases, because each re-crawl of a real
+share costs about six minutes and the crawl is not what any of them tests.
+
+**Still open, and the reason this entry stays open.** `picture-in-picture` is
+`pending`. It is no longer blocked on the app —
+[B40](#b40--picture-in-picture-was-entered-but-never-adapted-to) landed, so
+there is correct behaviour to assert — but the live suite drives the engine and
+libmpv directly, and PiP is a property of the window, so the case needs an
+activity-level driver that does not exist yet. Every run still prints that the
+matrix is incomplete. `process-recreation` has been promoted off its `xfail`
+now that [B35](#b35--navigation-and-player-state-did-not-survive-process-recreation)
+has landed, and has not been re-run on hardware since.
+
+**Verified on hardware**, 2026-08-08, Pixel 6 (`arm64-v8a`, API 37) against the
+signed minified release APK:
+
+```
+passed=13  failed=0  xfailed=1  xpassed=0  skipped=0  pending=1
+```
+
+against a real share: every offline case passes, `process-recreation` fails as
+the `xfail` for [B35](#b35--navigation-and-player-state-did-not-survive-process-recreation)
+predicts, the five live cases pass, and `picture-in-picture` is `pending`. All 20
+offline instrumentation tests pass on the release build. `bash scripts/build-android.sh check` passes
+with 15 host tests, no new lint findings and no compiler warnings.
+
+The first hardware run also found four defects in the harness itself and five in
+the release build; they are [B43](#b43--the-acceptance-harness-could-not-run-against-the-shipping-build)
+and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
+
+### B36 — an invalidated connection stayed live, and releasing a stream could no-op
+
+**Symptom.** Removing a share left its authenticated visitor client usable for
+the life of the process; adding a share made the next episode start pay a cold
+handshake for every configured share.
+
+**Cause.** `invalidate_connection` only bumped an `AtomicU64`. The cached
+`Connection` — including the live `ProtonDrivePublicLinkClient` for the removed
+share — stayed in `self.connection` until something next called `connection()`.
+Because the counter was process-wide rather than per-share, the next
+`connection()` re-handshaked all of them. The same counter made `release_stream`
+silently skip `source.close` whenever a share was mutated while the player was
+open, and it returned `()`, so Kotlin could not tell.
+
+**Fix.** `invalidate_connection` now takes the share id that changed, drops the
+cached connection there and then, and parks every *other* share's client for the
+next build — `SharedLibrary::open_all_reusing` takes them, so adding one link
+re-handshakes one link. The removed share's client is the one client not carried
+over, which is what makes it unreachable rather than merely stale. The cache
+slot moved to a sync mutex, with the open handshakes serialised behind a
+separate `connecting` lock, because the mutations that invalidate it are sync
+`&self` methods called from the JNI thread. `release_stream` closes against
+whatever connection is cached, regardless of generation, and returns
+`Result<(), BridgeError>`.
+
+**Verified.** `cargo test --workspace`, `cargo clippy --workspace --all-targets`.
+Not exercised on a device: the reuse path needs two configured shares and a
+network.
+
+### B37 — one provider error abandoned the rest of the library, and episode metadata was never fetched
+
+**Symptom.** Matching reported a failure and left most of the library
+unenriched; Android never showed provider episode titles at all.
+
+**Cause.** `match_titles` ran serially and propagated the first error with `?`,
+where the desktop equivalent fans out under a semaphore and deliberately counts
+failures rather than aborting. The bridge also had no analogue of desktop's
+`Work::Episodes`/`episodes_of`, so `Catalog::set_episode_metadata` was never
+populated and `all_episode_metadata` was dead from Android's side.
+
+**Fix.** `match_titles_inner` is desktop's `run_match` on a `JoinSet` under a
+two-permit semaphore: the same two kinds of work (search, or episodes for an
+already-matched title), the same "misses are stored, failures are not" rule, and
+a `MatchSummary` of matched/unmatched/failed/episodes returned across the bridge
+and shown to the viewer. `episodes_of` moved out of `pstr-app` into
+`MetadataService::title_episodes` so both clients call one implementation rather
+than two copies. `library()` now reads `all_episode_metadata` and
+`EpisodeRecord` carries the provider's name, overview, still and air date; the
+episode row shows the provider's name where there is one and the parsed filename
+detail otherwise.
+
+**Verified.** `cargo test --workspace` (desktop's matching tests cover
+`title_episodes` unchanged), `bash scripts/build-android.sh check`. The fan-out
+and the failure counting are not covered by an offline test — both need a
+provider.
+
+### B38 — the library was rebuilt in full on every keystroke, and the downloads screen composed eagerly
+
+**Symptom.** Search was sluggish on a large library; the Downloads tab froze on
+first frame with many offline episodes.
+
+**Cause.** `library()` ran four table scans, a `std::fs::metadata` per offline
+file, a `Library::build` and a full record conversion before the search argument
+was applied as a filter, and `AppViewModel` called it per keystroke. It also
+*wrote* — `remove_offline_file` — from what read as a query. On the Kotlin side
+the Downloads screen was a `Column(verticalScroll)` with `forEach`, not a
+`LazyColumn`.
+
+**Fix.** The whole conversion is cached behind `Catalog::writes()`, which is
+SQLite's own `total_changes` — a counter no write path has to remember to
+invalidate, which is the failure mode a hand-maintained one has. A search is now
+a filter over records that already exist. The pruning of offline rows whose
+bytes are gone moved into `prune_offline_files()`, called once per full reload
+rather than per keystroke, which is also what makes `library()` cacheable at
+all. Downloads is a `LazyColumn` keyed by share and link id.
+
+**Verified.** `cargo test --workspace`, `bash scripts/build-android.sh check`.
+The improvement itself is a timing claim and has not been measured on a device.
+
+### B39 — a release build logged at trace, and a TLS init failure was discarded
+
+**Symptom.** Shipped APKs wrote rustls handshake internals and everything else
+in the dependency graph to logcat. A platform-verifier initialisation failure
+surfaced much later as an unexplained certificate error.
+
+**Cause.** `initTls` called `android_logger::init_once` with `LevelFilter::Trace`
+and no `cfg!(debug_assertions)` guard, discarded the result of
+`rustls_platform_verifier::android::init_with_env`, and returned `void`, so
+Kotlin could not detect it either.
+
+**Fix.** Debug in a debug build, Info in a release one. `initTls` returns a
+boolean, logs the verifier error at `error` level, and `NativeRuntime.tlsReady`
+carries the answer to the ViewModel, which tells the viewer that requests will
+fail instead of leaving them to discover it per share.
+
+**Verified.** `bash scripts/build-android.sh check`. The failure branch cannot
+be provoked without a broken platform verifier.
+
+### B24 — playback was structurally impossible without a video surface
+
+**Symptom.** A load issued while the surface was destroyed — background audio,
+or the screen off — stalled five seconds and then failed with `libmpv rejected
+the stream or no video surface was available`.
+
+**Cause.** `Player::load` waited on `render_cv_` for a non-null `render_` with a
+5 s timeout, and `render_` was only ever created from the surface-attach path.
+There was no fallback. So the one setting whose entire purpose is playing
+without a visible window could not work, by construction.
+
+**Fix.** EGL and the mpv render context are created with the render thread and
+need no window at all — a 1×1 pbuffer is enough to make a context current, and
+`vo_libmpv` only needs *some* consumer. Attaching a surface then adds a window
+surface to a context that already exists, and `load` waits for nothing.
+
+**Verified.** Compiles for both ABIs. Needs the background-audio acceptance case.
+
+Not changed, and deliberately: `withOpenHandle` still holds its lock across the
+whole JNI call. That lock is what serialises `nativeDestroy` against every other
+entry point, and with the five-second wait gone there is no longer a JNI call
+that blocks long enough for holding it to matter — `nativeDestroy` itself now
+runs on its own thread (B16).
+
+### B25 — frames were not drained while the surface was detached
+
+**Symptom.** After the screen went off, or after PiP tore down, video came back
+desynchronised from audio rather than resuming cleanly.
+
+**Cause.** `render_update` kept setting `frame_ready_`, but
+`mpv_render_context_update`/`_render` were only called when a window surface
+existed. `vo_libmpv` expects its host to keep draining; with no consumer the
+video thread stalls.
+
+**Fix.** With no window the render loop makes the pbuffer current and renders
+with `MPV_RENDER_PARAM_SKIP_RENDERING`, which consumes the frame and drops it.
+The frame is accounted for either way, which is all mpv asks.
+
+**Verified.** Compiles for both ABIs. Needs a device to observe the sync.
+
+### B26 — the seek bar issued a seek per drag pixel
+
+**Symptom.** Dragging the seek bar on a network stream was far slower to settle
+than a single tap-to-seek, and the thumb visibly snapped backwards under the
+finger.
+
+**Cause.** The `Slider` had no drag-local state and no `onValueChangeFinished`,
+so every touch-move called `nativeSeek`. Each seek aborts every outstanding
+prefetch, so a one-second drag issued dozens of seeks and threw away every
+in-flight block — and the thumb was drawn from `state.position`, which only
+updates four times a second.
+
+**Fix.** The drag position is held locally and drives both the thumb and the
+elapsed-time label; one seek is issued on release.
+
+**Verified.** Compiles and passes `check`.
+
+### B27 — a network-backed stream gave the viewer no feedback
+
+**Symptom.** When the stream stalled the picture simply froze. When playback
+failed after `loadfile`, nothing was shown at all.
+
+**Cause.** Nothing observed `paused-for-cache`/`cache-buffering-state` and
+nothing handled `MPV_EVENT_SEEK`/`MPV_EVENT_PLAYBACK_RESTART`, so there was no
+buffering state to render — desktop has had one all along
+(`pstr-app/src/ui/transport.rs`). The error slot caught setup exceptions only:
+no `MPV_EVENT_LOG_MESSAGE` and no end reason reached the UI, and the message
+could not be dismissed.
+
+**Fix.** Both cache properties are observed and both seek events handled, giving
+`MpvPlaybackState.stalled` — the picture is stopped for a reason the viewer did
+not choose — which draws a spinner and, while buffering, the cache percentage.
+mpv's own error log is requested at `error` level and the *first* line about the
+open file is kept: a failure cascades, and the first line is the one that names
+the cause. It is consumed by reading, cleared by the next load, and reaches the
+same error slot, which is now dismissible — a subtitle track that failed to load
+leaves an episode that plays perfectly well behind what used to be a permanent
+message.
+
+**Verified.** Compiles for both ABIs and passes `check`. The stall path needs a
+throttled link on a device.
+
+### B33 — audio focus was handled halfway, and unplugging headphones played out loud
+
+**Symptom.** After any interruption playback stayed paused until the user
+manually resumed. Unplugging headphones continued playback on the speaker.
+
+**Cause.** `AUDIOFOCUS_LOSS_TRANSIENT` paused and `AUDIOFOCUS_GAIN` was
+explicitly `Unit`, so nothing ever resumed; `AUDIOFOCUS_LOSS` did not abandon
+the request; the `requestAudioFocus` result was discarded, so playback proceeded
+even on `AUDIOFOCUS_REQUEST_FAILED`. There was no `ACTION_AUDIO_BECOMING_NOISY`
+receiver anywhere in the module.
+
+**Fix.** The four cases are treated as the four different things they are: a
+transient loss pauses and remembers that *it* did — so a viewer who had already
+paused is not resumed for them — and gain resumes only in that case; a duckable
+loss drops the volume and restores the remembered one rather than a re-read
+ducked one; a permanent loss abandons the request instead of holding it; and a
+refused request pauses rather than playing over whatever holds focus. A
+non-exported `becomingNoisy` receiver pauses on the jack being pulled.
+
+**Verified.** Compiles and passes `check`. Every case needs a device.
+
+### B34 — a partial EGL failure was permanent, silent and undiagnosable
+
+**Symptom.** A black screen that persisted for the life of the process.
+
+**Cause.** `initialize_egl` assigned `display` before it could still fail at
+`eglChooseConfig`, `eglCreateContext` or `eglCreatePbufferSurface`. The retry
+guard on the next attach was `display == EGL_NO_DISPLAY`, which was now false,
+so initialisation was never retried — and every later attach used an
+uninitialised `config` and `EGL_NO_CONTEXT`. No `eglGetError` was checked or
+logged anywhere in the file.
+
+**Fix.** Initialisation is all-or-nothing: any failing step unwinds everything
+before it and restores the sentinels, so the guard stays honest, and logs
+`eglGetError` with the name of the step that failed. Landed early, with B24 —
+the two are the same function and B24's restructure depends on "is there a
+display" meaning what it says.
+
+**Verified.** Compiles for both ABIs. The failure path needs a device that
+actually fails.
+
+### B35 — navigation and player state did not survive process recreation
+
+**Symptom.** Toggling dark mode, changing font size, or returning after the
+process was killed dropped the viewer back on the Library tab with playback
+gone. Closing the player reset the title page's scroll and expanded seasons.
+
+**Cause.** The destination, the selected title, the play request and the
+player's episode index were plain `remember`, and nothing was written to
+`onSaveInstanceState`. The `configChanges` list covered orientation and screen
+size but not `uiMode|density|fontScale|locale|layoutDirection`. And when a play
+request existed the composable *returned* before the scaffold, disposing the
+whole subtree, so the title page was rebuilt from the top on exit.
+
+**Fix.** What is saved is keys, not records: which title and which episode. A
+`TitleRecord` is neither parcelable nor still current after a library reload, so
+everything else is derived from `state.titles` — which also means a reload that
+renames a season updates the open screen instead of pinning a stale copy. The
+player's index is hoisted to the same place for the same reason.
+`configChanges` covers the five missing configurations, and the player is drawn
+*over* the scaffold rather than instead of it, so leaving it finds the title page
+where it was.
+
+**Verified.** Compiles and passes `check`. The `process-recreation` acceptance
+case is `xfail` against this bug — it should now be promoted, which needs a
+device run to confirm.
+
+### B16 — tearing down the player could block the main thread for a whole block fetch
+
+**Symptom.** Closing the player or stopping the service on a degraded connection
+froze the UI; a seek issued during a stalled read did not take effect until the
+read completed.
+
+**Cause.** `~Player` calls `mpv_terminate_destroy`, which joins mpv's demuxer
+thread — and that thread may be parked inside `stream_read` →
+`read_range_for_native` → `runtime.block_on(stream.read_range(...))` on a 4 MiB
+Proton block. `stream_cancel` only set an atomic that `stream_read` checked at
+*entry*, so an in-flight read was not interruptible and mpv's `cancel_fn` never
+reached Rust at all. `pstr-stream` has had a working cancellation story since
+[B6](#b6--read-ahead-starved-the-seeks-it-was-supposed-to-smooth); the Android
+path could not reach any of it. And `close()` ran the whole teardown on the main
+thread, from `PlaybackService.onDestroy`.
+
+**Fix.** `pstr_android_stream_cancel` is a new C ABI entry point that trips a
+`tokio::sync::Notify` the in-flight `read_range` is selected against, and
+`stream_cancel` calls it. Only a waiting read is affected — a cancel with no
+reader is dropped — which is what makes it safe to call speculatively.
+`nativeDestroy` moved to a named teardown thread; `closed` is set first so
+nothing new enters the handle, and the lock is held only to let a call already
+inside finish.
+
+**Verified.** Compiles for both ABIs. The latency claim needs the throttled-link
+acceptance case.
+
+### B20 — queueing a season blocked the UI thread
+
+**Symptom.** "Download show" on a long series froze the app, up to an ANR.
+
+**Cause.** `DownloadStateStore` used blocking `.commit()` and
+`DownloadCoordinator` looped it once per episode, from UI click handlers. A
+200-episode series was 200 synchronous fsyncs plus 200 `enqueueUniqueWork` calls
+on the main thread.
+
+**Fix.** Every write is `apply()` — the in-memory map is updated before it
+returns, so a read that follows a write in the same process still sees it — and
+a queue is one `putAll` rather than one write per episode. Bulk enqueue runs on
+the coordinator's own IO scope.
+
+**Verified.** `check` passes, and the four `ApplySharedPref` entries left the
+lint baseline.
+
+### B21 — cancelling a coroutine did not cancel the Rust work behind it
+
+**Symptom.** Backing out of a screen left provider requests and SQLite writes
+running; a cancelled download kept downloading and kept calling back into a
+`DownloadObserver` WorkManager considered dead.
+
+**Cause.** Every async export had the shape `runtime.spawn(async { … }).await`.
+UniFFI cancellation drops the Rust future, and dropping a `JoinHandle`
+*detaches* the task rather than aborting it.
+
+**Fix.** All eight exports go through `spawned(&runtime, …)`, which wraps the
+handle in an `AbortOnDrop` that aborts on the way out. Abort points are await
+points, so a blocking SQLite statement always completes; what is abandoned is
+the work after it.
+
+**Verified.** Compiles and passes clippy; the observable half needs the
+cancelled-download acceptance case.
+
+### B22 — playback and downloads never refreshed an expired visitor session
+
+**Symptom.** After the app sat in the background for hours, playing an episode
+failed with an authentication error, and the only way out was a pull-to-refresh.
+
+**Cause.** `SharedLibrary::refresh_session` was called only from `crawl_inner`.
+`open_stream_inner` and `download_episode_inner` went straight to
+`connection().source.open(...)` with no refresh and no retry, and the generation
+counter invalidates on share-store mutations only — never on session age or an
+auth failure.
+
+**Fix.** Both open paths go through `open_from_source`, which has two guards
+because there are two ways to lose a session. Age is the common one, caught
+before the request by a per-share timestamp with a five-minute window; anything
+else only shows up as a failure, so one retry behind a refresh covers it. A
+refresh that itself fails is not reported — the open's own error is more useful.
+
+**Verified.** Compiles. Needs a live session to actually expire.
+
+### B23 — read-ahead outlived the stream it was reading for
+
+**Symptom.** Closing the player mid-episode kept consuming data, and evicted
+blocks the *next* stream had already fetched.
+
+**Cause.** There was no `impl Drop` anywhere in `pstr-stream`.
+`VideoStream::read_ahead_from` spawned detached tasks each holding an
+`Arc<Inner>`, and `cancel_read_ahead` ran only on a detected seek.
+`StreamSource::close` popped the LRU entry and called `ring.forget`, but the
+in-flight prefetches kept running and re-inserted into the ring the `forget` had
+just cleared.
+
+**Fix.** Prefetch tasks hold a `Weak<Inner>` and upgrade only for the block they
+are fetching, so a queue of speculation no longer keeps its own stream alive.
+`Drop for Inner` then aborts whatever is left, and `StreamSource::close` cancels
+explicitly *before* clearing the ring, so nothing can re-insert into it. The
+residue is the one block a prefetch had already upgraded for; the window behind
+it is not.
+
+**Verified.** `abandoning_a_stream_stops_its_read_ahead` in
+`crates/pstr-stream/src/stream.rs` — drops a stream with prefetches in flight
+against a slow source and asserts at most one more fetch lands.
+
+### B29 — the Wi-Fi-only setting did not reach work already queued
+
+**Symptom.** Queue a season with the toggle off, turn it on, leave the house —
+the queue downloaded over cellular.
+
+**Cause.** `Constraints` were baked in from `SettingsStore(context).wifiOnly` at
+enqueue time, and nothing re-enqueued pending work when the setting changed.
+
+**Fix.** `DownloadCoordinator.applyNetworkPolicy` re-issues every queued or
+running download with the current constraint, and the toggle calls it. Running
+work needs no special handling: WorkManager stops it once the new constraint
+stops being met, and the `.part` file makes that a pause rather than a loss.
+
+**Verified.** Compiles and passes `check`.
+
+### B30 — a partial download could become unreclaimable
+
+**Symptom.** Settings reported several GiB of unfinished downloads with no way
+to delete them short of clearing app data.
+
+**Cause.** `remove_all_offline` iterated `catalog.all_offline_files()` —
+*completed* downloads only — so a `.part` with no catalog row was never touched.
+Nothing checked free space before enqueuing, and the work constraints set
+neither `setRequiresStorageNotLow` nor anything else, so ENOSPC was reached by
+writing to it.
+
+**Fix.** "Delete all offline" now sweeps the offline directory after walking the
+catalog, because the catalog is not a complete account of what is on disk — the
+orphaned `.part` is exactly the file the button exists to reclaim. Callers
+cancel outstanding work first, so nothing swept is being written to. Enqueue
+gained a `StatFs` precheck against the request's own total with 256 MiB of
+headroom, refusing as a recorded failure rather than an ENOSPC, and the work
+constraint gained `setRequiresStorageNotLow`.
+
+**Verified.** Compiles and passes `check`. The reclaim path needs a device with
+a real partial download.
+
+### B31 — download progress wrote to disk a dozen times a second
+
+**Symptom.** Notification rate-limiting warnings and visible jank during a fast
+download; a pause could silently revert.
+
+**Cause.** The observer ran per 4 MiB block and each invocation did a
+`setProgressAsync` (a WorkManager DB write), a `setForegroundAsync`, a
+`createNotificationChannel` re-run, and a `commit()`-backed read-modify-write of
+the retained record. At 50 MB/s that is roughly twelve of each per second. The
+read-modify-write was not atomic against `pause()`: a write landing between the
+two halves put `RUNNING` back over `PAUSED`, after which the worker's own
+cancellation handler saw a status that was not `PAUSED` and recorded
+`CANCELLED`. The pause was lost.
+
+**Fix.** A report is made only when the percentage moves or a second has passed,
+and the final one is never suppressed. The channel is created once per run.
+`DownloadStateStore.update` does the read and the write under one process-wide
+lock, and `pause`/`cancel` go through it too — which also stops a screen's stale
+copy from clobbering the progress the worker has since written.
+
+**Verified.** Compiles and passes `check`, host tests included. The lost-pause
+race needs the concurrent-pause acceptance case.
+
+### B14 — a failed episode was marked watched and the next one autoplayed
+
+**Symptom.** An episode that failed to demux was recorded as watched, the player
+advanced to the next one, and the foreground service tore down. No error was
+shown anywhere.
+
+**Cause.** `pstr_mpv.cpp` set `state_.ended` on `MPV_EVENT_END_FILE` without
+reading `mpv_event_end_file.reason`, so `EOF`, `STOP`, `ERROR` and `REDIRECT`
+were indistinguishable. Three consumers read the flag as "played to the end":
+the watch-state write, the autoplay advance, and the service's teardown. The
+desktop player has always modelled this — `pstr-player/src/player.rs:46-70`
+carries `EndReason::{Eof,Failed,Stopped}` — so it was an Android-only
+divergence.
+
+**Fix.** `EndReason` now exists on both sides of the JNI boundary with the same
+five values, filled from `mpv_event_end_file.reason` and carried through
+`MpvPlaybackState.endReason`. The watched write and the autoplay advance test
+for `Eof` alone; `Failed` puts a message in the player's error slot instead of
+silently skipping the episode.
+
+**Verified.** Compiles for both shipped ABIs; the behaviour needs the `playback`
+acceptance case against a file mpv cannot demux, which does not exist yet.
+
+### B15 — an episode transition could release the incoming episode's own stream
+
+**Symptom.** Changing episodes intermittently killed the new episode
+immediately, or skipped it outright.
+
+**Cause.** `loadfile` is asynchronous. `Player::load` reset the state and bumped
+the generation counter, then mpv stopped the outgoing file and emitted
+`END_FILE(STOP)` — which the event thread applied to the *already bumped*
+generation. The 250 ms poller could sample inside that window and produce
+`MpvPlaybackState(ended=true, media=<new key>)`, a reading that passed every
+generation guard in the code. The service then released the stream handle
+Kotlin had already swapped to the new episode's, so every subsequent
+`stream_read` returned `-1`. Separately, `NativeMpvHost.play` released the
+outgoing handle the instant `nativeLoad` returned, while the outgoing demuxer
+might still be reading it.
+
+**Fix.** The native state carries a `loading` flag, set when `loadfile` is
+issued and cleared by mpv's own `START_FILE`. Everything mpv reports in that
+window describes the outgoing file, and is now discarded rather than attributed
+to the incoming one — the end reason above all, but also position, duration and
+the video dimensions. (`pause`, `volume` and `mute` belong to the core, carry
+across a load, and are still applied.) Stream release moved out of Kotlin
+entirely and into `stream_close`, which is the one moment defined to be after
+mpv's last read.
+
+**Verified.** Compiles for both ABIs. Needs the rapid-episode-switch acceptance
+case.
+
+### B17 — autoplay into the background crashed the app
+
+**Symptom.** With background audio on, an episode ending while the activity was
+stopped could crash with `ForegroundServiceStartNotAllowedException`.
+
+**Cause.** The service retired itself — `stopForeground` plus `stopSelf` — the
+moment a file ended, and `onPlaybackStarted` then called `startService` +
+`startForeground` for the next one. Composition survives `onStop`, so autoplay
+runs with the app backgrounded, and by then the app held no foreground state at
+all: the API 31+ background-start restriction applied to precisely the case the
+`backgroundAudio` setting exists to serve.
+
+**Fix.** Teardown is deferred rather than immediate. `NativeMpvHost.advancing`
+is raised by the player before it opens the next episode's stream and lowered
+when `play` returns either way; the service waits it out before retiring, with a
+30 s ceiling so a failed transition still ends. `startForeground` is not
+re-entered when the service is already foregrounded, and the start pair is
+wrapped so the exception is a lost notification rather than a crash.
+
+**Verified.** Compiles. Needs an acceptance case that ends an episode with the
+activity stopped.
+
+### B18 — a Keystore failure panicked across the FFI and left no way back
+
+**Symptom.** If the Keystore key was invalidated — lockscreen change, device
+restore, alias loss — every share became permanently unopenable, and the user
+saw a Java stack trace in a snackbar.
+
+**Cause.** `BridgeError` did not implement `From<UnexpectedUniFFICallbackError>`,
+so uniffi's generic converter routed to `handle_callback_unexpected_error`,
+which panics unconditionally — on whichever thread was calling, including a
+tokio worker in the middle of a download. `KeystoreSecretStore` threw raw Java
+exceptions throughout, none of them a `BridgeError`. `DownloadObserver`'s
+methods were not `Result`-typed at all, so a `setForegroundAsync` throwing
+(routine on API 31+ when backgrounded) panicked mid-download. And there was no
+recovery path: only Remove-and-re-add, which the same error blocks, because
+removal deletes a secret the store can no longer read.
+
+**Fix.** Four parts. `BridgeError` implements the conversion, so an unmapped
+Kotlin exception is an ordinary error. `KeystoreSecretStore` wraps every
+operation and leaves only `BridgeException`s, carrying the message and not the
+stack trace. `DownloadObserver`'s two methods are fallible: a progress report
+that cannot be delivered is logged and ignored, and an unanswerable cancellation
+question is answered "no", because the `.part` file makes the next attempt a
+resume either way. For recovery, `ShareStore::replace_secrets` re-supplies a
+share's link while keeping its id — so the catalog rows and offline files keyed
+by it survive — reachable from a "Re-enter link" action on each share. It
+refuses a link for a different token. `KeystoreSecretStore.set` also replaces a
+permanently invalidated key rather than failing against it, since nothing that
+key sealed was readable anyway.
+
+**Verified.** `cargo test -p pstr-core shares` covers both halves of
+`replace_secrets`; the instrumentation tests for tampered, truncated and
+key-destroyed payloads now assert `BridgeException` specifically. The
+end-to-end recovery flow needs a device.
+
+Not a defect, recorded so it is not re-litigated: the IV handling is correct — a
+fresh random IV per `Cipher.init(ENCRYPT_MODE)`, prepended, 128-bit tag. The key
+is still not auth-bound and `setUnlockedDeviceRequired(true)` is still not set,
+which remains a deliberate-looking choice that has never been written down.
+
+### B19 — one oversized poster crashed the app on every launch
+
+**Symptom.** The library grid OOM-crashed, and kept crashing after a restart
+until app data was cleared.
+
+**Cause.** `RemoteArtwork.kt` bounded the *compressed* download at 12 MiB and
+then decoded with no `inJustDecodeBounds` pre-pass and no `inSampleSize`. A
+12 MiB PNG can be 12000×12000, which is a 576 MB `ARGB_8888` allocation. The
+file was written to the cache *before* the decode, and that cache was never
+pruned and had no size cap, so the poison persisted. There was no in-memory
+cache either: `remember(url)` is per-composition, so scrolling a
+`LazyVerticalGrid` re-read and re-decoded at full resolution on every item
+re-entry.
+
+**Fix.** A bounds pass settles an `inSampleSize` against a 1024 px longest edge
+before anything is allocated. Bytes are written to the disk cache only once they
+have decoded, so a hostile image is a missing poster rather than a permanent
+crash. The directory is pruned oldest-first to 48 MiB after each new entry, and
+a byte-sized `LruCache` in front of it — capped at an eighth of the heap, 4–32
+MiB — means a scroll costs neither a read nor a decode.
+
+**Verified.** Compiles and passes `check`. The crash-loop case needs a device
+and a deliberately large image.
+
+### B28 — closing the player leaked the Rust stream every time
+
+**Symptom.** Ring-buffer and disk-cache handles accumulated for the life of the
+process, once per episode change.
+
+**Cause.** The player disposed with `scope.launch { session.closeEngine() }`
+where `scope` was a `rememberCoroutineScope()`. `launch` dispatches through
+`AndroidUiDispatcher` rather than running inline, and by the time it would have
+run the composition had left and that scope was cancelled — so
+`releaseStream` never executed. The session is `remember(key)`, so this fired on
+every episode change as well as every exit.
+
+**Fix.** `RustStreamSession.close` runs the release on a process-lifetime scope
+of the session file's own, matching the lifetime of the engine it releases to.
+The one moment this has to run is the one moment a composition scope is
+guaranteed to be cancelled, so the scope cannot be the caller's.
+
+**Verified.** Compiles and passes `check`.
+
+### B32 — the media notification and lock-screen control were unusable
+
+**Symptom.** The collapsed media notification showed no buttons, no title and no
+art; the notification was rewritten four times a second.
+
+**Cause.** `PlaybackService`'s `onStateChanged` callback rebuilt both
+`PlaybackState` and `MediaMetadata` on every poll tick, unconditionally. The
+metadata carried only `METADATA_KEY_DURATION` — no title, artist or art — and
+`notification()` hardcoded `"proton-stream"` / `"Playing"` rather than the
+episode. `Notification.Action.Builder` was passed a `null` icon while
+`setShowActionsInCompactView(0, 1)` asked MediaStyle to render icons, so the
+buttons were invisible. Neither the state actions nor the notification carried
+skip-next/previous, so there was no episode control from the lock screen or a
+Bluetooth remote, and `setSessionActivity` was unset.
+
+**Fix.** The player publishes a `NowPlaying` — episode, show, detail, poster URL
+and whether the playlist has an episode either side — through `NativeMpvHost`,
+because the composition that knows those things is unreachable from a service.
+`PlaybackService` collects it, fetches the poster through the same HTTPS-only,
+disk-cached loader the library grid uses (so the shade costs no second
+download), and builds `MediaMetadata` with title, artist, description and art.
+The notification gains framework icons, previous/next actions gated on the
+playlist position, `setSessionActivity`, a colorized MediaStyle on the app's
+accent, and a dedicated monochrome status-bar glyph. Re-posting is gated on a
+`NotificationShape` — the inputs the notification is actually built from — so a
+poll tick that changes only the position no longer rewrites it.
+
+**Verified.** Compiles and packages; `check` clean. The rendered result needs a
+device.
+
+### B40 — Picture-in-Picture was entered but never adapted to
+
+**Symptom.** The full controls overlay, the skip button and the up-next card
+drew inside the PiP window, which itself had no play/pause control. On a device
+using gesture navigation it was usually never entered at all.
+
+**Cause.** There was no `onPictureInPictureModeChanged` override anywhere.
+`MainActivity` set no `setActions`, hardcoded `Rational(16, 9)` rather than
+deriving the video's aspect, and called `setAutoEnterEnabled(true)` on params
+that were passed to `enterPictureInPictureMode` but never registered via
+`setPictureInPictureParams` — so auto-enter never armed, leaving only
+`onUserLeaveHint`, which the swipe-home gesture does not send.
+
+**Fix.** `mpv`'s `video-params/dw`/`dh` are observed and carried through
+`nativeState` into `MpvPlaybackState`, giving the real aspect, clamped to the
+range Android will accept rather than left to be refused outright on a 2.40:1
+release. `MainActivity` folds those plus the paused flag into a
+`PictureInPictureShape` and re-registers `setPictureInPictureParams` whenever it
+changes, which is what arms auto-enter; the params carry previous/play-pause/next
+`RemoteAction`s and a source-rect hint so the transition shrinks the video
+already on screen. The remote actions are delivered by a runtime-registered,
+non-exported `BroadcastReceiver` rather than a service intent, PiP being one of
+the states in which a background service start is refused.
+`onPictureInPictureModeChanged` drives a flag through `ProtonStreamApp` into
+`PlayerScreen`, which then draws the picture and nothing else — no title bar, no
+transport, no skip offer, no up-next card — and restores the controls on the way
+out rather than leaving them mid-timeout.
+
+**Verified.** Compiles and packages; `check` clean, and the
+`PictureInPictureIssue` lint entry is gone from the baseline rather than
+suppressed. The `picture-in-picture` acceptance case is now implementable — it
+was `pending` precisely because the assertion would have had to assert this bug.
+
+### B45 — the play/pause button did nothing, everywhere
+
+**Symptom.** Once an episode was open, every transport that can pause it was
+dead: the player's own button, the media notification's, the one in the
+notification shade's media control, and the lock screen's. All four drew "Play"
+over a file that was plainly playing, and pressing them changed nothing.
+
+**Cause.** `Player::load` (`pstr_mpv.cpp`) resets `state_` to a fresh
+`PlaybackState` before issuing `loadfile`, deliberately, so that the outgoing
+file's clock is not read under the incoming file's name — and `PlaybackState`
+defaults `paused` to `true`. But `pause` is a property of the mpv *core*, not of
+the file: mpv carries it across `loadfile` unchanged and therefore never
+re-publishes it. The observer that would have corrected the reset only fires on
+a change that never comes, so `state_.paused` stayed `true` for the whole
+episode.
+
+Everything downstream believed it. The transport drew Play, and
+`host.setPaused(!state.paused)` therefore sent *unpause* to a core that had
+never paused — a no-op, and the icon did not move afterwards either.
+`PlaybackService` published `STATE_PAUSED` for the same reason, so the shade's
+media control offered Play and its `onPlay` took the same no-op path. Only
+volume and mute escaped, being the two fields `load` already carried across.
+
+**Fix.** `load` preserves `paused` alongside `volume` and `muted`, with the
+reason recorded where the reset is. `Player::pause` also writes the flag through
+to `state_` rather than waiting for the observer, so a tap moves the transport on
+the frame it happens rather than on the next poll a quarter second later, and
+the UI is right even if the property event is ever lost. `NativeMpvHost.setPaused`
+mirrors that write into `MpvPlaybackState` and notifies the service, so the
+notification flips with the button.
+
+**Verified.** Compiles and packages for both shipped ABIs; `check` passes with
+no new lint findings. The behaviour itself needs the `playback` acceptance case
+on a device.
+
+
+### B43 — the acceptance harness could not run against the shipping build
+
+**Symptom.** The first run on real hardware failed `native-libraries` on an APK
+that plainly contained them, and could not have run against a release APK at all.
+
+**Cause.** Four defects, none of which a device-free run could expose. The
+package name and the activity class were treated as sharing a prefix, so `launch`
+built `<package>/.MainActivity` — the leading dot expands against the *package*
+argument, which on a debug build names `io.narl.protonstream.debug.MainActivity`,
+a class that does not exist. `PACKAGE` was hardcoded to the debug applicationId,
+so pointing the suite at a release APK found nothing installed. The
+`native-libraries` case listed the on-device `lib/` directory, which
+`useLegacyPackaging = false` leaves legitimately empty because the libraries are
+mapped straight out of the APK. And `assert_no_crash` filtered logcat on
+`PACKAGE.split(".")[0]` — the string `"io"` — then failed on any `FATAL` line,
+so `offline-launch` failed on the Google Play services crash that its own
+airplane-mode toggle provokes.
+
+**Fix.** The activity is named by its fully-qualified class; `--release`,
+`--package` and `--apk` resolve the APK and applicationId together;
+`native-libraries` pulls the installed `base.apk` and reads its `lib/<abi>/`
+entries, which also works under `--no-install`; crash detection is scoped to the
+app's own process by the `Process:` line the runtime prints under a
+`FATAL EXCEPTION` and by `>>> <package> <<<` in a native tombstone. Two further
+fixes came out of the same run: the `instrumentation` case shelled `gradlew`
+without `JAVA_HOME` or `ANDROID_TEST_BUILD_TYPE`, so it inherited a JDK 26 and
+asked for a task that only exists when `testBuildType` is `release`; and cases
+that start the app now wake and unlock the screen first, because a dark screen has
+no resumed activity and the failure looks like a crashed app.
+
+**Verified.** Full matrix green on a Pixel 6 (API 37) against the signed release
+APK; see [B42](#b42--nothing-verifies-any-of-the-above-on-a-device).
+
+### B44 — R8 broke the app under instrumentation in five places
+
+**Symptom.** `connectedReleaseAndroidTest` died in `newApplication` before a
+single test ran. Fixing that produced another crash, five times over.
+
+**Cause.** The instrumentation APK is minified in its own R8 run that consumes
+the app's mapping file and links against the app's classes at runtime. That
+arrangement breaks in two ways: the mapping carries renames but not R8's
+parameter-permutation optimisation, and a class only the test APK reaches is
+unreachable from the app's call graph, so R8 removes it from the app while the
+test APK does not bundle it. In order:
+
+1. R8 rewrote `Intrinsics.checkNotNullParameter(Object, String)` to take
+   `(String, Object)`. Every Kotlin class in both APKs calls it on entry —
+   `NoSuchMethodError: No static method f(Ljava/lang/Object;Ljava/lang/String;)V
+   in class Lo6/k;`.
+2. `androidx.tracing.Trace`, which `AndroidJUnitRunner.onCreate` uses and nothing
+   in the app reaches, was dropped.
+3. `androidx.work.WorkManager` is absent from `mapping.txt` entirely rather than
+   renamed: the app only touches the implementation, so R8 vertically merged the
+   abstract class into `WorkManagerImpl` and JUnit's field scan could not
+   construct the test class.
+4. `DownloadStateStore.clear()` has exactly one call site (`AppViewModel`), so R8
+   inlined it and dropped the method — invisible to the app, fatal to a caller
+   that resolves it by name.
+5. The same for `SettingsStore.setWifiOnly`, and then for the synthesised
+   `DownloadCoordinatorKt` facade that holds the package's top-level functions.
+
+**Fix.** `android/app/proguard-instrumentation.pro`, applied to the release
+build, with each keep annotated by the crash it repairs. Only the last group is
+app code, and the file states the trade-off plainly: those classes are no longer
+optimised in the shipping build, so the suite no longer proves R8 handles them —
+a narrow loss, since the surfaces R8 has actually broken here are the FFI ones,
+and those are kept for functional reasons in `proguard-rules.pro` and stay under
+test. The APK grew from 102.6 MB to 105.1 MB, roughly 2.4%, on a package that is
+almost entirely native libraries.
+
+**Verified.** 20/20 instrumentation tests pass on the signed minified release
+APK, including the whole UniFFI boundary and the Keystore crypto suite — which is
+the first direct evidence that R8 does not break the FFI.
 
 ### B13 — the player's controls ran off the bottom of the window
 

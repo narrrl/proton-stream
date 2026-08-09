@@ -1622,7 +1622,7 @@ impl Engine {
                             // Only for a title that matched: there is no id to
                             // ask about otherwise.
                             let episodes = match &record.metadata {
-                                Some(found) => episodes_of(&service, title, found).await,
+                                Some(found) => service.title_episodes(title, found).await,
                                 None => Vec::new(),
                             };
                             Ok((record.title_key.clone(), Some(record), episodes))
@@ -1632,7 +1632,7 @@ impl Engine {
                     Work::Episodes(title, found) => Ok((
                         title.key.clone(),
                         None,
-                        episodes_of(&service, title, found).await,
+                        service.title_episodes(title, found).await,
                     )),
                 })
             });
@@ -1744,7 +1744,7 @@ impl Engine {
                 return engine.fail("store the match", error);
             }
 
-            let episodes = episodes_of(&service, &title, &found).await;
+            let episodes = service.title_episodes(&title, &found).await;
             if !episodes.is_empty() {
                 let stored = engine.catalog.lock().set_episode_metadata(
                     &title.key,
@@ -1853,53 +1853,6 @@ enum Work {
     Match(Title),
     /// It is already matched; only the episode list is missing.
     Episodes(Title, Box<pstr_core::metadata::TitleMetadata>),
-}
-
-/// The episode list for a whole title, with a failure treated as an empty one.
-///
-/// Deliberately not fatal to the title it belongs to: a poster and a synopsis
-/// that arrived are worth keeping even when the episode request was the one
-/// that hit the rate limit. The empty result is not cached as an answer — the
-/// next match run asks again — because the only thing that triggers one is a
-/// viewer pressing the button.
-///
-/// The match itself only ever answers for *one* entry, and on a provider that
-/// files each sequel separately — AniList — that entry is season one. So each
-/// further season of the title is searched for by name and its episodes are
-/// tagged with the season they came from; without that, seasons two and three
-/// have no episode names at all. See
-/// [`MetadataService::season_episodes`](pstr_meta::MetadataService::season_episodes).
-async fn episodes_of(
-    service: &MetadataService,
-    title: &Title,
-    found: &pstr_core::metadata::TitleMetadata,
-) -> Vec<pstr_core::metadata::EpisodeMetadata> {
-    let mut episodes = service
-        .episodes(found)
-        .await
-        .inspect_err(|error| tracing::warn!("episodes for {}: {error}", found.name))
-        .unwrap_or_default();
-
-    if !service.splits_seasons() {
-        return episodes;
-    }
-
-    // Season one is what the title's own match already answered for.
-    let later: Vec<u32> = title
-        .seasons
-        .iter()
-        .filter_map(|season| season.number)
-        .filter(|number| *number > 1)
-        .collect();
-    for season in later {
-        match service.season_episodes(title, season).await {
-            Ok(found) => episodes.extend(found),
-            Err(error) => {
-                tracing::warn!("episodes for {} season {season}: {error}", title.name);
-            }
-        }
-    }
-    episodes
 }
 
 /// Unix seconds, for the "when was this asked" columns.

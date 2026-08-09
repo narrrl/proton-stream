@@ -223,6 +223,54 @@ impl MetadataService {
         Ok(episodes)
     }
 
+    /// The episode list for a whole title, with a failure treated as an empty
+    /// one.
+    ///
+    /// Deliberately not fatal to the title it belongs to: a poster and a
+    /// synopsis that arrived are worth keeping even when the episode request
+    /// was the one that hit the rate limit. The empty result is not cached as
+    /// an answer — the next match run asks again — because the only thing that
+    /// triggers one is a viewer pressing the button.
+    ///
+    /// The match itself only ever answers for *one* entry, and on a provider
+    /// that files each sequel separately — AniList — that entry is season one.
+    /// So each further season of the title is searched for by name and its
+    /// episodes are tagged with the season they came from; without that,
+    /// seasons two and three have no episode names at all. See
+    /// [`MetadataService::season_episodes`].
+    pub async fn title_episodes(
+        &self,
+        title: &Title,
+        found: &TitleMetadata,
+    ) -> Vec<EpisodeMetadata> {
+        let mut episodes = self
+            .episodes(found)
+            .await
+            .inspect_err(|error| tracing::warn!("episodes for {}: {error}", found.name))
+            .unwrap_or_default();
+
+        if !self.splits_seasons() {
+            return episodes;
+        }
+
+        // Season one is what the title's own match already answered for.
+        let later: Vec<u32> = title
+            .seasons
+            .iter()
+            .filter_map(|season| season.number)
+            .filter(|number| *number > 1)
+            .collect();
+        for season in later {
+            match self.season_episodes(title, season).await {
+                Ok(found) => episodes.extend(found),
+                Err(error) => {
+                    tracing::warn!("episodes for {} season {season}: {error}", title.name);
+                }
+            }
+        }
+        episodes
+    }
+
     /// Whether this provider files a sequel as its own entry, so that a title
     /// with several seasons has to be searched for once per season.
     pub fn splits_seasons(&self) -> bool {

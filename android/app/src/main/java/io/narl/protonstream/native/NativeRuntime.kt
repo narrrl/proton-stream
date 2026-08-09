@@ -12,14 +12,23 @@ object NativeRuntime {
     private lateinit var appContext: Context
     @Volatile private var instance: AndroidEngine? = null
 
+    /**
+     * Whether Android's certificate verifier came up.
+     *
+     * False means every HTTPS request will fail validation, which otherwise
+     * surfaces much later as an unexplained certificate error against a share.
+     */
+    @Volatile var tlsReady: Boolean = false
+        private set
+
     fun initialize(context: Context) {
         System.loadLibrary("pstr_android")
-        initTls(context)
+        tlsReady = initTls(context)
         appContext = context.applicationContext
     }
 
     /** Initializes Android's certificate verifier before Proton networking. */
-    private external fun initTls(context: Context)
+    private external fun initTls(context: Context): Boolean
 
     suspend fun engine(): AndroidEngine = withContext(Dispatchers.IO) {
         instance ?: synchronized(this@NativeRuntime) {

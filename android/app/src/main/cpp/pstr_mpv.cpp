@@ -1,6 +1,7 @@
 #include "pstr_mpv.h"
 
 #include <EGL/egl.h>
+#include <android/log.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
@@ -86,16 +87,32 @@ int64_t stream_size(void *opaque) noexcept {
     });
 }
 
+/// mpv wants its request slot back — a seek, or a teardown.
+///
+/// The flag alone only stops the *next* read; the one already parked in a 4 MiB
+/// block fetch has to be interrupted in Rust, or `mpv_terminate_destroy` waits
+/// out the whole fetch while joining the demuxer thread.
 void stream_cancel(void *opaque) noexcept {
     c_boundary([=] {
         if (auto *stream = static_cast<StreamCookie *>(opaque)) {
             stream->cancelled.store(true, std::memory_order_relaxed);
+            pstr_android_stream_cancel(stream->handle);
         }
     });
 }
 
+/// Releases the Rust stream behind the file mpv has finished with.
+///
+/// Ownership sits here rather than in Kotlin because this is the one moment
+/// that is *defined* to be after mpv's last read: `loadfile` is asynchronous, so
+/// a Kotlin-side release issued when the next load returns can land while the
+/// outgoing demuxer is still reading — and, if the release names the handle the
+/// registry has already swapped, takes the incoming episode's stream with it.
 void stream_close(void *opaque) noexcept {
-    c_boundary([=] { delete static_cast<StreamCookie *>(opaque); });
+    c_boundary([=] {
+        std::unique_ptr<StreamCookie> cookie(static_cast<StreamCookie *>(opaque));
+        if (cookie) pstr_android_stream_release(cookie->handle);
+    });
 }
 
 int stream_open(void *, char *uri, mpv_stream_cb_info *info) noexcept {
@@ -130,6 +147,29 @@ void *resolve_gl(void *, const char *name) noexcept {
     });
 }
 
+/// Why the open file ended, mirroring `pstr_player::EndReason` so that the two
+/// clients agree on what "finished" means. Only [Eof] is an episode the viewer
+/// watched to the end; the rest are a stop, a shutdown or a failure, and none of
+/// them may mark anything watched or advance to the next episode.
+enum class EndReason : int {
+    None = 0,
+    Eof = 1,
+    Stopped = 2,
+    Quit = 3,
+    Failed = 4,
+    Other = 5,
+};
+
+EndReason end_reason_of(int reason) {
+    switch (reason) {
+        case MPV_END_FILE_REASON_EOF: return EndReason::Eof;
+        case MPV_END_FILE_REASON_STOP: return EndReason::Stopped;
+        case MPV_END_FILE_REASON_QUIT: return EndReason::Quit;
+        case MPV_END_FILE_REASON_ERROR: return EndReason::Failed;
+        default: return EndReason::Other;
+    }
+}
+
 struct PlaybackState {
     double position = 0.0;
     double duration = 0.0;
@@ -137,6 +177,30 @@ struct PlaybackState {
     bool paused = true;
     bool muted = false;
     bool ended = false;
+    EndReason end_reason = EndReason::None;
+    /// mpv has run out of buffered data and stopped to refill. Distinct from
+    /// [paused], which is the viewer's doing: a frozen picture that nothing
+    /// explains is indistinguishable from a hung app.
+    bool buffering = false;
+    /// How full the demuxer cache is while [buffering], 0–100.
+    double cache_percent = 0.0;
+    /// Between a seek being issued and playback actually resuming. The seek bar
+    /// has moved but the picture has not.
+    bool seeking = false;
+    /// True between `loadfile` being issued and mpv acknowledging it with
+    /// `START_FILE`. Everything mpv reports in that window still describes the
+    /// *outgoing* file — including the `END_FILE(STOP)` that stopping it emits —
+    /// and must not be attributed to the file being loaded.
+    bool loading = false;
+    /// The picture's display size, once mpv has decoded enough to know it.
+    /// Zero until then, and the aspect Picture-in-Picture is given.
+    double video_width = 0.0;
+    double video_height = 0.0;
+    /// Which loaded file this state describes. Bumped by every load, so a
+    /// reader can tell "episode two, second zero" from a leftover reading of
+    /// episode one — which is the difference between resuming an episode where
+    /// the viewer left it and resuming it where the *previous* one ended.
+    int64_t generation = 0;
 };
 
 class Player {
@@ -165,6 +229,13 @@ class Player {
         observe("pause", 3, MPV_FORMAT_FLAG);
         observe("volume", 4, MPV_FORMAT_DOUBLE);
         observe("mute", 5, MPV_FORMAT_FLAG);
+        observe("video-params/dw", 6, MPV_FORMAT_INT64);
+        observe("video-params/dh", 7, MPV_FORMAT_INT64);
+        observe("paused-for-cache", 8, MPV_FORMAT_FLAG);
+        observe("cache-buffering-state", 9, MPV_FORMAT_INT64);
+        // Errors mpv reports about the file itself, rather than about the
+        // request that opened it. Without these a failed demux is silent.
+        mpv_request_log_messages(mpv_, "error");
         events_ = std::thread([this] { event_loop(); });
         renderer_ = std::thread([this] { render_loop(); });
     }
@@ -213,23 +284,60 @@ class Player {
     bool load(uint64_t handle, double start, const std::string &audio,
               const std::string &subtitle, bool subtitles) {
         if (!mpv_) return false;
-        {
-            std::unique_lock lock(render_mutex_);
-            if (!render_cv_.wait_for(lock, std::chrono::seconds(5), [this] { return render_ != nullptr || !running_.load(); })) return false;
-        }
+        // No wait for a render context. It is created with the render thread and
+        // needs no window, and a load that cannot get one plays audio anyway —
+        // waiting for a surface here is what made background playback fail after
+        // a five-second stall.
         if (!audio.empty()) set_string("alang", audio);
         if (!subtitle.empty()) set_string("slang", subtitle);
         set_string("sid", subtitles ? "auto" : "no");
         pending_start_.store(std::max(0.0, start));
+        // Retire the outgoing file's position, duration and end flag *before*
+        // the new one loads. mpv only republishes them once it has demuxed
+        // enough of the stream, and until then every reader would otherwise see
+        // the last episode's clock under the new episode's name.
+        {
+            std::lock_guard lock(state_mutex_);
+            const double volume = state_.volume;
+            const bool muted = state_.muted;
+            // `pause` is a property of the core, not of the file: mpv carries it
+            // across `loadfile` unchanged and therefore never re-publishes it.
+            // Resetting it to the struct's default would leave every reader
+            // believing a playing file is paused for as long as it is open, and
+            // every "play" they then send is a no-op against a core that never
+            // paused — which is a play/pause button that does nothing.
+            const bool paused = state_.paused;
+            const int64_t generation = state_.generation + 1;
+            state_ = PlaybackState{};
+            state_.volume = volume;
+            state_.muted = muted;
+            state_.paused = paused;
+            state_.generation = generation;
+            state_.loading = true;
+            error_.clear();
+        }
         const std::string url = "pstr://" + std::to_string(handle);
         const char *command[] = {"loadfile", url.c_str(), nullptr};
-        if (mpv_command(mpv_, command) < 0) return false;
+        if (mpv_command(mpv_, command) < 0) {
+            // Nothing was issued, so no START_FILE will arrive to clear this.
+            std::lock_guard lock(state_mutex_);
+            state_.loading = false;
+            return false;
+        }
         return true;
     }
 
-    void pause(bool value) { set_flag("pause", value); }
+    /// Written through rather than left to the observer: the transport is drawn
+    /// from this state, and a tap that only shows its effect on mpv's next
+    /// property event reads as a button that missed.
+    void pause(bool value) {
+        set_flag("pause", value);
+        std::lock_guard lock(state_mutex_);
+        state_.paused = value;
+    }
     void seek(double seconds) { set_double("time-pos", std::max(0.0, seconds)); }
     void volume(double value) { set_double("volume", std::clamp(value, 0.0, 100.0)); }
+    void speed(double value) { set_double("speed", std::clamp(value, 0.25, 4.0)); }
     void mute(bool value) { set_flag("mute", value); }
     void select_track(bool audio, int64_t id) {
         const char *property = audio ? "aid" : "sid";
@@ -244,6 +352,12 @@ class Player {
     PlaybackState state() const {
         std::lock_guard lock(state_mutex_);
         return state_;
+    }
+
+    /// The pending error, if any, consumed by reading it.
+    std::string take_error() {
+        std::lock_guard lock(state_mutex_);
+        return std::exchange(error_, std::string());
     }
 
     std::string tracks_json() const {
@@ -274,20 +388,113 @@ class Player {
         return json + ']';
     }
 
+    /// The file's chapters, read one sub-property at a time like the tracks.
+    /// What they *mean* is decided in Rust (`pstr_core::chapters`), so the
+    /// desktop and this client offer the same skips.
+    std::string chapters_json() const {
+        if (!mpv_) return "[]";
+        int64_t count = 0;
+        if (mpv_get_property(mpv_, "chapter-list/count", MPV_FORMAT_INT64, &count) < 0) return "[]";
+        std::string json = "[";
+        for (int64_t i = 0; i < count; ++i) {
+            const std::string base = "chapter-list/" + std::to_string(i) + "/";
+            char *title_raw = nullptr;
+            double start = 0.0;
+            mpv_get_property(mpv_, (base + "title").c_str(), MPV_FORMAT_STRING, &title_raw);
+            MpvString title(title_raw);
+            mpv_get_property(mpv_, (base + "time").c_str(), MPV_FORMAT_DOUBLE, &start);
+            if (i) json += ',';
+            json += "{\"index\":" + std::to_string(i) + ",\"title\":\"" + escape(title.get()) +
+                    "\",\"start\":" + std::to_string(start) + '}';
+        }
+        return json + ']';
+    }
+
   private:
     struct MpvFree {
         void operator()(char *value) const noexcept { if (value) mpv_free(value); }
     };
     using MpvString = std::unique_ptr<char, MpvFree>;
 
+    /// JSON-escape `text`, and re-encode it as Modified UTF-8.
+    ///
+    /// The result of this ends up in `NewStringUTF`, which does not take UTF-8:
+    /// it takes Modified UTF-8, where a character outside the basic plane is a
+    /// surrogate *pair* of three-byte sequences rather than one four-byte
+    /// sequence. Handing it real UTF-8 renders an emoji in a track title as
+    /// mojibake, and aborts the process under CheckJNI.
+    ///
+    /// Anything that is not well-formed UTF-8 is dropped rather than passed
+    /// through, for the same reason: a truncated sequence is what CheckJNI
+    /// rejects, and a track title is not worth a crash.
     static std::string escape(const char *text) {
         std::string out;
         if (!text) return out;
-        for (const unsigned char c : std::string_view(text)) {
-            if (c == '"' || c == '\\') out += '\\';
-            if (c >= 0x20) out += static_cast<char>(c);
+        const std::string_view input(text);
+        for (size_t i = 0; i < input.size();) {
+            const auto lead = static_cast<unsigned char>(input[i]);
+            size_t length = 0;
+            uint32_t code = 0;
+            if (lead < 0x80) {
+                length = 1;
+                code = lead;
+            } else if ((lead & 0xE0) == 0xC0) {
+                length = 2;
+                code = lead & 0x1Fu;
+            } else if ((lead & 0xF0) == 0xE0) {
+                length = 3;
+                code = lead & 0x0Fu;
+            } else if ((lead & 0xF8) == 0xF0) {
+                length = 4;
+                code = lead & 0x07u;
+            } else {
+                ++i; // A stray continuation or invalid lead byte.
+                continue;
+            }
+            if (i + length > input.size()) break;
+            bool valid = true;
+            for (size_t k = 1; k < length; ++k) {
+                const auto next = static_cast<unsigned char>(input[i + k]);
+                if ((next & 0xC0) != 0x80) {
+                    valid = false;
+                    break;
+                }
+                code = (code << 6) | (next & 0x3Fu);
+            }
+            if (!valid) {
+                ++i;
+                continue;
+            }
+            i += length;
+
+            if (code < 0x20) continue; // Control characters, including NUL.
+            if (code == '"' || code == '\\') {
+                out += '\\';
+                out += static_cast<char>(code);
+                continue;
+            }
+            if (code < 0x80) {
+                out += static_cast<char>(code);
+            } else if (code < 0x800) {
+                out += static_cast<char>(0xC0 | (code >> 6));
+                out += static_cast<char>(0x80 | (code & 0x3F));
+            } else if (code < 0x10000) {
+                append_three(out, code);
+            } else {
+                // The surrogate pair Modified UTF-8 wants, each half written as
+                // its own three-byte sequence.
+                const uint32_t rest = code - 0x10000;
+                append_three(out, 0xD800 + (rest >> 10));
+                append_three(out, 0xDC00 + (rest & 0x3FF));
+            }
         }
         return out;
+    }
+
+    static void append_three(std::string &out, uint32_t code) {
+        out += static_cast<char>(0xE0 | (code >> 12));
+        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (code & 0x3F));
     }
 
     void option(const char *name, const char *value) { mpv_set_option_string(mpv_, name, value); }
@@ -306,25 +513,64 @@ class Player {
                 if (start > 0.0) set_double("time-pos", start);
             }
             if (event->event_id == MPV_EVENT_END_FILE) {
+                const auto *end = static_cast<mpv_event_end_file *>(event->data);
                 std::lock_guard lock(state_mutex_);
+                // The end of the file `loadfile` is replacing, not of the one it
+                // is loading. Reporting it would hand every reader an episode
+                // that ended before it started.
+                if (state_.loading) continue;
                 state_.ended = true;
+                state_.end_reason = end ? end_reason_of(end->reason) : EndReason::Other;
             } else if (event->event_id == MPV_EVENT_START_FILE) {
                 std::lock_guard lock(state_mutex_);
+                state_.loading = false;
                 state_.ended = false;
+                state_.end_reason = EndReason::None;
+            } else if (event->event_id == MPV_EVENT_SEEK) {
+                std::lock_guard lock(state_mutex_);
+                state_.seeking = true;
+            } else if (event->event_id == MPV_EVENT_PLAYBACK_RESTART) {
+                // The seek is *visibly* done here, not when it was issued.
+                std::lock_guard lock(state_mutex_);
+                state_.seeking = false;
+            } else if (event->event_id == MPV_EVENT_LOG_MESSAGE) {
+                record_log(*static_cast<mpv_event_log_message *>(event->data));
             } else if (event->event_id == MPV_EVENT_PROPERTY_CHANGE) {
                 update_property(*static_cast<mpv_event_property *>(event->data));
             }
         }
     }
 
+    /// Keep the first error of the open file, not the last.
+    ///
+    /// A failure cascades — one unreadable header produces a dozen follow-on
+    /// complaints — and the first line is the one that names the cause. Cleared
+    /// by [take_error], which is how the UI consumes it.
+    void record_log(const mpv_event_log_message &message) {
+        if (!message.text) return;
+        std::lock_guard lock(state_mutex_);
+        if (!error_.empty()) return;
+        error_.assign(message.text);
+        while (!error_.empty() && (error_.back() == '\n' || error_.back() == '\r')) error_.pop_back();
+    }
+
     void update_property(const mpv_event_property &property) {
         if (!property.data) return;
         std::lock_guard lock(state_mutex_);
-        if (!std::strcmp(property.name, "time-pos")) state_.position = *static_cast<double *>(property.data);
-        else if (!std::strcmp(property.name, "duration")) state_.duration = *static_cast<double *>(property.data);
-        else if (!std::strcmp(property.name, "volume")) state_.volume = *static_cast<double *>(property.data);
+        // `volume`, `mute` and `pause` belong to the core and carry across a
+        // load; the rest describe the open file, and a reading of them that
+        // arrives mid-load is the outgoing episode's clock under the incoming
+        // episode's name.
+        if (!std::strcmp(property.name, "volume")) state_.volume = *static_cast<double *>(property.data);
         else if (!std::strcmp(property.name, "pause")) state_.paused = *static_cast<int *>(property.data);
         else if (!std::strcmp(property.name, "mute")) state_.muted = *static_cast<int *>(property.data);
+        else if (state_.loading) return;
+        else if (!std::strcmp(property.name, "time-pos")) state_.position = *static_cast<double *>(property.data);
+        else if (!std::strcmp(property.name, "duration")) state_.duration = *static_cast<double *>(property.data);
+        else if (!std::strcmp(property.name, "video-params/dw")) state_.video_width = static_cast<double>(*static_cast<int64_t *>(property.data));
+        else if (!std::strcmp(property.name, "video-params/dh")) state_.video_height = static_cast<double>(*static_cast<int64_t *>(property.data));
+        else if (!std::strcmp(property.name, "paused-for-cache")) state_.buffering = *static_cast<int *>(property.data);
+        else if (!std::strcmp(property.name, "cache-buffering-state")) state_.cache_percent = static_cast<double>(*static_cast<int64_t *>(property.data));
     }
 
     static void render_update(void *opaque) noexcept {
@@ -336,6 +582,15 @@ class Player {
         });
     }
 
+    /// Owns EGL and the mpv render context for the life of the player.
+    ///
+    /// Both are set up here rather than on the first surface attach, and neither
+    /// depends on there being a window: a pbuffer is enough to make a context
+    /// current, and `vo_libmpv` only needs *some* consumer. That is what makes
+    /// audio playback with no surface — the screen off, the app backgrounded —
+    /// structurally possible; before this, `load` waited five seconds for a
+    /// render context that only a visible SurfaceView could ever create, and
+    /// then failed.
     void render_loop() {
         EGLDisplay display = EGL_NO_DISPLAY;
         EGLContext context = EGL_NO_CONTEXT;
@@ -343,6 +598,7 @@ class Player {
         EGLSurface pbuffer = EGL_NO_SURFACE;
         EGLConfig config = nullptr;
         ANativeWindow *window = nullptr;
+        if (initialize_egl(display, context, config, pbuffer)) initialize_renderer();
         while (running_.load()) {
             std::unique_lock lock(render_mutex_);
             render_cv_.wait(lock, [this] { return !running_.load() || surface_changed_ || frame_ready_.load(); });
@@ -353,18 +609,31 @@ class Player {
                 if (window) ANativeWindow_release(window);
                 window = pending_window_;
                 pending_window_ = nullptr;
-                if (window && display == EGL_NO_DISPLAY && !initialize_egl(display, context, config, pbuffer)) {
+                if (window && display == EGL_NO_DISPLAY) {
+                    // EGL failed at startup and playback is audio-only. Keep the
+                    // window rather than the surface: nothing here can retry.
                     ANativeWindow_release(window);
                     window = nullptr;
                 }
                 if (window) {
                     surface = eglCreateWindowSurface(display, config, window, nullptr);
                     eglMakeCurrent(display, surface, surface, context);
-                    initialize_renderer();
                 }
             }
             const bool draw = frame_ready_.exchange(false);
             lock.unlock();
+            // With no window there is still a frame to consume. `vo_libmpv`
+            // expects its host to keep draining, and a video thread with no
+            // consumer stalls — which is why video came back out of sync with
+            // audio after the screen had been off.
+            if (draw && surface == EGL_NO_SURFACE && render_) {
+                eglMakeCurrent(display, pbuffer, pbuffer, context);
+                if (mpv_render_context_update(render_) & MPV_RENDER_UPDATE_FRAME) {
+                    int skip = 1;
+                    mpv_render_param params[] = {{MPV_RENDER_PARAM_SKIP_RENDERING, &skip}, {MPV_RENDER_PARAM_INVALID, nullptr}};
+                    mpv_render_context_render(render_, params);
+                }
+            }
             if (draw && surface != EGL_NO_SURFACE && render_) {
                 eglMakeCurrent(display, surface, surface, context);
                 if (mpv_render_context_update(render_) & MPV_RENDER_UPDATE_FRAME) {
@@ -394,18 +663,40 @@ class Player {
         if (pending_window_) { ANativeWindow_release(pending_window_); pending_window_ = nullptr; }
     }
 
+    /// All of EGL, or none of it.
+    ///
+    /// Leaving a display initialised behind a failed context is what made a
+    /// partial failure permanent: the retry guard is "is there a display", so a
+    /// half-built state reads as success forever and every later attach uses an
+    /// uninitialised config and `EGL_NO_CONTEXT`. Unwinding here keeps the guard
+    /// honest, and `eglGetError` says which step failed instead of leaving a
+    /// black screen with nothing in the log.
     bool initialize_egl(EGLDisplay &display, EGLContext &context, EGLConfig &config, EGLSurface &pbuffer) {
+        const auto fail = [&](const char *step) {
+            __android_log_print(ANDROID_LOG_ERROR, "pstr-mpv", "%s failed: 0x%04x", step, eglGetError());
+            if (pbuffer != EGL_NO_SURFACE) eglDestroySurface(display, pbuffer);
+            if (context != EGL_NO_CONTEXT) eglDestroyContext(display, context);
+            if (display != EGL_NO_DISPLAY) eglTerminate(display);
+            display = EGL_NO_DISPLAY;
+            context = EGL_NO_CONTEXT;
+            pbuffer = EGL_NO_SURFACE;
+            config = nullptr;
+            return false;
+        };
         display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        if (display == EGL_NO_DISPLAY || !eglInitialize(display, nullptr, nullptr)) return false;
+        if (display == EGL_NO_DISPLAY) return fail("eglGetDisplay");
+        if (!eglInitialize(display, nullptr, nullptr)) return fail("eglInitialize");
         const EGLint attributes[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE};
         EGLint count = 0;
-        if (!eglChooseConfig(display, attributes, &config, 1, &count) || count == 0) return false;
+        if (!eglChooseConfig(display, attributes, &config, 1, &count) || count == 0) return fail("eglChooseConfig");
         const EGLint context_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
         context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
-        if (context == EGL_NO_CONTEXT) return false;
+        if (context == EGL_NO_CONTEXT) return fail("eglCreateContext");
         const EGLint pbuffer_attributes[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
         pbuffer = eglCreatePbufferSurface(display, config, pbuffer_attributes);
-        return pbuffer != EGL_NO_SURFACE && eglMakeCurrent(display, pbuffer, pbuffer, context);
+        if (pbuffer == EGL_NO_SURFACE) return fail("eglCreatePbufferSurface");
+        if (!eglMakeCurrent(display, pbuffer, pbuffer, context)) return fail("eglMakeCurrent");
+        return true;
     }
 
     void initialize_renderer() {
@@ -426,6 +717,8 @@ class Player {
     std::thread renderer_;
     mutable std::mutex state_mutex_;
     PlaybackState state_;
+    /// The first error mpv logged about the open file, until it is consumed.
+    std::string error_;
     std::mutex render_mutex_;
     std::condition_variable render_cv_;
     ANativeWindow *pending_window_ = nullptr;
@@ -465,13 +758,17 @@ bool utf8(JNIEnv *env, jstring value, std::string &result) {
 void reject_null_surface(JNIEnv *env) noexcept {
     c_boundary([=] {
         jclass type = env->FindClass("java/lang/IllegalArgumentException");
-        if (type) env->ThrowNew(type, "surface must not be null");
+        if (!type) return;
+        env->ThrowNew(type, "surface must not be null");
+        // FindClass hands back a local reference, and this is called from a
+        // long-lived attached thread where the frame is not popped for us.
+        env->DeleteLocalRef(type);
     });
 }
 
 } // namespace
 
-extern "C" JNIEXPORT jlong JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeCreate(JNIEnv *, jobject) noexcept {
+extern "C" JNIEXPORT jlong JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeCreate(JNIEnv *, jclass) noexcept {
     return c_boundary<jlong>(0, [] {
         auto player = std::make_unique<Player>();
         return player->valid() ? reinterpret_cast<jlong>(player.release()) : 0;
@@ -513,6 +810,9 @@ extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHo
 extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeVolume(JNIEnv *, jobject, jlong h, jdouble value) noexcept {
     c_boundary([=] { if (auto *p = from(h)) p->volume(value); });
 }
+extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeSpeed(JNIEnv *, jobject, jlong h, jdouble value) noexcept {
+    c_boundary([=] { if (auto *p = from(h)) p->speed(value); });
+}
 extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeMute(JNIEnv *, jobject, jlong h, jboolean value) noexcept {
     c_boundary([=] { if (auto *p = from(h)) p->mute(value == JNI_TRUE); });
 }
@@ -527,17 +827,36 @@ extern "C" JNIEXPORT jdoubleArray JNICALL Java_io_narl_protonstream_playback_Nat
         const auto state = from(h) ? from(h)->state() : PlaybackState{};
         const jdouble values[] = {state.position, state.duration, state.volume,
                                   state.paused ? 1.0 : 0.0, state.muted ? 1.0 : 0.0,
-                                  state.ended ? 1.0 : 0.0};
-        jdoubleArray result = env->NewDoubleArray(6);
+                                  state.ended ? 1.0 : 0.0,
+                                  static_cast<jdouble>(state.generation),
+                                  state.video_width, state.video_height,
+                                  static_cast<jdouble>(state.end_reason),
+                                  state.buffering ? 1.0 : 0.0, state.cache_percent,
+                                  state.seeking ? 1.0 : 0.0};
+        constexpr jsize kFields = 13;
+        jdoubleArray result = env->NewDoubleArray(kFields);
         if (!result) return static_cast<jdoubleArray>(nullptr);
-        env->SetDoubleArrayRegion(result, 0, 6, values);
+        env->SetDoubleArrayRegion(result, 0, kFields, values);
         if (env->ExceptionCheck()) return static_cast<jdoubleArray>(nullptr);
         return result;
+    });
+}
+extern "C" JNIEXPORT jstring JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeTakeError(JNIEnv *env, jobject, jlong h) noexcept {
+    return c_boundary<jstring>(nullptr, [=]() -> jstring {
+        auto *player = from(h);
+        if (!player) return nullptr;
+        const std::string error = player->take_error();
+        return error.empty() ? nullptr : string(env, error);
     });
 }
 extern "C" JNIEXPORT jstring JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeTracks(JNIEnv *env, jobject, jlong h) noexcept {
     return c_boundary<jstring>(nullptr, [=] {
         return string(env, from(h) ? from(h)->tracks_json() : "[]");
+    });
+}
+extern "C" JNIEXPORT jstring JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeChapters(JNIEnv *env, jobject, jlong h) noexcept {
+    return c_boundary<jstring>(nullptr, [=] {
+        return string(env, from(h) ? from(h)->chapters_json() : "[]");
     });
 }
 extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_pstrAndroidStreamRelease(JNIEnv *, jobject, jlong handle) noexcept {

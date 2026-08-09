@@ -28,8 +28,11 @@ import io.narl.protonstream.native.NativeRuntime
 import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.OfflineRecord
+import uniffi.pstr_android.MatchSummary
 import uniffi.pstr_android.MetadataProvider
 import uniffi.pstr_android.MetadataSettingsRecord
+import uniffi.pstr_android.StorageUsageRecord
+import uniffi.pstr_android.EpisodeRecord
 
 data class AppUiState(
     val loading: Boolean = true,
@@ -44,6 +47,7 @@ data class AppUiState(
         language = "en",
         ready = true,
     ),
+    val storage: StorageUsageRecord = StorageUsageRecord(0uL, 0uL, 0uL, 0uL),
     val message: String? = null,
 )
 
@@ -55,6 +59,11 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     val state: StateFlow<AppUiState> = mutableState.asStateFlow()
 
     init {
+        if (!NativeRuntime.tlsReady) {
+            mutableState.update {
+                it.copy(message = "Certificate verification is unavailable; Proton requests will fail")
+            }
+        }
         reload()
         viewModelScope.launch {
             searchQuery.debounce(300).distinctUntilChanged().collect { reloadLibrary(it) }
@@ -83,6 +92,43 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }
     }
 
+    /**
+     * Recrawl one share rather than the whole library.
+     *
+     * A viewer who has just added files to one link should not have to pay for
+     * a walk of every other one — and a share whose link has expired makes a
+     * whole-library refresh fail, which used to leave no way to refresh the
+     * shares that still work.
+     */
+    fun refreshShare(id: String) {
+        viewModelScope.launch {
+            mutableState.update { it.copy(refreshing = true, message = null) }
+            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) } }
+                .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+            mutableState.update { it.copy(refreshing = false) }
+            reload()
+        }
+    }
+
+    /**
+     * Run enrichment again.
+     *
+     * With [force] every title is looked up afresh, including ones that already
+     * matched — the way out of a library where a provider's early answers were
+     * wrong, or where a match was made against a provider that has since been
+     * changed.
+     */
+    fun matchTitles(force: Boolean) {
+        viewModelScope.launch {
+            mutableState.update { it.copy(refreshing = true, message = null) }
+            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().matchTitles(force) } }
+                .onSuccess { summary -> mutableState.update { it.copy(message = describe(summary)) } }
+                .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+            mutableState.update { it.copy(refreshing = false) }
+            reload()
+        }
+    }
+
     fun addShare(name: String, url: String, password: String?) {
         viewModelScope.launch {
             runCatching {
@@ -92,6 +138,28 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                     engine.crawl(null)
                 }
             }.onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+            reload()
+        }
+    }
+
+    /**
+     * Re-supply the link behind a share whose stored secret cannot be read.
+     *
+     * The Keystore key is invalidated by a lockscreen change or a device
+     * restore, and after that every open of every share fails — including the
+     * read inside "remove this share", so the obvious way out is closed too.
+     * Re-entering the link rewrites the secret and leaves the catalog and the
+     * offline files alone.
+     */
+    fun repairShare(id: String, url: String, password: String?) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val engine = NativeRuntime.engine()
+                    engine.repairShare(id, url, password?.takeIf(String::isNotBlank))
+                    engine.crawl(id)
+                }
+            }.onFailure(::reportError)
             reload()
         }
     }
@@ -132,14 +200,33 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                         engine.setMetadataApiKey(provider, apiKey)
                     }
                     engine.setMetadataSettings(MetadataSettingsRecord(enabled, provider, language, true))
-                    if (enabled) engine.matchTitles(false)
+                    if (enabled) engine.matchTitles(false) else null
                 }
+            }.onSuccess { summary ->
+                summary?.let { mutableState.update { state -> state.copy(message = describe(it)) } }
             }.onFailure(::reportError)
             reload()
         }
     }
 
     fun reloadAfterMetadataChange() = reload()
+
+    /**
+     * What an enrichment pass did, in one line.
+     *
+     * Failures are reported even when most titles matched: a run that quietly
+     * dropped a third of the library is the case this counting exists for.
+     */
+    private fun describe(summary: MatchSummary): String {
+        if (summary.matched == 0u && summary.unmatched == 0u && summary.failed == 0u) {
+            return "Everything is already matched"
+        }
+        val parts = mutableListOf("${summary.matched} matched")
+        if (summary.unmatched > 0u) parts += "${summary.unmatched} not found"
+        if (summary.episodes > 0u) parts += "${summary.episodes} episodes named"
+        if (summary.failed > 0u) parts += "${summary.failed} failed"
+        return parts.joinToString(", ")
+    }
 
     fun removeOffline(file: OfflineRecord) {
         viewModelScope.launch {
@@ -170,16 +257,96 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }
     }
 
+    /**
+     * Persist where an episode was left.
+     *
+     * The player calls this while it is still up and once more as it leaves, so
+     * it runs on the ViewModel's scope rather than the screen's — a save issued
+     * on the way out must not be cancelled by the screen going away.
+     */
+    fun saveProgress(episode: EpisodeRecord, position: Double, duration: Double, watched: Boolean) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    NativeRuntime.engine().saveWatchState(
+                        episode.shareId,
+                        episode.linkId,
+                        position.coerceIn(0.0, duration),
+                        duration,
+                        watched,
+                    )
+                }
+            }.onFailure(::reportError)
+        }
+    }
+
+    /**
+     * Mark an episode seen, or unseen, without playing it.
+     *
+     * Unwatching rewinds, matching the desktop client: an episode marked unseen
+     * that kept its position would come straight back as "resume at 19:04",
+     * which is not what the viewer asked for. Marking one seen puts the position
+     * at its duration where one is known, so the progress bar agrees with the
+     * tick.
+     */
+    fun setWatched(episode: EpisodeRecord, watched: Boolean) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val engine = NativeRuntime.engine()
+                    val duration = engine.watchState(episode.shareId, episode.linkId)?.durationSecs
+                    engine.saveWatchState(
+                        episode.shareId,
+                        episode.linkId,
+                        if (watched) duration ?: 0.0 else 0.0,
+                        duration,
+                        watched,
+                    )
+                }
+            }.onFailure(::reportError)
+            reload()
+        }
+    }
+
+    fun removeAllOffline() {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    workManager.cancelAllWorkByTag(DownloadCoordinator.TAG).result.get()
+                    NativeRuntime.engine().removeAllOffline()
+                    DownloadStateStore(appContext).clear()
+                }
+            }.onFailure(::reportError)
+            reload()
+        }
+    }
+
+    fun clearBlockCache() {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { NativeRuntime.engine().clearBlockCache() }
+            }.onSuccess { reclaimed ->
+                mutableState.update { it.copy(message = "Reclaimed ${formatBytes(reclaimed)} of cache") }
+            }.onFailure(::reportError)
+            reload()
+        }
+    }
+
     private fun reload() {
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
                     val engine = NativeRuntime.engine()
+                    // Here rather than inside `library()`, which is read-only
+                    // and cached: a full reload is the one place that has
+                    // already paid for a walk of the offline files.
+                    engine.pruneOfflineFiles()
                     Reloaded(
                         engine.shares(),
                         engine.library(mutableState.value.query.takeIf(String::isNotBlank)),
                         engine.offlineFiles(),
                         engine.metadataSettings(),
+                        engine.storageUsage(),
                     )
                 }
             }.onSuccess { result ->
@@ -189,6 +356,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                         titles = result.titles,
                         offline = result.offline,
                         metadataSettings = result.metadataSettings,
+                        storage = result.storage,
                     ) }
                 }
                 .onFailure { error ->
@@ -215,6 +383,7 @@ private data class Reloaded(
     val titles: List<TitleRecord>,
     val offline: List<OfflineRecord>,
     val metadataSettings: MetadataSettingsRecord,
+    val storage: StorageUsageRecord,
 )
 
 private fun WorkManager.workInfosByTagFlow(tag: String) = callbackFlow {
