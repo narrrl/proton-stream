@@ -31,16 +31,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -48,8 +46,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -108,7 +104,14 @@ import io.narl.protonstream.download.DownloadCoordinator
 import io.narl.protonstream.download.DownloadStateStore
 import io.narl.protonstream.download.RetainedDownload
 import io.narl.protonstream.native.NativeRuntime
+import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.AccentProgress
 import io.narl.protonstream.ui.theme.AppearanceState
+import io.narl.protonstream.ui.theme.EdgedButton
+import io.narl.protonstream.ui.theme.QuietButton
+import io.narl.protonstream.ui.theme.TonalButton
+import io.narl.protonstream.ui.theme.accentNavigationColors
+import io.narl.protonstream.ui.theme.solid
 import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TrackPreferencesRecord
@@ -191,6 +194,8 @@ fun ProtonStreamApp(
             model.dismissMessage()
         }
     }
+    // Read out here because `navigationSuiteItems` is not a composable scope.
+    val navigation = accentNavigationColors()
     NavigationSuiteScaffold(
         navigationSuiteItems = {
             Destination.entries.forEach { item ->
@@ -199,6 +204,7 @@ fun ProtonStreamApp(
                     onClick = { destination = item; selectedTitleKey = null },
                     icon = { Icon(item.icon, contentDescription = item.label) },
                     label = { Text(item.label) },
+                    colors = navigation,
                 )
             }
         },
@@ -417,49 +423,6 @@ private fun LibraryScreen(
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
         )
         Spacer(Modifier.height(16.dp))
-        // Above the grid, and only when there is something in it: what a viewer
-        // opening the app wants is almost always the thing they were part way
-        // through, and finding it in an alphabetical grid is the long way round.
-        if (!state.loading && state.query.isBlank() && resumable.isNotEmpty()) {
-            Text("Continue watching", style = MaterialTheme.typography.titleMedium)
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(vertical = 12.dp),
-            ) {
-                items(resumable, key = { "${it.episode.shareId}/${it.episode.linkId}" }) { entry ->
-                    Card(
-                        Modifier.width(200.dp).clickable { onResume(entry.title, entry.index) },
-                    ) {
-                        RemoteArtwork(
-                            entry.episode.stillUrl ?: entry.title.backdropUrl,
-                            entry.title.canonicalName ?: entry.title.name,
-                            Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                            fallback = entry.episode.thumbnailSource,
-                        )
-                        Column(Modifier.padding(10.dp)) {
-                            Text(
-                                entry.title.canonicalName ?: entry.title.name,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                entry.episode.label,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            entry.episode.progress?.let { progress ->
-                                LinearProgressIndicator(
-                                    progress = { progress.toFloat().coerceIn(0f, 1f) },
-                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
         if (state.loading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         } else if (state.titles.isEmpty()) {
@@ -471,6 +434,65 @@ private fun LibraryScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
+                // Above the grid, and only when there is something in it: what a
+                // viewer opening the app wants is almost always the thing they
+                // were part way through, and finding it in an alphabetical grid
+                // is the long way round.
+                //
+                // Inside the grid rather than pinned over it, so the shelf
+                // scrolls away with the rest instead of holding a fixed slice of
+                // a phone screen for itself.
+                if (state.query.isBlank() && resumable.isNotEmpty()) {
+                    item(key = "continue-watching", span = { GridItemSpan(maxLineSpan) }) {
+                        Column {
+                            Text("Continue watching", style = MaterialTheme.typography.titleMedium)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = PaddingValues(vertical = 12.dp),
+                            ) {
+                                items(
+                                    resumable,
+                                    key = { "${it.episode.shareId}/${it.episode.linkId}" },
+                                ) { entry ->
+                                    Card(
+                                        Modifier.width(200.dp)
+                                            .clickable { onResume(entry.title, entry.index) },
+                                    ) {
+                                        RemoteArtwork(
+                                            entry.episode.stillUrl ?: entry.title.backdropUrl,
+                                            entry.title.canonicalName ?: entry.title.name,
+                                            Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                                            fallback = entry.episode.thumbnailSource,
+                                        )
+                                        Column(Modifier.padding(10.dp)) {
+                                            Text(
+                                                entry.title.canonicalName ?: entry.title.name,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                entry.episode.label,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            entry.episode.progress?.let { progress ->
+                                                AccentProgress(
+                                                    progress = {
+                                                        progress.toFloat().coerceIn(0f, 1f)
+                                                    },
+                                                    modifier = Modifier.fillMaxWidth()
+                                                        .padding(top = 8.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 items(state.titles, key = { it.key }) { title ->
                     Card(Modifier.fillMaxWidth().clickable { onTitle(title) }) {
                         RemoteArtwork(
@@ -550,7 +572,7 @@ private fun TitleScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            TextButton(onClick = onBack) {
+            QuietButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Back to library")
@@ -586,7 +608,7 @@ private fun TitleScreen(
                 // What a press on the poster should play: whatever was left
                 // part-watched, else the first unwatched episode, else the
                 // first — the desktop client's `next_up`.
-                Button(onClick = { onPlay(playlist, nextUp) }, enabled = playerReady && playlist.isNotEmpty()) {
+                AccentButton(onClick = { onPlay(playlist, nextUp) }, enabled = playerReady && playlist.isNotEmpty()) {
                     Text(
                         when {
                             !playerReady -> "Player loading…"
@@ -599,7 +621,7 @@ private fun TitleScreen(
                 // Only where it would do something different: an unstarted show
                 // already starts at the beginning.
                 if (playlist.getOrNull(nextUp)?.resumeAt != null || title.watchedCount > 0uL) {
-                    FilledTonalButton(
+                    TonalButton(
                         onClick = { onPlay(playlist, 0) },
                         enabled = playerReady && playlist.isNotEmpty(),
                     ) { Text("Start over") }
@@ -608,12 +630,12 @@ private fun TitleScreen(
                 // one filled primary for the thing the page is for, tonal for
                 // everything else. A text link among filled buttons was what
                 // made this block read as three unrelated rows of controls.
-                FilledTonalButton(onClick = { DownloadCoordinator.enqueue(context, playlist) }) {
+                TonalButton(onClick = { DownloadCoordinator.enqueue(context, playlist) }) {
                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Download show")
                 }
-                FilledTonalButton(onClick = { showMatch = true }) {
+                TonalButton(onClick = { showMatch = true }) {
                     Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Change match")
@@ -621,7 +643,7 @@ private fun TitleScreen(
                 // The provider's own page for this title: where a viewer goes to
                 // check that the thing the app matched is the thing they have.
                 title.externalUrl?.let { url ->
-                    OutlinedButton(onClick = {
+                    EdgedButton(onClick = {
                         runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
                         }.onFailure(onPreferenceError)
@@ -656,7 +678,7 @@ private fun TitleScreen(
                 )
             }
             SettingToggle("Enable subtitles", subtitlesEnabled) { subtitlesEnabled = it }
-            FilledTonalButton(onClick = {
+            TonalButton(onClick = {
                 scope.launch {
                     runCatching {
                         withContext(Dispatchers.IO) {
@@ -904,16 +926,16 @@ private fun EpisodeRow(
             }
             // Where the episode was left, under the row it belongs to.
             episode.progress?.takeIf { !episode.watched }?.let { progress ->
-                LinearProgressIndicator(
+                AccentProgress(
                     progress = { progress.toFloat().coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
             }
             download?.takeIf { it.total > 0L && !episode.offline }?.let { active ->
-                LinearProgressIndicator(
+                AccentProgress(
                     progress = { (active.downloaded.toFloat() / active.total).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    color = MaterialTheme.colorScheme.tertiary,
+                    fill = solid(MaterialTheme.colorScheme.tertiary),
                 )
                 Text(
                     "${active.status.replaceFirstChar { it.uppercase() }} · " +
@@ -944,7 +966,7 @@ private fun ChangeMatchDialog(
             Column {
                 Text("Search the configured metadata provider. Nothing is stored until you choose an entry.")
                 OutlinedTextField(term, { term = it }, Modifier.fillMaxWidth().padding(vertical = 8.dp), singleLine = true)
-                Button(enabled = term.isNotBlank() && !searching, onClick = {
+                AccentButton(enabled = term.isNotBlank() && !searching, onClick = {
                     searching = true
                     scope.launch {
                         runCatching {
@@ -955,7 +977,7 @@ private fun ChangeMatchDialog(
                 }) { Text(if (searching) "Searching…" else "Search") }
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
                     items(options, key = { "${it.provider}:${it.remoteId}" }) { option ->
-                        OutlinedButton(
+                        EdgedButton(
                             onClick = {
                                 scope.launch {
                                     runCatching {
@@ -975,14 +997,14 @@ private fun ChangeMatchDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            QuietButton(onClick = {
                 scope.launch {
                     runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().forgetMatch(title.key) } }
                         .onSuccess { onChanged() }.onFailure(onError)
                 }
             }) { Text("Forget match") }
         },
-        dismissButton = { FilledTonalButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { TonalButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 
@@ -1000,7 +1022,7 @@ private fun SharesScreen(
     Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Proton Drive public links", style = MaterialTheme.typography.titleLarge)
-            Button(onClick = { showAdd = true }) { Text("Add share") }
+            AccentButton(onClick = { showAdd = true }) { Text("Add share") }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 16.dp)) {
             items(shares, key = { it.id }) { share ->
@@ -1020,8 +1042,8 @@ private fun SharesScreen(
                         // Not a remove: a share whose secret has become
                         // unreadable cannot be removed either, since removal
                         // deletes a secret the store can no longer touch.
-                        TextButton(onClick = { repairing = share }) { Text("Re-enter link") }
-                        FilledTonalButton(onClick = { onRemove(share.id) }) { Text("Remove") }
+                        QuietButton(onClick = { repairing = share }) { Text("Re-enter link") }
+                        TonalButton(onClick = { onRemove(share.id) }) { Text("Remove") }
                     }
                 }
             }
@@ -1083,12 +1105,12 @@ private fun RepairShareDialog(
             }
         },
         confirmButton = {
-            Button(
+            AccentButton(
                 onClick = { onRepair(url.trim(), password); onDismiss() },
                 enabled = url.isNotBlank(),
             ) { Text("Restore") }
         },
-        dismissButton = { FilledTonalButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TonalButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -1126,12 +1148,12 @@ private fun AddShareDialog(onDismiss: () -> Unit, onAdd: (String, String, String
             }
         },
         confirmButton = {
-            Button(
+            AccentButton(
                 onClick = { onAdd(name.trim(), url.trim(), password); onDismiss() },
                 enabled = name.isNotBlank() && url.isNotBlank(),
             ) { Text("Add") }
         },
-        dismissButton = { FilledTonalButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TonalButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -1193,7 +1215,7 @@ private fun DownloadsScreen(
                             Text(episode?.label ?: file.linkId, fontWeight = FontWeight.SemiBold)
                             Text(formatBytes(file.size))
                         }
-                        FilledTonalButton(onClick = { onRemove(file) }) {
+                        TonalButton(onClick = { onRemove(file) }) {
                             Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("Delete")
@@ -1209,7 +1231,7 @@ private fun DownloadsScreen(
                     Text(download.label, fontWeight = FontWeight.SemiBold)
                     Text(download.status.replaceFirstChar { it.uppercase() })
                     if (download.total > 0L) {
-                        LinearProgressIndicator(
+                        AccentProgress(
                             progress = { progress },
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                         )
@@ -1223,11 +1245,11 @@ private fun DownloadsScreen(
                         if (download.status == RetainedDownload.STATUS_RUNNING ||
                             download.status == RetainedDownload.STATUS_QUEUED
                         ) {
-                            FilledTonalButton(onClick = { onPause(download) }) { Text("Pause") }
+                            TonalButton(onClick = { onPause(download) }) { Text("Pause") }
                         } else {
-                            FilledTonalButton(onClick = { onResume(download) }) { Text("Resume") }
+                            TonalButton(onClick = { onResume(download) }) { Text("Resume") }
                         }
-                        TextButton(onClick = { onDeletePartial(download) }) { Text("Delete partial") }
+                        QuietButton(onClick = { onDeletePartial(download) }) { Text("Delete partial") }
                     }
                 }
             }
@@ -1335,11 +1357,11 @@ private fun SettingsScreen(
             style = MaterialTheme.typography.bodySmall,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 10.dp)) {
-            FilledTonalButton(onClick = { showMetadata = true }) { Text("Configure metadata") }
+            TonalButton(onClick = { showMetadata = true }) { Text("Configure metadata") }
             // Every title looked up again, matched ones included: the way out of
             // a library the provider answered wrong, which otherwise stays wrong
             // for as long as the match is remembered.
-            FilledTonalButton(
+            TonalButton(
                 onClick = { onMatchAgain() },
                 enabled = state.metadataSettings.enabled && !state.refreshing,
             ) { Text("Match everything again") }
@@ -1364,8 +1386,8 @@ private fun SettingsScreen(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
             // The cache is rebuildable, so it goes without asking. Offline
             // episodes are a choice the viewer made, so that one asks.
-            FilledTonalButton(onClick = onClearCache) { Text("Clear cache") }
-            FilledTonalButton(
+            TonalButton(onClick = onClearCache) { Text("Clear cache") }
+            TonalButton(
                 onClick = { confirmDelete = true },
                 enabled = state.storage.offlineCount > 0uL,
             ) { Text("Delete all offline") }
@@ -1377,10 +1399,10 @@ private fun SettingsScreen(
             modifier = Modifier.padding(top = 8.dp),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
-            FilledTonalButton(onClick = {
+            TonalButton(onClick = {
                 legalDocument = LegalDocument("GNU GPL v3", "licenses/GPL-3.0.txt")
             }) { Text("View license") }
-            FilledTonalButton(onClick = {
+            TonalButton(onClick = {
                 legalDocument = LegalDocument("Third-party notices", "licenses/THIRD_PARTY_NOTICES.md")
             }) { Text("View notices") }
         }
@@ -1397,9 +1419,9 @@ private fun SettingsScreen(
                 )
             },
             confirmButton = {
-                Button(onClick = { confirmDelete = false; onRemoveAllOffline() }) { Text("Delete") }
+                AccentButton(onClick = { confirmDelete = false; onRemoveAllOffline() }) { Text("Delete") }
             },
-            dismissButton = { FilledTonalButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+            dismissButton = { TonalButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
     legalDocument?.let { document ->
@@ -1437,8 +1459,8 @@ private fun MetadataSettingsDialog(
                 SettingToggle("Enable enrichment", enabled) { enabled = it }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetadataProvider.entries.forEach { option ->
-                        if (option == provider) Button(onClick = { provider = option }) { Text(option.displayName()) }
-                        else OutlinedButton(onClick = { provider = option }) { Text(option.displayName()) }
+                        if (option == provider) AccentButton(onClick = { provider = option }) { Text(option.displayName()) }
+                        else EdgedButton(onClick = { provider = option }) { Text(option.displayName()) }
                     }
                 }
                 Text(
@@ -1460,12 +1482,12 @@ private fun MetadataSettingsDialog(
             }
         },
         confirmButton = {
-            Button(
+            AccentButton(
                 enabled = !enabled || provider != MetadataProvider.TMDB || current.ready || apiKey.isNotBlank(),
                 onClick = { onSave(enabled, provider, language.ifBlank { "en" }, apiKey) },
             ) { Text("Save") }
         },
-        dismissButton = { FilledTonalButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TonalButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -1495,7 +1517,7 @@ private fun LegalDocumentDialog(document: LegalDocument, onDismiss: () -> Unit) 
                 item { Text(contents, style = MaterialTheme.typography.bodySmall) }
             }
         },
-        confirmButton = { Button(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { AccentButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 
@@ -1552,9 +1574,9 @@ private fun AppearancePicker() {
         items(FlavorChoice.entries.toList(), key = { it.name }) { flavor ->
             val selected = flavor == current.flavor
             if (selected) {
-                Button(onClick = {}) { Text(flavor.label()) }
+                AccentButton(onClick = {}) { Text(flavor.label()) }
             } else {
-                OutlinedButton(onClick = {
+                EdgedButton(onClick = {
                     scope.launch { repaint(current.copy(flavor = flavor), store = true) }
                 }) { Text(flavor.label()) }
             }

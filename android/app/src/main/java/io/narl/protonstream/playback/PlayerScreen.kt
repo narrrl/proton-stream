@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Toc
@@ -47,16 +46,13 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -81,6 +77,11 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.narl.protonstream.native.NativeRuntime
+import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.AccentTrack
+import io.narl.protonstream.ui.theme.EdgedButton
+import io.narl.protonstream.ui.theme.QuietButton
+import io.narl.protonstream.ui.theme.TonalButton
 import io.narl.protonstream.ui.thumbnailSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -379,7 +380,7 @@ fun PlayerScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.45f))
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -452,7 +453,7 @@ fun PlayerScreen(
         // ninety seconds, and a button you have to wake with a tap is one nobody
         // reaches in time.
         offer?.takeIf { overlays && !autoSkip }?.let { skip ->
-            FilledTonalButton(
+            TonalButton(
                 onClick = { nativeHost.seek(skip.target) },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -479,16 +480,19 @@ fun PlayerScreen(
             Column(
                 Modifier
                     .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.small)
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(36.dp))
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(36.dp),
+                )
                 if (state.buffering) {
                     Text(
                         state.cachePercent.takeIf { it > 0.0 }
                             ?.let { "Buffering… ${it.roundToInt()}%" } ?: "Buffering…",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.padding(top = 12.dp),
                     )
@@ -500,16 +504,16 @@ fun PlayerScreen(
             Column(
                 Modifier
                     .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer, MaterialTheme.shapes.small)
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(message, color = Color.White)
+                Text(message, color = MaterialTheme.colorScheme.onErrorContainer)
                 // Dismissible, because the message is not always fatal — a
                 // subtitle track that failed to load leaves an episode that
                 // plays perfectly well behind an error that used to be permanent.
-                TextButton(onClick = { playbackError = null; nativeHost.clearProblem() }) {
-                    Text("Dismiss", color = Color.White)
+                QuietButton(onClick = { playbackError = null; nativeHost.clearProblem() }) {
+                    Text("Dismiss", color = MaterialTheme.colorScheme.onErrorContainer)
                 }
             }
         }
@@ -575,6 +579,7 @@ private fun Activity.toggleLandscape(): Boolean {
  * icons: the transport cluster on the left, where a thumb already is, and the
  * pickers on the right. Only the seek bar gets a full row of its own.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerControls(
     titleKey: String,
@@ -608,7 +613,7 @@ private fun PlayerControls(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.68f))
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.68f))
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .padding(horizontal = 12.dp, vertical = 4.dp),
     ) {
@@ -633,6 +638,7 @@ private fun PlayerControls(
                         scrubbing = null
                     },
                     valueRange = 0f..duration,
+                    track = { AccentTrack(it) },
                 )
                 ChapterMarks(chapters, state.duration, Modifier.matchParentSize())
             }
@@ -798,7 +804,7 @@ private fun SpeedChooser(current: Double, onDismiss: () -> Unit, onSelect: (Doub
         text = {
             Column(Modifier.fillMaxWidth()) {
                 SPEEDS.forEach { rate ->
-                    OutlinedButton(
+                    EdgedButton(
                         onClick = { onSelect(rate) },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     ) {
@@ -810,7 +816,7 @@ private fun SpeedChooser(current: Double, onDismiss: () -> Unit, onSelect: (Doub
                 }
             }
         },
-        confirmButton = { Button(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { AccentButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 
@@ -846,7 +852,7 @@ private fun ChapterChooser(
         text = {
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                 items(chapters, key = ChapterEntry::index) { chapter ->
-                    OutlinedButton(
+                    EdgedButton(
                         onClick = { onSelect(chapter) },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     ) {
@@ -860,7 +866,7 @@ private fun ChapterChooser(
                 }
             }
         },
-        confirmButton = { Button(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { AccentButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 
@@ -894,20 +900,24 @@ private fun UpNextCard(
     if (!showing) return
     Column(
         modifier
-            .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.small)
             .padding(12.dp),
     ) {
-        Text("Up next in ${remaining}s", color = Color.White, style = MaterialTheme.typography.labelMedium)
+        Text(
+            "Up next in ${remaining}s",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium,
+        )
         Text(
             upNext.label,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.titleSmall,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-            Button(onClick = onPlayNow) { Text("Play now") }
-            TextButton(onClick = { held = true }) { Text("Watch till the end", color = Color.White) }
+            AccentButton(onClick = onPlayNow) { Text("Play now") }
+            QuietButton(onClick = { held = true }) { Text("Watch till the end") }
         }
     }
 }
@@ -926,19 +936,19 @@ private fun TrackChooser(
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                 if (type == "sub") {
                     item {
-                        OutlinedButton(onClick = { onSelect(null) }, Modifier.fillMaxWidth()) {
+                        EdgedButton(onClick = { onSelect(null) }, Modifier.fillMaxWidth()) {
                             Text(if (tracks.none(MpvTrack::selected)) "✓  Off" else "Off")
                         }
                     }
                 }
                 items(tracks, key = MpvTrack::id) { track ->
-                    OutlinedButton(onClick = { onSelect(track) }, Modifier.fillMaxWidth()) {
+                    EdgedButton(onClick = { onSelect(track) }, Modifier.fillMaxWidth()) {
                         Text(if (track.selected) "✓  ${track.label}" else track.label)
                     }
                 }
             }
         },
-        confirmButton = { Button(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { AccentButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 
