@@ -171,6 +171,10 @@ stage_shared_dependency_closure() {
 
 mkdir -p "$destination/include/mpv"
 cp "$source_dir/buildscripts/prefix/arm64/include/mpv/"*.h "$destination/include/mpv/"
+# FFmpeg's JNI entry points are not part of the mpv API, but registering the
+# JavaVM MediaCodec needs is our job now that mpv-android's JNI layer is gone.
+mkdir -p "$destination/include/libavcodec"
+cp "$source_dir/buildscripts/prefix/arm64/include/libavcodec/jni.h" "$destination/include/libavcodec/"
 stage_shared_dependency_closure arm64 arm64-v8a aarch64-linux-android
 stage_shared_dependency_closure x86_64 x86_64 x86_64-linux-android
 

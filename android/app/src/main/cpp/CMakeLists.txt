@@ -12,6 +12,12 @@ add_library(pstr_mpv SHARED pstr_mpv.cpp)
 add_library(mpv SHARED IMPORTED)
 set_target_properties(mpv PROPERTIES
     IMPORTED_LOCATION "${PSTR_MPV_ROOT}/jniLibs/${ANDROID_ABI}/libmpv.so")
+# libmpv links FFmpeg dynamically and does not re-export it, so registering the
+# JavaVM that MediaCodec needs means linking libavcodec ourselves. It is already
+# packaged in the same ABI directory as part of libmpv's dependency closure.
+add_library(avcodec SHARED IMPORTED)
+set_target_properties(avcodec PROPERTIES
+    IMPORTED_LOCATION "${PSTR_MPV_ROOT}/jniLibs/${ANDROID_ABI}/libavcodec.so")
 
 target_compile_features(pstr_mpv PRIVATE cxx_std_20)
 target_compile_options(pstr_mpv PRIVATE -Wall -Wextra -Werror)
@@ -20,4 +26,4 @@ target_include_directories(pstr_mpv PRIVATE "${PSTR_MPV_ROOT}/include")
 # packaged into the same ABI directory in the APK.
 target_link_directories(pstr_mpv PRIVATE "${PSTR_RUST_JNI_ROOT}/${ANDROID_ABI}")
 target_link_options(pstr_mpv PRIVATE "-Wl,-l:libpstr_android.so")
-target_link_libraries(pstr_mpv PRIVATE mpv android EGL log)
+target_link_libraries(pstr_mpv PRIVATE mpv avcodec android EGL log)

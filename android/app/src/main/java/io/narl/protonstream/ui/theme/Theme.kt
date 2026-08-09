@@ -67,7 +67,12 @@ private fun schemeOf(palette: PaletteRecord): ColorScheme {
         onPrimaryContainer = color(palette.text),
         secondary = color(palette.accentAlt),
         onSecondary = color(palette.onAccent),
-        secondaryContainer = color(palette.cardHover),
+        // The accent taken back towards the page, not the card's hover shade.
+        // `secondaryContainer` is what fills every tonal button and the
+        // navigation bar's selected pill, and `cardHover` sits one step off
+        // `card` — which on a dark flavour made all of them dark grey shapes on
+        // a dark grey row, readable as text but not as controls.
+        secondaryContainer = color(palette.accentDim),
         onSecondaryContainer = color(palette.text),
         background = color(palette.background),
         onBackground = color(palette.text),

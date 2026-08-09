@@ -993,7 +993,7 @@ pub fn build_rows(share_id: &str, nodes: &[proton_drive_rs::Node]) -> Vec<Catalo
                 // episode's name rather than the series'.
                 if row.parsed.episode_title.is_none()
                     && !row.parsed.title.is_empty()
-                    && row.parsed.title != title
+                    && !row.parsed.title.eq_ignore_ascii_case(&title)
                 {
                     let rest = strip_prefix_title(&row.parsed.title, &title);
                     // …unless what is left is a season marker. `Oshi no Ko 3rd
@@ -1002,7 +1002,11 @@ pub fn build_rows(share_id: &str, nodes: &[proton_drive_rs::Node]) -> Vec<Catalo
                     // that is worse than calling none of them anything.
                     if naming::is_season_marker(&rest) {
                         row.parsed.season = row.parsed.season.or(naming::parse(&rest).season);
-                    } else {
+                    } else if !rest.eq_ignore_ascii_case(&title) {
+                        // Nor when the strip found nothing to remove: a filename
+                        // whose title only *differs* from the folder's — spacing,
+                        // punctuation, a stray article — names the series, not the
+                        // episode, and taking it hands every row the same text.
                         row.parsed.episode_title = Some(rest);
                     }
                 }
@@ -1086,10 +1090,17 @@ fn ancestry(
 ///
 /// `Neon Genesis Evangelion - Death & Rebirth` under a folder called
 /// `Neon Genesis Evangelion` should read as `Death & Rebirth`.
+///
+/// Case-insensitively, because the two names come from different places: the
+/// folder is typed by whoever organised the share and the prefix is whatever a
+/// release group capitalised. `[Anime Time] Attack On Titan - 38.mkv` under a
+/// folder called `Attack on Titan` differs in exactly one letter, and a
+/// case-sensitive strip leaves the whole series name behind as the episode's.
 fn strip_prefix_title(episode: &str, series: &str) -> String {
     let stripped = episode
-        .strip_prefix(series)
-        .map(|rest| rest.trim_start_matches([' ', '-', '_', '.', ':']))
+        .get(..series.len())
+        .filter(|head| head.eq_ignore_ascii_case(series))
+        .map(|_| episode[series.len()..].trim_start_matches([' ', '-', '_', '.', ':']))
         .unwrap_or(episode)
         .trim();
 
@@ -1640,6 +1651,47 @@ mod tests {
         assert_eq!(episode.parsed.season, Some(3));
         assert_eq!(episode.parsed.episode, Some(7));
         assert_eq!(episode.parsed.episode_title, None);
+    }
+
+    /// **What every episode of Attack on Titan was called.** The folder and the
+    /// release group capitalised the same series two ways, and a case-sensitive
+    /// prefix strip left the whole series name behind — so all fifty-nine rows
+    /// read `Attack On Titan`, naming nothing and telling the viewer apart from
+    /// nothing.
+    #[test]
+    fn a_series_name_cased_differently_is_not_the_episodes_name() {
+        let nodes = vec![
+            root(),
+            folder("aot", Some("root"), "Attack on Titan"),
+            video("e38", "aot", "[Anime Time] Attack On Titan - 38.mkv"),
+        ];
+        let rows = build_rows("share", &nodes);
+        let episode = row(&rows, "e38");
+
+        assert_eq!(episode.parsed.title, "Attack on Titan", "the folder's");
+        assert_eq!(episode.parsed.episode, Some(38));
+        assert_eq!(episode.parsed.episode_title, None);
+    }
+
+    /// The prefix strip is case-insensitive for the same reason: what follows
+    /// the series name is the episode's, however the group capitalised it.
+    #[test]
+    fn a_prefix_cased_differently_is_still_stripped() {
+        let nodes = vec![
+            root(),
+            folder("eva", Some("root"), "Neon Genesis Evangelion"),
+            video(
+                "film",
+                "eva",
+                "NEON GENESIS EVANGELION - Death & Rebirth.mkv",
+            ),
+        ];
+        let rows = build_rows("share", &nodes);
+
+        assert_eq!(
+            row(&rows, "film").parsed.episode_title.as_deref(),
+            Some("Death & Rebirth"),
+        );
     }
 
     /// The deepest naming folder wins, so films inside a collection folder are

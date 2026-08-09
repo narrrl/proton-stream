@@ -146,6 +146,119 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B50 — every episode of a show was named after the show
+
+**Symptom.** All fifty-nine Attack on Titan rows read `Attack On Titan` on both
+lines — no numbering, nothing to tell one from the next. Oshi no Ko, in the same
+library, was fine.
+
+**Cause.** `build_rows` treats a filename title that differs from the folder's
+as the *episode's* own name (`catalog.rs`), which is what turns
+`Neon Genesis Evangelion - Death & Rebirth.mkv` under an `NGE` folder into an
+episode called `Death & Rebirth`. Both the comparison and the prefix strip were
+case-sensitive, and the two names come from different hands: the folder was
+`Attack on Titan`, the release group wrote `Attack On Titan`. One letter made
+them "different", the strip then found no prefix to remove, and the whole series
+name was stored as `episode_title` — which `Episode::label` and
+`Episode::detail` both prefer over the numbering.
+
+**Fix.** Both are case-insensitive, and a strip that removes nothing no longer
+yields an episode name.
+
+**Verified.** Two table tests in `catalog.rs`; `cargo test --workspace`. Note
+that the wrong `episode_title` is *stored*, so an existing catalog needs a
+re-crawl (the library's refresh) before rows correct themselves.
+
+### B49 — a recoverable decoder fallback put a dialog over a playing episode
+
+**Symptom.** Every HEVC episode opened with
+`hevc_mediacodec: Both surface and native_window are NULL` over the picture, and
+then played normally.
+
+**Cause.** Two things, both exposed by B46 finally letting the MediaCodec
+decoders initialise. FFmpeg's *direct* MediaCodec decoders render into an
+`ANativeWindow` handed to them at init; this player has none to give — the
+picture goes through `vo_libmpv` on an EGL pbuffer, and the SurfaceView attaches
+later than the load, if at all (background audio). `hwdec=auto-safe` picked them
+regardless. Separately, `record_log` promoted *any* error-level mpv log line to
+the UI, and libavcodec logs a decoder that refuses to initialise as an error
+even where mpv treats it as a fallback.
+
+**Fix.** `hwdec=auto-copy-safe` — the copy variants decode in hardware and hand
+back ordinary frames, which is what this render path can use. And `record_log`
+ignores the `ffmpeg/…` prefix: mpv reports the failures that are actually fatal
+under a prefix of its own.
+
+**Verified.** `gradlew externalNativeBuildDebug`.
+
+### B48 — tonal buttons were grey shapes on a grey page
+
+**Symptom.** Download, Change match, Pause, the navigation bar's selected pill —
+every tonal control was a dark grey rounded rectangle a shade off the card under
+it. Readable as text, invisible as a control. Episode rows compounded it: forty
+rows each arranged themselves around whatever their own download state needed,
+so no two lined up.
+
+**Cause.** `Theme.kt` mapped Material's `secondaryContainer` — which fills every
+`FilledTonalButton` and the navigation indicator — to the palette's `cardHover`,
+one step off `card`. And `EpisodeRow` gave each row a second line of buttons
+whose widths depended on the row's own state.
+
+**Fix.** `secondaryContainer` is `accentDim`, the accent taken back towards the
+page, which is what the role is for. The episode row is one row: the whole card
+plays, the numbering leads the text column, and the two trailing controls sit in
+fixed-width slots — including an empty one — so every row aligns. Numbering is
+always printed, falling back to the season folder's number and then to the row's
+position, so rows the parser could not number still differ. Season headers carry
+a count and an icon-only download. The page also ends above the floating mini
+transport instead of behind it.
+
+**Verified.** `gradlew compileDebugKotlin`.
+
+### B46 — every hardware decoder failed, and playback ran in software
+
+**Symptom.** Starting an HEVC episode on Android raised
+`hevc_mediacodec: No Java virtual machine has been registered` and played
+anyway — decoded on the CPU, with the heat and dropped frames that implies on
+anything above 1080p.
+
+**Cause.** FFmpeg's MediaCodec decoders reach Android's Java API through a
+`JavaVM` handed to them by `av_jni_set_java_vm`; there is no way for them to
+find one themselves. mpv-android registers it in its own JNI layer
+(`app/src/main/jni/main.cpp`), and `pstr_mpv.cpp` replaces that layer, so
+nothing ever called it. `hwdec=auto-safe` then failed to open every MediaCodec
+decoder and fell back to software.
+
+**Fix.** `JNI_OnLoad` in `pstr_mpv.cpp` registers the VM — the loader calls it
+once per process, before any native method and long before a decoder runs.
+libmpv links FFmpeg dynamically without re-exporting it, so `CMakeLists.txt`
+links `libavcodec.so` (already packaged as part of libmpv's staged dependency
+closure) and `scripts/build-libmpv-android.sh` stages `libavcodec/jni.h`
+alongside the mpv headers.
+
+**Verified.** `gradlew externalNativeBuildDebug`; `libpstr_mpv.so` exports
+`JNI_OnLoad`, imports `av_jni_set_java_vm@LIBAVCODEC_63` and gains a
+`libavcodec.so` `DT_NEEDED`.
+
+### B47 — episode labels were set one character per line
+
+**Symptom.** On a phone, an episode row rendered "S03E01" down the screen a
+letter at a time, and the show screen did the same to "More on AniList".
+
+**Cause.** Both were fixed `Row`s in which the flexible child came last: the
+episode row gave a 96 dp still, a Play button, a watched toggle and a download
+button their intrinsic widths and left `Modifier.weight(1f)` whatever remained,
+which on a narrow screen is a few pixels. Compose does not drop a child to make
+room; it wraps the text into the column it was given.
+
+**Fix.** The episode row is two rows — still plus label above, controls below —
+with the label ellipsized rather than wrapped without bound. The show screen's
+two button rows are `FlowRow`s, so a button that does not fit moves to the next
+line instead of squeezing its neighbour. The season header gives its label the
+weight so a long season name cannot squeeze "Download season".
+
+**Verified.** `gradlew compileDebugKotlin` and `ktlintMainSourceSetCheck`.
+
 ### B36 — an invalidated connection stayed live, and releasing a stream could no-op
 
 **Symptom.** Removing a share left its authenticated visitor client usable for

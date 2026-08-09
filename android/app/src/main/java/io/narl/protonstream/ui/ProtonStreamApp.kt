@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,10 +21,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -84,6 +88,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
@@ -126,6 +131,9 @@ import io.narl.protonstream.playback.PlayerScreen
  * quicker to search for the thing than to scroll the shelf looking for it.
  */
 private const val CONTINUE_WATCHING_MAX = 12
+
+/** How much room the floating mini transport needs at the foot of a page. */
+private val MINI_TRANSPORT_INSET = 88.dp
 
 /** What the player was asked to open: a title's episodes, and which one. */
 private data class PlayRequest(
@@ -222,6 +230,16 @@ fun ProtonStreamApp(
                 destination = Destination.Library
             }
             val minimizedHost = (playerHost as? NativeMpvHost)?.takeIf { playing != null && playerMinimized }
+            // The mini transport floats over the page, so the page has to end
+            // above it. Without this the last episode of a season sits under the
+            // bar and cannot be scrolled clear of it.
+            val direction = LocalLayoutDirection.current
+            val body = if (minimizedHost == null) padding else PaddingValues(
+                start = padding.calculateStartPadding(direction),
+                end = padding.calculateEndPadding(direction),
+                top = padding.calculateTopPadding(),
+                bottom = padding.calculateBottomPadding() + MINI_TRANSPORT_INSET,
+            )
             Box(Modifier.fillMaxSize()) {
             AnimatedContent(destination, label = "primary navigation") { target ->
                 when (target) {
@@ -235,7 +253,7 @@ fun ProtonStreamApp(
                                 playerMinimized = false
                             },
                             { selectedTitleKey = it.key },
-                            padding,
+                            body,
                         )
                     } else {
                         TitleScreen(
@@ -250,7 +268,7 @@ fun ProtonStreamApp(
                             model::reportError,
                             model::reloadAfterMetadataChange,
                             model::setWatched,
-                            padding,
+                            body,
                         )
                     }
                     Destination.Shares -> SharesScreen(
@@ -259,7 +277,7 @@ fun ProtonStreamApp(
                         model::repairShare,
                         model::refreshShare,
                         model::removeShare,
-                        padding,
+                        body,
                     )
                     Destination.Downloads -> DownloadsScreen(
                         state,
@@ -267,7 +285,7 @@ fun ProtonStreamApp(
                         model::pauseDownload,
                         model::resumeDownload,
                         model::deletePartial,
-                        padding,
+                        body,
                     )
                     Destination.Settings -> SettingsScreen(
                         state,
@@ -275,7 +293,7 @@ fun ProtonStreamApp(
                         { model.matchTitles(force = true) },
                         model::clearBlockCache,
                         model::removeAllOffline,
-                        padding,
+                        body,
                     )
                 }
             }
@@ -557,7 +575,14 @@ private fun TitleScreen(
                 modifier = Modifier.padding(top = 6.dp),
             )
             title.overview?.let { Text(it, modifier = Modifier.padding(top = 10.dp)) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
+            // Wrapping, not squeezing: a fixed row hands the last button the
+            // width the others left over, which is how "More on AniList" ended
+            // up set one letter per line on a phone.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            ) {
                 // What a press on the poster should play: whatever was left
                 // part-watched, else the first unwatched episode, else the
                 // first — the desktop client's `next_up`.
@@ -579,8 +604,10 @@ private fun TitleScreen(
                         enabled = playerReady && playlist.isNotEmpty(),
                     ) { Text("Start over") }
                 }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                // The rest in the same flow, and all the same kind of button:
+                // one filled primary for the thing the page is for, tonal for
+                // everything else. A text link among filled buttons was what
+                // made this block read as three unrelated rows of controls.
                 FilledTonalButton(onClick = { DownloadCoordinator.enqueue(context, playlist) }) {
                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
@@ -594,7 +621,7 @@ private fun TitleScreen(
                 // The provider's own page for this title: where a viewer goes to
                 // check that the thing the app matched is the thing they have.
                 title.externalUrl?.let { url ->
-                    TextButton(onClick = {
+                    OutlinedButton(onClick = {
                         runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
                         }.onFailure(onPreferenceError)
@@ -648,37 +675,57 @@ private fun TitleScreen(
         }
         title.seasons.forEach { season ->
             val isExpanded = expandedSeasons.contains(season.label)
-            item {
+            item(key = "season/${season.label}") {
+                // A header, not a row with a button parked on the end of it: the
+                // label and its count are the only things that grow, and the one
+                // action is an icon of fixed width, so every season header down
+                // the page starts and ends in the same place.
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .padding(top = 12.dp)
+                        .clip(MaterialTheme.shapes.medium)
                         .clickable {
                             expandedSeasons = if (isExpanded) expandedSeasons - season.label else expandedSeasons + season.label
                         }
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    Icon(
+                        if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            season.label,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Text(season.label, style = MaterialTheme.typography.titleLarge)
+                        val watched = season.episodes.count(EpisodeRecord::watched)
+                        Text(
+                            "${season.episodes.size} " +
+                                (if (season.episodes.size == 1) "episode" else "episodes") +
+                                if (watched > 0) " · $watched watched" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    FilledTonalButton(onClick = { DownloadCoordinator.enqueue(context, season.episodes) }) {
-                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Download season")
+                    IconButton(onClick = { DownloadCoordinator.enqueue(context, season.episodes) }) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Download ${season.label}",
+                        )
                     }
                 }
             }
             if (isExpanded) {
-                items(season.episodes, key = { it.linkId }) { episode ->
+                itemsIndexed(season.episodes, key = { _, it -> it.linkId }) { position, episode ->
                     EpisodeRow(
                         episode = episode,
+                        numbering = episode.numbering(season.number, position),
                         download = downloads.firstOrNull {
                             it.shareId == episode.shareId && it.linkId == episode.linkId
                         },
@@ -704,15 +751,39 @@ private fun TitleScreen(
 }
 
 /**
+ * `S03E38`, `E38`, or the row's place in the season.
+ *
+ * Mirrors `Episode::numbering` in `pstr-core`, plus the desktop client's
+ * fallback to the season folder's number. The last case is deliberately *not*
+ * printed as an episode number — nothing in the name numbered this file, and
+ * `#4` says "fourth in the list" where `E04` would be a claim about the show.
+ * Some ordinal is required regardless: a season of rows that all read the same
+ * is a season the viewer cannot navigate at all.
+ */
+private fun EpisodeRecord.numbering(fallbackSeason: UInt?, position: Int): String {
+    val season = this.season ?: fallbackSeason
+    val number = this.number
+    return when {
+        season != null && number != null -> "S%02dE%02d".format(season.toInt(), number.toInt())
+        number != null -> "E%02d".format(number.toInt())
+        else -> "#${position + 1}"
+    }
+}
+
+/**
  * One episode: play it, see where it was left, and drive its download.
  *
- * A row carries the things a viewer acts on — resume, mark seen, download,
- * pause — so they are controls, not a menu: the download button becomes the
- * progress readout while it runs, which is the same space either way.
+ * The row *is* the play button — the still, the numbering and the name are one
+ * target, which is what lets the trailing controls be two icons in a fixed
+ * column rather than a second row of buttons under every episode. Both were
+ * needed while the row carried a full-width `Play`: it pushed the download and
+ * watched controls into whatever width was left, and forty of those down a
+ * season read as forty differently-arranged rows.
  */
 @Composable
 private fun EpisodeRow(
     episode: EpisodeRecord,
+    numbering: String,
     download: RetainedDownload?,
     playerReady: Boolean,
     onPlay: () -> Unit,
@@ -723,43 +794,77 @@ private fun EpisodeRow(
 ) {
     val running = download?.status == RetainedDownload.STATUS_RUNNING ||
         download?.status == RetainedDownload.STATUS_QUEUED
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp)) {
+    // The provider's name for the episode when there is one: "The Cave of
+    // Skulls" says more than the filename it was parsed out of. The filename
+    // stays underneath it, and is the whole answer when there is no provider.
+    val name = episode.providerName ?: episode.detail
+    val detail = episode.detail.takeIf { it != name }
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = playerReady, onClick = onPlay),
+    ) {
+        Column(Modifier.padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // The still, and the largest target on the row for the thing the
-                // row is for. With metadata off the provider has no still, and
-                // Proton's own thumbnail is a frame of this very episode.
-                RemoteArtwork(
-                    episode.stillUrl,
-                    episode.providerName ?: episode.label,
+                // With metadata off the provider has no still, and Proton's own
+                // thumbnail is a frame of this very episode.
+                Box(
                     Modifier
                         .width(96.dp)
                         .aspectRatio(16f / 9f)
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable(enabled = playerReady, onClick = onPlay),
-                    fallback = episode.thumbnailSource,
-                )
-                Spacer(Modifier.width(12.dp))
-                Button(onClick = onPlay, enabled = playerReady) {
-                    Text(
-                        when {
-                            !playerReady -> "Player loading…"
-                            episode.watched -> "Replay"
-                            episode.resumeAt != null -> "Resume"
-                            else -> "Play"
-                        },
+                        .clip(MaterialTheme.shapes.small),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    RemoteArtwork(
+                        episode.stillUrl,
+                        name,
+                        Modifier.fillMaxSize(),
+                        fallback = episode.thumbnailSource,
+                    )
+                    // Over the still rather than beside it: the row already
+                    // plays on tap, so this says so without spending a column.
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.45f))
+                            .padding(4.dp),
                     )
                 }
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(episode.label, fontWeight = FontWeight.SemiBold)
-                    // The provider's name for the episode when there is one:
-                    // "The Cave of Skulls" says more than the filename it was
-                    // parsed out of. The filename detail stays as the fallback.
                     Text(
-                        episode.providerName ?: episode.detail,
-                        style = MaterialTheme.typography.bodySmall,
+                        numbering,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                     )
+                    Text(
+                        name,
+                        fontWeight = FontWeight.SemiBold,
+                        // Seen episodes stay legible but stop competing with the
+                        // one the viewer has not watched yet.
+                        color = if (episode.watched) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    detail?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 // Watched is a judgement the viewer is allowed to overrule: a
                 // half-watched episode they are done with, or one the 90 % rule
@@ -775,12 +880,25 @@ private fun EpisodeRow(
                         },
                     )
                 }
-                when {
-                    episode.offline -> Text("Offline", style = MaterialTheme.typography.labelMedium)
-                    running -> FilledTonalButton(onClick = { onPause(download!!) }) { Text("Pause") }
-                    download != null -> FilledTonalButton(onClick = { onResume(download) }) { Text("Resume") }
-                    else -> FilledTonalButton(onClick = onDownload) {
-                        Icon(Icons.Default.Download, contentDescription = "Download", modifier = Modifier.size(18.dp))
+                // One slot, always the same width, whatever state the download
+                // is in — including "there is nothing to say", where an empty
+                // box keeps the rows above and below it aligned.
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    when {
+                        episode.offline -> Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Saved offline",
+                            tint = MaterialTheme.colorScheme.tertiary,
+                        )
+                        running -> IconButton(onClick = { onPause(download!!) }) {
+                            Icon(Icons.Default.Pause, contentDescription = "Pause download")
+                        }
+                        download != null -> IconButton(onClick = { onResume(download) }) {
+                            Icon(Icons.Default.Download, contentDescription = "Resume download")
+                        }
+                        else -> IconButton(onClick = onDownload) {
+                            Icon(Icons.Default.Download, contentDescription = "Download")
+                        }
                     }
                 }
             }
@@ -801,6 +919,7 @@ private fun EpisodeRow(
                     "${active.status.replaceFirstChar { it.uppercase() }} · " +
                         "${formatBytes(active.downloaded.toULong())} of ${formatBytes(active.total.toULong())}",
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

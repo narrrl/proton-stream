@@ -9,6 +9,10 @@
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
 
+extern "C" {
+#include <libavcodec/jni.h>
+}
+
 #include <atomic>
 #include <algorithm>
 #include <charconv>
@@ -212,7 +216,15 @@ class Player {
         option("vo", "libmpv");
         option("force-window", "no");
         option("video-timing-offset", "0");
-        option("hwdec", "auto-safe");
+        // `-copy-safe`, not `-safe`. The direct MediaCodec decoders render into
+        // an `ANativeWindow` the decoder is handed at init, and this player has
+        // none to give: the picture goes through `vo_libmpv` and an EGL pbuffer,
+        // and the SurfaceView — when there is one at all — attaches later than
+        // the load. `auto-safe` picks them anyway and every file opens with
+        // `hevc_mediacodec: Both surface and native_window are NULL` before
+        // falling back. The copy variants decode in hardware and hand back
+        // ordinary frames, which is what this render path can actually use.
+        option("hwdec", "auto-copy-safe");
         option("cache", "yes");
         option("cache-secs", "30");
         option("demuxer-readahead-secs", "30");
@@ -546,8 +558,16 @@ class Player {
     /// A failure cascades — one unreadable header produces a dozen follow-on
     /// complaints — and the first line is the one that names the cause. Cleared
     /// by [take_error], which is how the UI consumes it.
+    ///
+    /// Only mpv's own errors. Everything libavcodec and libavformat complain
+    /// about arrives under an `ffmpeg/…` prefix, and mpv is the thing that
+    /// decides whether any of it mattered: a decoder that refuses to
+    /// initialise is an error there and a fallback here, so surfacing those
+    /// puts a dialog over a file that goes on to play perfectly. When one of
+    /// them really is fatal mpv says so itself, under a prefix of its own.
     void record_log(const mpv_event_log_message &message) {
         if (!message.text) return;
+        if (message.prefix && !std::strncmp(message.prefix, "ffmpeg", 6)) return;
         std::lock_guard lock(state_mutex_);
         if (!error_.empty()) return;
         error_.assign(message.text);
@@ -767,6 +787,22 @@ void reject_null_surface(JNIEnv *env) noexcept {
 }
 
 } // namespace
+
+/// FFmpeg's MediaCodec decoders call into Android's Java API, and they can only
+/// reach it through a JavaVM handed to them explicitly — there is no way for
+/// them to discover one. Without this, every hardware decoder fails to open
+/// with "hevc_mediacodec: No Java virtual machine has been registered" and
+/// playback falls back to software decoding, which on a phone means a hot
+/// device and dropped frames on anything above 1080p.
+///
+/// mpv-android's own JNI layer does this in its `create` entry point; this
+/// library replaces that layer, so the registration has to happen here. The
+/// loader calls this once per process before any native method, which is
+/// earlier than any decoder can run.
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
+    av_jni_set_java_vm(vm, nullptr);
+    return JNI_VERSION_1_6;
+}
 
 extern "C" JNIEXPORT jlong JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeCreate(JNIEnv *, jclass) noexcept {
     return c_boundary<jlong>(0, [] {
