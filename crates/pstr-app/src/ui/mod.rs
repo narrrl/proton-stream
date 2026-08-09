@@ -7,6 +7,7 @@ pub mod downloads;
 pub mod library;
 pub mod matcher;
 pub mod player;
+pub mod settings;
 pub mod shares;
 pub mod title;
 pub mod transport;
@@ -114,8 +115,8 @@ pub fn format_size(bytes: i64) -> String {
 pub fn section(ui: &mut egui::Ui, text: &str) {
     ui.add_space(6.0);
     ui.label(
-        egui::RichText::new(text)
-            .size(17.0)
+        theme::Role::Section
+            .rich(text)
             .strong()
             .color(theme::text()),
     );
@@ -124,18 +125,81 @@ pub fn section(ui: &mut egui::Ui, text: &str) {
 
 /// Small grey text, for everything that is context rather than content.
 pub fn muted(text: impl Into<String>) -> egui::RichText {
-    egui::RichText::new(text).size(12.0).color(theme::muted())
+    theme::Role::Caption.rich(text).color(theme::muted())
 }
 
 /// The one button style that means "this is the action".
 pub fn accent_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    filled(ui, text, true, Vec2::new(0.0, 0.0))
+    filled(ui, text, Fill::Accent, Vec2::new(0.0, 0.0))
 }
 
-/// A tab in the top bar. The selected one wears the accent; the others are text
-/// until the pointer is over them.
-pub fn tab(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
-    filled(ui, text, selected, Vec2::new(4.0, 0.0))
+/// What [`filled`] paints behind its label.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fill {
+    /// The accent, gradient and all.
+    Accent,
+    /// Nothing — something else already painted the accent here, and the label
+    /// only has to be legible on it.
+    Ink,
+    /// Nothing at rest, the hover colour under the pointer.
+    None,
+}
+
+/// A row of tabs with one accent pill that slides between them.
+///
+/// Drawn as a row rather than a tab at a time because the pill has to be
+/// painted *behind* labels whose positions are not known until they have been
+/// laid out, and because a pill that moves has to be one pill: a per-tab fill
+/// can only ever cross-fade, which reads as two things blinking rather than one
+/// thing travelling.
+///
+/// Returns the index that was clicked, if any.
+pub fn tabs(ui: &mut egui::Ui, id: egui::Id, items: &[(&str, bool)]) -> Option<usize> {
+    // Reserved now, filled in below: everything drawn after this lands on top
+    // of it whatever it turns out to be.
+    let pill = ui.painter().add(egui::Shape::Noop);
+
+    let mut clicked = None;
+    let mut selected = None;
+    for (index, (text, is_selected)) in items.iter().enumerate() {
+        let response = tab(ui, *is_selected, text);
+        if *is_selected {
+            selected = Some(response.rect);
+        }
+        if response.clicked() {
+            clicked = Some(index);
+        }
+    }
+
+    if let Some(target) = selected {
+        // Interpolating the edges rather than the centre and the width keeps
+        // the pill from overshooting when it moves between tabs of different
+        // lengths — both edges arrive at the same time.
+        let ctx = ui.ctx();
+        let left = ctx.animate_value_with_time(id.with("left"), target.left(), 0.16);
+        let right = ctx.animate_value_with_time(id.with("right"), target.right(), 0.16);
+        let rect = Rect::from_min_max(
+            egui::pos2(left, target.top()),
+            egui::pos2(right, target.bottom()),
+        );
+        ui.painter().set(
+            pill,
+            theme::accent_shape(ui.ctx(), rect, CornerRadius::same(8)),
+        );
+    }
+
+    clicked
+}
+
+/// One tab. The selected one is ink on the pill [`tabs`] draws; the others are
+/// text until the pointer is over them.
+fn tab(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
+    filled(
+        ui,
+        text,
+        if selected { Fill::Ink } else { Fill::None },
+        Vec2::new(4.0, 0.0),
+    )
 }
 
 /// A button painted by hand, so that "filled with the accent" can mean a
@@ -144,7 +208,7 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
 /// `egui::Button` takes a single `Color32` and there is no way in to give it
 /// anything else, so the fill, the label and the hover states are all drawn
 /// here. Everything else — sizing, padding, the click — is still egui's.
-fn filled(ui: &mut egui::Ui, text: &str, accented: bool, extra: Vec2) -> egui::Response {
+fn filled(ui: &mut egui::Ui, text: &str, fill: Fill, extra: Vec2) -> egui::Response {
     let padding = ui.spacing().button_padding + extra;
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
@@ -162,23 +226,35 @@ fn filled(ui: &mut egui::Ui, text: &str, accented: bool, extra: Vec2) -> egui::R
     }
 
     let radius = CornerRadius::same(8);
-    let lift = if response.is_pointer_button_down_on() {
-        -0.14
-    } else if response.hovered() {
-        0.10
-    } else {
-        0.0
-    };
+    // Eased rather than switched, so the veil arrives over a few frames instead
+    // of appearing whole the moment the pointer crosses the edge. The press is
+    // quicker than the hover: a click should feel like it registered, not like
+    // it was considered.
+    let ctx = ui.ctx().clone();
+    let hover = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.10);
+    let press = ctx.animate_bool_with_time(
+        response.id.with("press"),
+        response.is_pointer_button_down_on(),
+        0.05,
+    );
+    let lift = 0.10 * hover * (1.0 - press) - 0.14 * press;
 
-    let ink = if accented {
-        theme::accent_fill(ui.painter(), rect, radius, lift);
-        theme::on_accent()
-    } else {
-        if response.hovered() {
-            ui.painter().rect_filled(rect, radius, theme::card_hover());
-            theme::text()
-        } else {
-            theme::muted()
+    let ink = match fill {
+        Fill::Accent => {
+            theme::accent_fill(ui.painter(), rect, radius, lift);
+            theme::on_accent()
+        }
+        // The pill is already under this one; only the veil is missing.
+        Fill::Ink => {
+            theme::veil_over(ui.painter(), rect, radius, lift);
+            theme::on_accent()
+        }
+        Fill::None => {
+            if hover > 0.0 {
+                ui.painter()
+                    .rect_filled(rect, radius, theme::card_hover().gamma_multiply(hover));
+            }
+            theme::muted().lerp_to_gamma(theme::text(), hover)
         }
     };
 
@@ -197,6 +273,12 @@ pub struct Card<'a> {
     pub progress: Option<f32>,
     /// A short label in the corner — `S01E04`.
     pub badge: Option<String>,
+    /// How wide to draw it.
+    ///
+    /// A grid flexes this so its rows reach the right edge of the window; a
+    /// sideways-scrolling shelf has no edge to reach and passes
+    /// [`theme::CARD_WIDTH`].
+    pub width: f32,
 }
 
 /// Draw one tile and report whether it was clicked.
@@ -208,7 +290,7 @@ pub struct Card<'a> {
 /// the title, usually. The gap it leaves is filled with the card colour, which
 /// reads as deliberate in a way a stretched poster does not.
 pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
-    let width = theme::CARD_WIDTH;
+    let width = card.width;
     let image_height = (width * theme::CARD_ASPECT).round();
     // Two lines of name plus one of subtitle. Fixed, because the tile is
     // allocated before the name is laid out — and because a grid whose rows are
@@ -223,16 +305,46 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     }
 
     let image_rect = Rect::from_min_size(rect.min, Vec2::new(width, image_height));
-    let hovered = response.hovered();
+    // Hover is a value, not a flag: the border, the lift and the shadow all
+    // ride it, so they arrive together rather than each snapping on its own.
+    // egui drives this from wall-clock time, so it is the same speed whatever
+    // the frame rate — and it needs no state kept here.
+    let hover =
+        ui.ctx()
+            .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.12);
+    // The picture arrives whenever its download finishes, several frames after
+    // the tile first drew. Fading it in over the placeholder turns a wall of
+    // letters popping into stills into one settle.
+    let art_in = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("art"), card.art.is_some(), 0.22);
     let painter = ui.painter();
 
+    if hover > 0.0 {
+        painter.add(theme::tile_shadow(hover).as_shape(image_rect, radius));
+    }
     painter.rect_filled(image_rect, radius, theme::card());
 
+    // Under the picture, not instead of it: it is what shows through while the
+    // art fades in, and it is the whole tile when there is no art to come.
+    if art_in < 1.0 {
+        painter.text(
+            image_rect.center(),
+            Align2::CENTER_CENTER,
+            initials(card.name),
+            egui::FontId::proportional(28.0),
+            theme::muted().gamma_multiply(1.0 - art_in),
+        );
+    }
+
+    // White because a textured rect *multiplies* its fill by the texture; the
+    // alpha on it is what fades the picture in.
+    let ink = Color32::WHITE.gamma_multiply(art_in);
     match &card.art {
         Some((texture, ArtShape::Landscape)) => {
             let size = texture.size_vec2();
             painter.add(
-                egui::epaint::RectShape::filled(image_rect, radius, Color32::WHITE)
+                egui::epaint::RectShape::filled(image_rect, radius, ink)
                     .with_texture(texture.id(), cover_uv(size, image_rect.size())),
             );
         }
@@ -241,7 +353,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
                 egui::epaint::RectShape::filled(
                     contain_rect(texture.size_vec2(), image_rect),
                     radius,
-                    Color32::WHITE,
+                    ink,
                 )
                 .with_texture(
                     texture.id(),
@@ -249,24 +361,13 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
                 ),
             );
         }
-        None => {
-            painter.text(
-                image_rect.center(),
-                Align2::CENTER_CENTER,
-                initials(card.name),
-                egui::FontId::proportional(28.0),
-                theme::muted(),
-            );
-        }
+        None => {}
     }
 
     if let Some(badge) = &card.badge {
         let anchor = image_rect.right_top() + Vec2::new(-8.0, 8.0);
-        let galley = painter.layout_no_wrap(
-            badge.clone(),
-            egui::FontId::proportional(11.0),
-            Color32::WHITE,
-        );
+        let galley =
+            painter.layout_no_wrap(badge.clone(), theme::Role::Micro.font(), Color32::WHITE);
         let background = Rect::from_min_size(
             anchor - Vec2::new(galley.size().x + 10.0, 0.0),
             galley.size() + Vec2::new(10.0, 4.0),
@@ -314,11 +415,11 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
         theme::accent_fill(&clipped_painter, played, played_radius, 0.0);
     }
 
-    if hovered {
+    if hover > 0.0 {
         painter.rect_stroke(
             image_rect,
             radius,
-            Stroke::new(2.0, theme::accent()),
+            Stroke::new(2.0, theme::accent().gamma_multiply(hover)),
             egui::StrokeKind::Inside,
         );
     }
@@ -333,12 +434,10 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     // the line below it.
     let mut job = egui::text::LayoutJob::simple(
         card.name.to_string(),
-        egui::FontId::proportional(14.0),
-        if hovered {
-            Color32::WHITE
-        } else {
-            theme::text()
-        },
+        theme::Role::Body.font(),
+        // Towards white as the pointer arrives, so the name lifts with the
+        // border rather than staying put while everything around it moves.
+        theme::text().lerp_to_gamma(Color32::WHITE, hover),
         width,
     );
     job.wrap.max_rows = 2;
@@ -350,7 +449,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
         text_rect.min + Vec2::new(0.0, name_height + 2.0),
         Align2::LEFT_TOP,
         card.subtitle,
-        egui::FontId::proportional(11.5),
+        theme::Role::Caption.font(),
         theme::muted(),
     );
 
@@ -396,10 +495,33 @@ fn initials(name: &str) -> String {
         .collect()
 }
 
-/// How many cards fit, and the gap that leaves them evenly spread.
-pub fn columns(available: f32) -> usize {
-    (((available + theme::CARD_GAP) / (theme::CARD_WIDTH + theme::CARD_GAP)).floor() as usize)
-        .max(1)
+/// How a grid divides the width it was given.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grid {
+    pub columns: usize,
+    /// What each card should be drawn at, so the row reaches both edges.
+    pub width: f32,
+}
+
+/// Fit as many cards as will go, then widen them to use the rest.
+///
+/// [`theme::CARD_WIDTH`] is a *minimum*, not the width. Dividing by it and
+/// flooring — which is what this used to do — leaves up to one whole card of
+/// dead space at the right of every row, and on a wide window that reads as a
+/// layout that failed to line up rather than as a margin.
+pub fn columns(available: f32) -> Grid {
+    let columns = (((available + theme::CARD_GAP) / (theme::CARD_WIDTH + theme::CARD_GAP)).floor()
+        as usize)
+        .max(1);
+    // The gaps come out of the width before it is split. Floored, because a
+    // fraction of a point times four columns is enough to push the last card
+    // onto a row of its own. A window too narrow for even one full card gets a
+    // card narrower than the minimum, which is better than one clipped by the
+    // edge.
+    let width = ((available - theme::CARD_GAP * (columns - 1) as f32) / columns as f32)
+        .floor()
+        .max(1.0);
+    Grid { columns, width }
 }
 
 #[cfg(test)]
@@ -454,7 +576,31 @@ mod tests {
 
     #[test]
     fn column_count_never_reaches_zero() {
-        assert_eq!(columns(0.0), 1);
-        assert!(columns(2000.0) > 1);
+        assert_eq!(columns(0.0).columns, 1);
+        assert!(columns(2000.0).columns > 1);
+    }
+
+    #[test]
+    fn a_row_of_cards_fills_the_width_it_was_given() {
+        // The defect this replaced: floor(available / CARD_WIDTH) cards at a
+        // fixed width leave up to one card's worth of the window empty.
+        for available in [400.0, 813.0, 1280.0, 1920.5, 3440.0] {
+            let grid = columns(available);
+            let used =
+                grid.width * grid.columns as f32 + theme::CARD_GAP * (grid.columns - 1) as f32;
+            assert!(used <= available, "{available}: {used} overflows the row");
+            assert!(
+                available - used < grid.columns as f32 + 1.0,
+                "{available}: {} left over",
+                available - used,
+            );
+        }
+    }
+
+    #[test]
+    fn cards_never_go_below_the_minimum_while_they_still_fit() {
+        for available in [500.0, 900.0, 2400.0] {
+            assert!(columns(available).width >= theme::CARD_WIDTH);
+        }
     }
 }

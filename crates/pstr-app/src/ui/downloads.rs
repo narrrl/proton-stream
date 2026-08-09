@@ -32,7 +32,7 @@ pub fn show(ui: &mut egui::Ui, downloads: &[DownloadItem], actions: &mut Vec<Act
             .filter(|item| item.state == DownloadState::Completed)
             .count();
 
-        ui.label(egui::RichText::new(title).size(17.0).strong());
+        ui.label(theme::Role::Section.rich(title).strong());
         let totals_known = group.iter().all(|item| item.total > 0);
         ui.horizontal(|ui| {
             if totals_known {
@@ -145,7 +145,11 @@ fn row(ui: &mut egui::Ui, item: &DownloadItem, actions: &mut Vec<Action>) {
                             }
                         }
                         DownloadState::Completed => {
-                            if ui.button("Make online-only").clicked() {
+                            if ui
+                                .button("Delete")
+                                .on_hover_text("Delete the offline copy; keep the online source")
+                                .clicked()
+                            {
                                 actions.push(Action::RemoveDownload(item.key.clone(), false));
                             }
                         }

@@ -116,7 +116,7 @@ pub fn mini(
         // one-way trip: playback carries on with nowhere to watch it.
         if ui
             .add(
-                egui::Button::new(egui::RichText::new("Back to video").size(13.0))
+                egui::Button::new(theme::Role::Label.rich("Back to video"))
                     .fill(theme::card_hover())
                     .corner_radius(CornerRadius::same(8)),
             )
@@ -132,12 +132,8 @@ pub fn mini(
             // is the only thing that still knows which title this came from.
             if ui
                 .add(
-                    egui::Label::new(
-                        egui::RichText::new(&playback.target.title_name)
-                            .size(14.0)
-                            .strong(),
-                    )
-                    .sense(Sense::click()),
+                    egui::Label::new(theme::Role::Body.rich(&playback.target.title_name).strong())
+                        .sense(Sense::click()),
                 )
                 .on_hover_text("Show this title")
                 .clicked()
@@ -287,7 +283,7 @@ fn step_button(
 ) {
     let response = ui.add_enabled(
         enabled,
-        egui::Button::new(egui::RichText::new(label).size(15.0)).min_size(Vec2::new(38.0, 30.0)),
+        egui::Button::new(theme::Role::Subhead.rich(label)).min_size(Vec2::new(38.0, 30.0)),
     );
     if response.on_hover_text(hover).clicked() {
         push(actions);

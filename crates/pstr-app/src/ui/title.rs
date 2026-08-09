@@ -44,13 +44,13 @@ pub fn show(
             for (index, season) in title.seasons.iter().enumerate() {
                 let open = index == 0 || title.seasons.len() == 1;
                 egui::CollapsingHeader::new(
-                    egui::RichText::new(format!(
-                        "{}  ·  {}",
-                        season.label(),
-                        ui::library::plural(season.episodes.len(), "episode")
-                    ))
-                    .size(15.0)
-                    .strong(),
+                    theme::Role::Subhead
+                        .rich(format!(
+                            "{}  ·  {}",
+                            season.label(),
+                            ui::library::plural(season.episodes.len(), "episode")
+                        ))
+                        .strong(),
                 )
                 .id_salt(("season", index))
                 .default_open(open)
@@ -58,13 +58,17 @@ pub fn show(
                     let season_keys: Vec<_> = season.episodes.iter().map(key_of).collect();
                     let all_offline = season_keys.iter().all(|key| offline.files.contains(key));
                     if all_offline {
-                        if ui.button("Make season online-only").clicked() {
+                        if ui
+                            .button("Delete season")
+                            .on_hover_text("Delete the offline copies; keep the online source")
+                            .clicked()
+                        {
                             for key in season_keys {
                                 actions.push(Action::RemoveDownload(key, false));
                             }
                         }
                     } else if ui
-                        .button("Make season offline")
+                        .button("Download season")
                         .on_hover_text("Download every episode in this season")
                         .clicked()
                     {
@@ -98,22 +102,34 @@ fn header(
     let record = art.metadata.get(&title.key);
     let found = record.and_then(|record| record.metadata.clone());
     let by_hand = record.is_some_and(|record| record.manual);
+    // Asked for once and used twice: the same picture is the poster beside the
+    // text and the banner behind all of it.
+    let picture = art.of(title);
 
+    // Reserved before the header is laid out, because the band is as tall as
+    // whatever the header comes to — a fixed height would clip a long overview
+    // on one title and leave a gap under a short one on the next.
+    let backdrop = picture
+        .as_ref()
+        .map(|(texture, _)| (texture.clone(), ui.painter().add(egui::Shape::Noop)));
+
+    ui.add_space(6.0);
     ui.horizontal_top(|ui| {
         ui::card(
             ui,
             Card {
-                art: art.of(title),
+                art: picture,
                 name: &title.name,
                 subtitle: String::new(),
                 progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
                 badge: None,
+                width: theme::CARD_WIDTH,
             },
         );
 
         ui.add_space(18.0);
         ui.vertical(|ui| {
-            ui.label(egui::RichText::new(&title.name).size(26.0).strong());
+            ui.label(theme::Role::Display.rich(&title.name).strong());
             // The provider's name for it, when it is not the one the files use.
             // Worth showing rather than replacing the filename's: a viewer
             // should be able to tell what the match actually matched.
@@ -147,13 +163,17 @@ fn header(
                     let title_keys: Vec<_> = title.episodes().map(key_of).collect();
                     let all_offline = title_keys.iter().all(|key| offline.files.contains(key));
                     if all_offline {
-                        if ui.button("Make show online-only").clicked() {
+                        if ui
+                            .button("Delete show")
+                            .on_hover_text("Delete the offline copies; keep the online source")
+                            .clicked()
+                        {
                             for key in title_keys {
                                 actions.push(Action::RemoveDownload(key, false));
                             }
                         }
                     } else if ui
-                        .button("Make show offline")
+                        .button("Download show")
                         .on_hover_text("Download every episode for disconnected playback")
                         .clicked()
                     {
@@ -220,6 +240,101 @@ fn header(
             }
         });
     });
+
+    if let Some((texture, index)) = backdrop {
+        ui.add_space(10.0);
+        band(ui, &texture, index);
+    }
+}
+
+/// The picture again, across the whole width, behind the header.
+///
+/// The one piece of this page that had to wait for artwork to exist at all: the
+/// providers already hand back a picture and its shape, so a backdrop costs no
+/// new request — only somewhere to put it.
+///
+/// Three shapes over one another, in this order: the picture, a flat veil of the
+/// page colour so text laid over it stays readable whatever the still happens to
+/// be, and a fade into the page along the bottom so the band ends rather than
+/// stops.
+fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::ShapeIdx) {
+    // Full width of the window, not of the content: the panel's own margin is
+    // what the band has to reach past, or it reads as a picture in a box.
+    const BLEED: f32 = 18.0;
+    let content = ui.min_rect();
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(ui.max_rect().left() - BLEED, content.top()),
+        egui::pos2(ui.max_rect().right() + BLEED, content.bottom()),
+    );
+
+    // Past the panel margin, or the bleed is trimmed off at exactly the edge it
+    // exists to cross.
+    let painter = ui.painter().with_clip_rect(rect);
+    // Every layer of the band goes into the one slot reserved before the header
+    // was laid out. Painting the veils here, after the fact, would put them over
+    // the name and the overview as well as the still — which is the picture
+    // being readable at the cost of the text it exists behind.
+    let mut layers: Vec<egui::Shape> = vec![
+        egui::epaint::RectShape::filled(rect, egui::CornerRadius::ZERO, egui::Color32::WHITE)
+            .with_texture(
+                texture.id(),
+                super::cover_uv(texture.size_vec2(), rect.size()),
+            )
+            .into(),
+    ];
+    // Heavier than it looks: a still is arbitrary, and the one it lands on may
+    // be a white frame. This is the difference between a hero and an unreadable
+    // page.
+    //
+    // Two coats rather than one heavy one. The first is flat and near-opaque —
+    // enough on its own that body text over the busiest frame still reads. The
+    // second is the picture's own contrast being knocked back further behind the
+    // left half, where the poster, the name and the overview actually sit; the
+    // right half keeps more of the still, so the band is still a picture.
+    //
+    // Heavier still when there is no fade coming, since then these are the only
+    // things standing between the text and the picture.
+    let ramps = theme::ramps_on();
+    layers.push(
+        egui::epaint::RectShape::filled(
+            rect,
+            egui::CornerRadius::ZERO,
+            theme::background().gamma_multiply(if ramps { 0.90 } else { 0.94 }),
+        )
+        .into(),
+    );
+    if ramps {
+        let text_side = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.left() + rect.width() * 0.72, rect.bottom()),
+        );
+        layers.push(theme::fade_shape(
+            ui.ctx(),
+            text_side,
+            theme::background(),
+            theme::Direction::Horizontal,
+            // Solid at the left, where the poster and the text are.
+            false,
+        ));
+    }
+
+    // A viewer with ramps off is on a panel that bands them; a 120-point ramp
+    // of one hue is exactly the case that shows it. The band then ends at its
+    // own edge, which is the honest version of the same thing.
+    if ramps {
+        let fade =
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 120.0), rect.max);
+        layers.push(theme::fade_shape(
+            ui.ctx(),
+            fade,
+            theme::background(),
+            theme::Direction::Vertical,
+            // Solid at the bottom, where the page it hands over to is.
+            true,
+        ));
+    }
+
+    painter.set(index, egui::Shape::Vec(layers));
 }
 
 /// What the provider had to say. Only ever drawn under a match.
@@ -229,14 +344,7 @@ fn description(ui: &mut egui::Ui, found: &TitleMetadata) {
         ui.add_space(6.0);
     }
     if let Some(overview) = &found.overview {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(overview)
-                    .size(13.0)
-                    .color(theme::text()),
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(theme::Role::Label.rich(overview).color(theme::text())).wrap());
     }
     if let Some(url) = &found.url {
         ui.add_space(8.0);
@@ -324,10 +432,7 @@ fn episode_row(
                 // carries a checkbox, and a click that means "seen" must never
                 // be one that starts a 1.4 GiB stream instead.
                 if ui
-                    .add(
-                        egui::Button::new(egui::RichText::new("▶").size(13.0))
-                            .fill(theme::card_hover()),
-                    )
+                    .add(egui::Button::new(theme::Role::Label.rich("▶")).fill(theme::card_hover()))
                     .on_hover_text("Play")
                     .clicked()
                 {
@@ -337,7 +442,7 @@ fn episode_row(
                 let current = offline.downloads.iter().find(|item| item.key == key);
                 if offline.files.contains(&key) {
                     if ui
-                        .small_button("Online-only")
+                        .small_button("Delete")
                         .on_hover_text("Delete the offline copy; keep the online source")
                         .clicked()
                     {
@@ -443,11 +548,7 @@ fn episode_row(
                         // saying so on the row rather than only when a click on
                         // it comes back with "has no content".
                         Some(0) => {
-                            ui.label(
-                                egui::RichText::new("empty")
-                                    .size(12.0)
-                                    .color(theme::danger()),
-                            )
+                            ui.label(theme::Role::Caption.rich("empty").color(theme::danger()))
                             .on_hover_text(
                                 "The share reports no content for this file; it cannot be played.",
                             );
@@ -459,8 +560,8 @@ fn episode_row(
                     }
                     if let Some(at) = episode.resume_at() {
                         ui.label(
-                            egui::RichText::new(format!("resume {}", ui::format_time(at)))
-                                .size(12.0)
+                            theme::Role::Caption
+                                .rich(format!("resume {}", ui::format_time(at)))
                                 .color(theme::accent()),
                         );
                     }

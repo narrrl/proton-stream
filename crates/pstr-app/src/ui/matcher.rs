@@ -49,8 +49,8 @@ pub fn show(
             ui.set_width(620.0);
 
             ui.label(
-                egui::RichText::new(format!("Match “{}”", matcher.title_name))
-                    .size(18.0)
+                theme::Role::Heading
+                    .rich(format!("Match “{}”", matcher.title_name))
                     .strong()
                     .color(theme::text()),
             );
@@ -66,7 +66,7 @@ pub fn show(
             ui.add_space(10.0);
 
             if let Some(error) = &matcher.error {
-                ui.label(egui::RichText::new(error).size(12.0).color(theme::danger()));
+                ui.label(theme::Role::Caption.rich(error).color(theme::danger()));
                 ui.add_space(6.0);
             }
 
@@ -212,8 +212,8 @@ fn row(ui: &mut egui::Ui, art: &mut Art<'_>, found: &TitleMetadata) -> egui::Res
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
                     ui.label(
-                        egui::RichText::new(&found.name)
-                            .size(14.0)
+                        theme::Role::Body
+                            .rich(&found.name)
                             .strong()
                             .color(theme::text()),
                     );
@@ -224,7 +224,7 @@ fn row(ui: &mut egui::Ui, art: &mut Art<'_>, found: &TitleMetadata) -> egui::Res
                     if let Some(overview) = &found.overview {
                         let mut job = egui::text::LayoutJob::simple(
                             overview.replace('\n', " "),
-                            egui::FontId::proportional(11.5),
+                            theme::Role::Caption.font(),
                             theme::muted(),
                             ui.available_width(),
                         );

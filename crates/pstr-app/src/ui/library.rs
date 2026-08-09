@@ -93,6 +93,9 @@ fn continue_row(
                             subtitle: remaining,
                             progress: episode.progress().map(|value| value as f32),
                             badge: episode.numbering(),
+                            // A shelf that scrolls sideways has no right edge
+                            // to reach, so nothing to flex to.
+                            width: theme::CARD_WIDTH,
                         },
                     )
                     .clicked();
@@ -107,9 +110,14 @@ fn continue_row(
 
 /// Every title, wrapped to the window.
 fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut Vec<Action>) {
-    let columns = ui::columns(ui.available_width());
-    for row in titles.chunks(columns) {
+    let grid = ui::columns(ui.available_width());
+    for row in titles.chunks(grid.columns) {
         ui.horizontal(|ui| {
+            // The gap the width was divided around, so what is drawn matches
+            // what was measured. egui's default item spacing is narrower, and
+            // the difference times the column count is a visible drift towards
+            // the left edge.
+            ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
             for title in row {
                 let clicked = ui::card(
                     ui,
@@ -121,6 +129,7 @@ fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut V
                         // What a film is says itself in the subtitle below the
                         // card; a second `Film` over the poster is noise.
                         badge: None,
+                        width: grid.width,
                     },
                 )
                 .clicked();
@@ -163,8 +172,8 @@ fn empty_state(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     ui.vertical_centered(|ui| {
         ui.add_space(120.0);
         ui.label(
-            egui::RichText::new("Nothing in the library yet")
-                .size(20.0)
+            theme::Role::Title
+                .rich("Nothing in the library yet")
                 .strong(),
         );
         ui.add_space(6.0);

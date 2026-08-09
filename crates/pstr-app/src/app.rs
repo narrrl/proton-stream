@@ -51,6 +51,7 @@ impl FrameTimer {
                 Page::Title(_) => "title",
                 Page::Shares => "shares",
                 Page::Downloads => "downloads",
+                Page::Settings => "settings",
                 Page::Player => "player",
             },
         }
@@ -85,6 +86,8 @@ pub enum Page {
     Title(String),
     Shares,
     Downloads,
+    /// How the app looks, how it plays, and what it looks up.
+    Settings,
     /// The picture, filling the window. Leaving this page does not stop
     /// playback — the transport bar at the bottom is how you get back to it.
     Player,
@@ -896,20 +899,14 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("proton-stream")
-                    .size(18.0)
+                theme::Role::Heading
+                    .rich("proton-stream")
                     .strong()
                     .color(theme::accent()),
             );
             ui.add_space(12.0);
 
             let on_library = matches!(self.page, Page::Library | Page::Title(_));
-            if ui::tab(ui, on_library, "Library").clicked() {
-                actions.push(Action::Goto(Page::Library));
-            }
-            if ui::tab(ui, self.page == Page::Shares, "Shares").clicked() {
-                actions.push(Action::Goto(Page::Shares));
-            }
             let active = self
                 .downloads
                 .iter()
@@ -922,13 +919,24 @@ impl App {
                     )
                 })
                 .count();
-            let label = if active == 0 {
+            let downloads = if active == 0 {
                 "Downloads".to_owned()
             } else {
                 format!("Downloads ({active})")
             };
-            if ui::tab(ui, self.page == Page::Downloads, &label).clicked() {
-                actions.push(Action::Goto(Page::Downloads));
+            let pages = [Page::Library, Page::Shares, Page::Downloads, Page::Settings];
+            let clicked = ui::tabs(
+                ui,
+                ui.id().with("nav"),
+                &[
+                    ("Library", on_library),
+                    ("Shares", self.page == Page::Shares),
+                    (&downloads, self.page == Page::Downloads),
+                    ("Settings", self.page == Page::Settings),
+                ],
+            );
+            if let Some(index) = clicked {
+                actions.push(Action::Goto(pages[index].clone()));
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1027,7 +1035,7 @@ impl eframe::App for App {
         {
             let mut search = std::mem::take(&mut self.search);
             let neighbours = self.neighbours();
-            let prefs = ui::shares::Prefs {
+            let prefs = ui::settings::Prefs {
                 autoplay: self.engine.playback_prefs().autoplay_next,
                 appearance: self.engine.appearance(),
             };
@@ -1044,6 +1052,7 @@ impl eframe::App for App {
                     NAV_MARGIN.y as i8,
                 )))
                 .show(ui, |ui| {
+                    let shadow = ui.painter().add(egui::Shape::Noop);
                     let background = ui.painter().add(egui::Shape::Noop);
                     self.navigation(ui, &mut actions, &mut search);
                     // Full width from the space the panel was given, height from
@@ -1056,6 +1065,13 @@ impl eframe::App for App {
                     .expand2(NAV_MARGIN);
                     ui.painter()
                         .set(background, theme::bar_shape(ui.ctx(), bar));
+                    // Past the panel's own edge, or the half of the shadow that
+                    // falls on the page below it — the only half worth drawing
+                    // — is clipped away.
+                    ui.painter().with_clip_rect(ui.ctx().viewport_rect()).set(
+                        shadow,
+                        theme::bar_shadow(true).as_shape(bar, egui::CornerRadius::ZERO),
+                    );
                 });
             self.search = search;
 
@@ -1091,6 +1107,22 @@ impl eframe::App for App {
                             .inner_margin(egui::Margin::symmetric(16, 10)),
                     )
                     .show(ui, |ui| {
+                        // Above the bar rather than below it: this one is at the
+                        // bottom of the window, so the page it separates itself
+                        // from is the one over it.
+                        //
+                        // Clipped to the strip it falls on, because a `Frame`
+                        // paints its fill *under* its contents and a shadow
+                        // added here would otherwise lay its opaque middle over
+                        // the bar it is cast by.
+                        let bar = ui.max_rect().expand2(egui::vec2(16.0, 10.0));
+                        let above = egui::Rect::from_min_max(
+                            egui::pos2(bar.left(), bar.top() - 16.0),
+                            egui::pos2(bar.right(), bar.top()),
+                        );
+                        ui.painter()
+                            .with_clip_rect(above)
+                            .add(theme::bar_shadow(false).as_shape(bar, egui::CornerRadius::ZERO));
                         transport_panel(
                             ui,
                             playback.as_ref(),
@@ -1117,7 +1149,7 @@ impl eframe::App for App {
                             } else {
                                 theme::muted()
                             };
-                            ui.label(egui::RichText::new(&line.text).size(12.0).color(colour));
+                            ui.label(theme::Role::Caption.rich(&line.text).color(colour));
                         });
                     // Repaint once the line is due to disappear, or it lingers
                     // until something else happens to cause a frame.
@@ -1159,15 +1191,10 @@ impl eframe::App for App {
                             },
                             &mut actions,
                         ),
-                        Page::Shares => ui::shares::show(
-                            ui,
-                            shares,
-                            form,
-                            settings,
-                            prefs,
-                            api_key,
-                            &mut actions,
-                        ),
+                        Page::Shares => ui::shares::show(ui, shares, form, &mut actions),
+                        Page::Settings => {
+                            ui::settings::show(ui, settings, prefs, api_key, &mut actions)
+                        }
                         Page::Downloads => ui::downloads::show(ui, downloads, &mut actions),
                         // Drawn above, without any of these panels.
                         Page::Player => {}

@@ -287,7 +287,7 @@ fn waiting(ui: &mut egui::Ui, playback: &Playback, rect: Rect) {
         rect.center() - Vec2::new(0.0, 18.0),
         Align2::CENTER_CENTER,
         &playback.target.title_name,
-        egui::FontId::proportional(20.0),
+        theme::Role::Title.font(),
         theme::text(),
     );
     painter.text(
@@ -298,7 +298,7 @@ fn waiting(ui: &mut egui::Ui, playback: &Playback, rect: Rect) {
         } else {
             "playing in mpv's own window"
         },
-        egui::FontId::proportional(13.0),
+        theme::Role::Label.font(),
         theme::muted(),
     );
 }
@@ -313,14 +313,14 @@ fn between(ui: &mut egui::Ui, opening: Option<&str>, rect: Rect, actions: &mut V
         rect.center() - Vec2::new(0.0, 16.0),
         Align2::CENTER_CENTER,
         "Up next",
-        egui::FontId::proportional(14.0),
+        theme::Role::Body.font(),
         theme::muted(),
     );
     ui.painter().text(
         rect.center() + Vec2::new(0.0, 12.0),
         Align2::CENTER_CENTER,
         opening.unwrap_or("opening…"),
-        egui::FontId::proportional(20.0),
+        theme::Role::Title.font(),
         theme::text(),
     );
 
@@ -361,7 +361,7 @@ fn skip(
     // recap" are different lengths, and one constant leaves the shorter of them
     // adrift in a box of its own whitespace, which is what made this read as a
     // rectangle with some text in it instead of a button.
-    let font = egui::FontId::proportional(14.0);
+    let font = theme::Role::Body.font();
     let text_width = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
@@ -440,8 +440,8 @@ fn up_next_card(
                 ui.set_width(size.x - 28.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Up next")
-                            .size(12.0)
+                        theme::Role::Caption
+                            .rich("Up next")
                             .strong()
                             .color(Color32::from_white_alpha(200)),
                     );
@@ -449,16 +449,16 @@ fn up_next_card(
                         // Rounded up, so a card that says "1s" is never
                         // followed by a second of nothing happening.
                         ui.label(
-                            egui::RichText::new(format!("in {}s", card.seconds.ceil() as u32))
-                                .size(12.0)
+                            theme::Role::Caption
+                                .rich(format!("in {}s", card.seconds.ceil() as u32))
                                 .color(theme::accent()),
                         );
                     });
                 });
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(&card.caption)
-                            .size(14.0)
+                        theme::Role::Body
+                            .rich(&card.caption)
                             .strong()
                             .color(Color32::WHITE),
                     )
@@ -533,7 +533,7 @@ fn chrome(
         |ui| {
             if ui
                 .add(
-                    egui::Button::new(egui::RichText::new("Library").size(13.0))
+                    egui::Button::new(theme::Role::Label.rich("Library"))
                         .fill(Color32::from_black_alpha(160))
                         .corner_radius(CornerRadius::same(8))
                         .min_size(Vec2::new(96.0, 32.0)),
@@ -546,14 +546,14 @@ fn chrome(
             ui.add_space(14.0);
             ui.vertical(|ui| {
                 ui.label(
-                    egui::RichText::new(&playback.target.title_name)
-                        .size(18.0)
+                    theme::Role::Heading
+                        .rich(&playback.target.title_name)
                         .strong()
                         .color(Color32::WHITE),
                 );
                 ui.label(
-                    egui::RichText::new(playback.target.caption())
-                        .size(13.0)
+                    theme::Role::Label
+                        .rich(playback.target.caption())
                         .color(Color32::from_white_alpha(190)),
                 );
             });
@@ -561,7 +561,7 @@ fn chrome(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(
-                        egui::Button::new(egui::RichText::new("⛶").size(15.0))
+                        egui::Button::new(theme::Role::Subhead.rich("⛶"))
                             .fill(Color32::from_black_alpha(160))
                             .corner_radius(CornerRadius::same(8))
                             .min_size(Vec2::new(38.0, 32.0)),

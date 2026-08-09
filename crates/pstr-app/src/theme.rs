@@ -36,6 +36,66 @@ pub const CARD_WIDTH: f32 = 232.0;
 pub const CARD_ASPECT: f32 = 9.0 / 16.0;
 pub const CARD_GAP: f32 = 14.0;
 
+/// The type ramp, named once.
+///
+/// Every size in the app comes from here. They used to be literals at the call
+/// site — `.size(17.0)` in one place and `.size(18.0)` in another for the same
+/// kind of heading — which is not a scale, it is forty independent decisions
+/// that happen to be close together. Naming them makes the ramp a thing that
+/// can be changed, and gives the Android client something to match: a shared
+/// palette settles colour, and this settles the other half.
+///
+/// Sizes rather than full `FontId`s because everything here is proportional;
+/// the one monospace style in the app is egui's own, set in [`apply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// The name of the thing you are looking at, once per page.
+    Display,
+    /// An empty state, or the heading of a page that has no display line.
+    Title,
+    /// The brand in the nav bar, and a dialog's heading.
+    Heading,
+    /// A run of content under a rule.
+    Section,
+    /// A row that groups the rows under it — a season header.
+    Subhead,
+    /// Everything that is prose.
+    Body,
+    /// The text on a small control.
+    Label,
+    /// Context rather than content: counts, sizes, errors under a field.
+    Caption,
+    /// The smallest thing that stays legible — a badge over artwork.
+    Micro,
+}
+
+impl Role {
+    pub const fn size(self) -> f32 {
+        match self {
+            Self::Display => 26.0,
+            Self::Title => 20.0,
+            Self::Heading => 18.0,
+            Self::Section => 17.0,
+            Self::Subhead => 15.0,
+            Self::Body => 14.0,
+            Self::Label => 13.0,
+            Self::Caption => 12.0,
+            Self::Micro => 11.0,
+        }
+    }
+
+    /// For the hand-painted parts, which lay text out through a `Painter` and
+    /// never see a `RichText`.
+    pub fn font(self) -> egui::FontId {
+        egui::FontId::proportional(self.size())
+    }
+
+    /// For the parts that go through egui's widgets.
+    pub fn rich(self, text: impl Into<String>) -> egui::RichText {
+        egui::RichText::new(text).size(self.size())
+    }
+}
+
 /// Install a real CJK fallback before the default egui fonts.  egui ships a
 /// compact Latin font, but it intentionally does not bundle the multi-megabyte
 /// CJK families.  Native desktops already provide one, so use it when present.
@@ -210,6 +270,16 @@ pub fn danger() -> Color32 {
     palette().danger
 }
 
+/// Whether ramps are drawn at all.
+///
+/// Wider than [`gradients`], which also asks whether the *accent* has two hues
+/// to run between. The viewer who turns gradients off is usually on a panel that
+/// bands them into stripes, and that applies to every ramp in the app, not only
+/// the accent's — so the bar fade and the title backdrop ask this one.
+pub fn ramps_on() -> bool {
+    ACTIVE.read().gradients
+}
+
 /// Whether the accent is currently drawn as a gradient.
 ///
 /// True only when the viewer has gradients on *and* the accent is a pair of
@@ -235,6 +305,29 @@ pub fn accent_fill(
     let corner_radius = corner_radius.into();
     fill(painter, rect, corner_radius, &palette());
     veil(painter, rect, corner_radius, lift);
+}
+
+/// The accent as a shape rather than paint, for the one caller that has to
+/// draw it *behind* something already laid out: the pill that slides between
+/// the tabs in the navigation bar, whose position is only known once every tab
+/// has been placed.
+pub fn accent_shape(
+    ctx: &egui::Context,
+    rect: Rect,
+    corner_radius: impl Into<CornerRadius>,
+) -> egui::Shape {
+    let corner_radius = corner_radius.into();
+    let palette = palette();
+    if !ACTIVE.read().gradients || palette.accent == palette.accent_alt {
+        return egui::epaint::RectShape::filled(rect, corner_radius, palette.accent).into();
+    }
+    let texture = ramp(
+        ctx,
+        palette.accent,
+        palette.accent_alt,
+        Direction::Horizontal,
+    );
+    textured(rect, corner_radius, &texture)
 }
 
 /// The same, for a palette that is not the one on screen: the accent swatches
@@ -265,6 +358,27 @@ fn fill(painter: &egui::Painter, rect: Rect, corner_radius: CornerRadius, palett
     painter.add(textured(rect, corner_radius, &texture));
 }
 
+/// A ramp from `color` to nothing, for laying artwork into the page.
+///
+/// The other ramps here run between two opaque colours; this one runs down its
+/// own alpha, so what is under it shows through the far end. That is what makes
+/// a backdrop end in the page rather than in a horizontal line across the
+/// window.
+/// `arriving` is which end of `direction` the colour is solid at: `false` for a
+/// scrim that starts opaque and lets the picture out, `true` for one that lets
+/// the picture *into* the page — which is the one the title backdrop wants,
+/// since the page is below the band.
+pub fn fade_shape(
+    ctx: &egui::Context,
+    rect: Rect,
+    color: Color32,
+    direction: Direction,
+    arriving: bool,
+) -> egui::Shape {
+    let texture = alpha_ramp(ctx, color, direction, arriving);
+    textured(rect, CornerRadius::ZERO, &texture)
+}
+
 /// The one gradient that is not the accent: the top bar, which runs from the
 /// surface colour down into the page so that the join between them is a fade
 /// rather than an edge.
@@ -287,6 +401,56 @@ pub fn bar_shape(ctx: &egui::Context, rect: Rect) -> egui::Shape {
         Direction::Vertical,
     );
     textured(rect, CornerRadius::ZERO, &texture)
+}
+
+/// The shadow under a raised tile, at `strength` of its full depth.
+///
+/// Depth is the one separator this app has been doing without: everything is
+/// told apart by fill colour, which works until two things that should be at
+/// different heights are the same colour. Kept soft and offset downwards —
+/// a shadow you can see the edge of reads as a border.
+///
+/// Scaled rather than switched on, so it can ride the same hover value as the
+/// border and arrive with it.
+pub fn tile_shadow(strength: f32) -> egui::epaint::Shadow {
+    shadow(strength, [0, 6], 16, 90)
+}
+
+/// The shadow a bar casts onto the page: shallower than a tile's, because a bar
+/// is not floating over the page so much as sitting against it.
+///
+/// `cast_down` for the bar at the top of the window, off for the transport bar
+/// at the bottom — a shadow that falls the same way on both would light the
+/// window from two directions at once.
+pub fn bar_shadow(cast_down: bool) -> egui::epaint::Shadow {
+    shadow(1.0, [0, if cast_down { 4 } else { -4 }], 12, 70)
+}
+
+fn shadow(strength: f32, offset: [i8; 2], blur: u8, alpha: u8) -> egui::epaint::Shadow {
+    let strength = strength.clamp(0.0, 1.0);
+    egui::epaint::Shadow {
+        offset,
+        blur,
+        spread: 0,
+        // A light theme cannot carry the same shadow: the same black over a
+        // near-white page is a smudge, where over a dark one it is barely
+        // visible. Half strength on light, which is roughly where the two read
+        // the same.
+        color: Color32::from_black_alpha(
+            (f32::from(alpha) * strength * if palette().light { 0.5 } else { 1.0 }) as u8,
+        ),
+    }
+}
+
+/// The hover and press film on its own, for a control whose fill was painted by
+/// somebody else — the selected tab, which sits on the pill.
+pub fn veil_over(
+    painter: &egui::Painter,
+    rect: Rect,
+    corner_radius: impl Into<CornerRadius>,
+    lift: f32,
+) {
+    veil(painter, rect, corner_radius.into(), lift);
 }
 
 /// A white or black film over `rect`, for hover and press states. A no-op at
@@ -391,13 +555,14 @@ pub fn apply(ctx: &egui::Context, appearance: Appearance) {
         style.spacing.interact_size.y = 30.0;
         style.spacing.scroll.bar_width = 10.0;
 
-        use egui::FontFamily::Proportional;
+        // egui's own style names, pointed at the ramp above so that a stock
+        // widget nobody restyled still lands on it.
         use egui::TextStyle::{Body, Button, Heading, Monospace, Small};
         style.text_styles = [
-            (Heading, egui::FontId::new(26.0, Proportional)),
-            (Body, egui::FontId::new(14.0, Proportional)),
-            (Button, egui::FontId::new(14.0, Proportional)),
-            (Small, egui::FontId::new(11.5, Proportional)),
+            (Heading, Role::Display.font()),
+            (Body, Role::Body.font()),
+            (Button, Role::Body.font()),
+            (Small, Role::Caption.font()),
             (
                 Monospace,
                 egui::FontId::new(12.5, egui::FontFamily::Monospace),
@@ -430,7 +595,10 @@ struct Active {
     /// flavour the window is not wearing are eight ramps that belong to no
     /// palette in particular. Bounded by the number of flavours times the
     /// number of accents, and only the ones actually drawn.
-    ramps: BTreeMap<(u32, u32, bool), TextureHandle>,
+    /// The last field separates a ramp between two colours from one that runs
+    /// down its own alpha — the two would otherwise collide on
+    /// `(colour, transparent)`.
+    ramps: BTreeMap<(u32, u32, bool, u8), TextureHandle>,
 }
 
 static ACTIVE: RwLock<Active> = RwLock::new(Active {
@@ -441,17 +609,54 @@ static ACTIVE: RwLock<Active> = RwLock::new(Active {
 
 /// A ramp between two colours, built once and kept.
 fn ramp(ctx: &egui::Context, from: Color32, to: Color32, direction: Direction) -> TextureHandle {
+    build(ctx, from, to, direction, 0, mix)
+}
+
+/// A ramp from `color` down to nothing.
+///
+/// The alpha is what is interpolated; the colour stays put. Fading the colour
+/// as well would take a dark scrim through grey on its way out, which over
+/// artwork reads as fog rather than as the picture ending.
+fn alpha_ramp(
+    ctx: &egui::Context,
+    color: Color32,
+    direction: Direction,
+    arriving: bool,
+) -> TextureHandle {
+    build(
+        ctx,
+        color,
+        Color32::TRANSPARENT,
+        direction,
+        1 + u8::from(arriving),
+        move |from, _, t| from.gamma_multiply(if arriving { t } else { 1.0 - t }),
+    )
+}
+
+/// One texture per ramp, built on demand and kept until the palette changes.
+///
+/// `kind` says which of the three kinds this is, so that a fade and a colour
+/// ramp between the same two ends do not come out sharing one texture.
+fn build(
+    ctx: &egui::Context,
+    from: Color32,
+    to: Color32,
+    direction: Direction,
+    kind: u8,
+    stop: impl Fn(Color32, Color32, f32) -> Color32,
+) -> TextureHandle {
     let key = (
         u32::from_le_bytes(from.to_array()),
         u32::from_le_bytes(to.to_array()),
         direction == Direction::Vertical,
+        kind,
     );
     if let Some(texture) = ACTIVE.read().ramps.get(&key) {
         return texture.clone();
     }
 
     let pixels: Vec<Color32> = (0..RAMP_STOPS)
-        .map(|stop| mix(from, to, stop as f32 / (RAMP_STOPS - 1) as f32))
+        .map(|index| stop(from, to, index as f32 / (RAMP_STOPS - 1) as f32))
         .collect();
     let size = match direction {
         Direction::Horizontal => [RAMP_STOPS, 1],
