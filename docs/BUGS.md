@@ -146,6 +146,93 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B54 — a window on another workspace was declared "not responding"
+
+**Symptom.** On Hyprland, switching to another workspace while `proton-stream`
+was playing brought up the compositor's "application is not responding" dialog
+a few seconds later, offering to wait or to kill it. Choosing *wait* dismissed
+it for good, and coming back to the workspace found the window working normally.
+Wayland only; the app was never actually broken.
+
+**Cause.** A Wayland compositor throttles a client by withholding the
+`wl_surface` frame callback, and withholds it entirely while the surface is not
+being shown. Mesa's EGL implements a swap interval of 1 by waiting on that
+callback, so `eglSwapBuffers` on a hidden surface never returns:
+`run_ui_and_paint` → `glutin swap_buffers` → `eglSwapBuffers` →
+`wl_display_dispatch_queue` → `ppoll`, with no timeout. That is the UI thread,
+and the UI thread is what answers `xdg_wm_base.ping`, so the compositor stops
+hearing from the app and puts up the ANR dialog. It takes *sustained* repaints
+to hit — the throttle waits on the previous frame's callback, so the first swap
+after the window is hidden still returns — which is why it showed up during
+playback, where mpv asks for a frame per picture, and not on an idle window.
+
+eframe already skips painting a viewport it believes is hidden, but nothing
+tells it: `WindowEvent::Occluded` is X11, macOS and web only — winit removed the
+Wayland implementation in 0.29 — so `ViewportInfo::occluded` stays `None`.
+
+**Fix.** `pstr-app::pacing`. On Wayland the swap interval is set to 0
+(`NativeOptions::glow_options.vsync`), which makes `eglSwapBuffers` return
+whether the surface is being shown or not, and `Pacer` caps the frame rate in
+vsync's place — 60 fps by default, `PSTR_FRAME_CAP` to change it, `0` to remove
+the ceiling. Nothing is lost by dropping vsync there: a Wayland compositor
+composites from the last buffer a client committed, at its own refresh, so a
+client that commits too often wastes work but cannot tear. X11 and Windows are
+untouched and keep vsync. The cap is a ceiling and not a rate, so an idle window
+still draws nothing at all.
+
+**Verified.** Reproduced on Hyprland 0.56.2 with a minimal eframe 0.35 client
+that repaints continuously: moved to a hidden workspace with `hyprctl dispatch
+movetoworkspacesilent`, its frame counter stopped dead and `gdb` put thread 1 in
+`eglSwapBuffers` → `wl_display_dispatch_queue`. The same client with the swap
+interval at 0 kept drawing while hidden and stayed in the event loop. The app
+itself was then run hidden for 30 s: it stays in `calloop`'s poll, and steady
+state costs 0% of a core, so the ceiling has not turned an idle window into a
+busy one. `cargo test -p pstr-app pacing` covers the cap.
+
+### B53 — scanning a new library outran AniList, and the crawl waited on one folder at a time
+
+**Symptom.** Two slow starts, both on the first scan of a share. Matching a
+library against AniList worked for the first couple of dozen titles and then
+returned nothing but failures for the rest of the run; because a failure is
+deliberately not cached, the next run started over and failed in the same place,
+so a large library never finished matching. Separately, the crawl itself took
+minutes on a share whose contents are a few hundred nodes.
+
+**Cause.** Two independent ones.
+
+- Nothing paced provider requests. A scan sends one search per title, a second
+  search for a name that needs its apostrophe repaired, one episode request per
+  match and up to three more per further season — several hundred requests as
+  fast as two workers could issue them, against an API that allows ninety a
+  minute and has been running in a degraded mode that allows thirty. Everything
+  past the window got a `429`, which `AniList::query` turned straight into
+  `Error::RateLimited` with no wait and no retry.
+- `SharedLibrary::crawl` walked the tree one folder per round trip. A media
+  share is wide, not deep — a folder per series, a folder per season under it —
+  so a few hundred sibling folders were listed strictly in sequence. The SDK
+  already fans its detail batches out within one folder; nothing overlapped
+  across folders, and the crawl was almost entirely latency.
+
+**Fix.** `pstr-meta::limiter` is a shared, self-tuning pacer: requests take a
+slot before they are sent, `X-RateLimit-Limit` on any answer retunes the rate to
+what the provider currently allows, and a `429` parks *every* lookup in flight
+for as long as `Retry-After` asks (capped at 30s) and then retries, twice, before
+giving up as `Error::RateLimited`. One limiter lives inside each provider, which
+lives in an `Arc` inside `MetadataService`, so the per-title clones share it.
+TMDB routes through the same code — its search request now goes through the same
+paced `get` as everything else rather than building its own.
+
+`SharedLibrary::crawl` is now breadth-first and lists `CRAWL_CONCURRENCY` (6)
+folders of a level at once. `buffered`, not `buffer_unordered`: two identical
+crawls should produce the same order. The client clones share one node-key cache
+and one single-flight map, so siblings needing the same ancestor key still wait
+on a single derivation.
+
+**Verified.** `cargo fmt --all -- --check`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo test --workspace --locked`. The limiter's
+pacing, its `429` parking and its retuning from headers are covered by unit tests
+on a paused clock (`crates/pstr-meta/src/limiter.rs`).
+
 ### B52 — "paint the accent as a gradient" did nothing on Android
 
 **Symptom.** The appearance page on Android offers a *Paint the accent as a

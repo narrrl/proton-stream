@@ -15,6 +15,7 @@ use pstr_core::metadata::{EpisodeMetadata, ProviderId, TitleMetadata};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::limiter::RateLimiter;
 use crate::matching::{Candidate, Query};
 use crate::provider::Provider;
 
@@ -37,13 +38,23 @@ const STILL_SIZE: &str = "w300";
 /// at here, give or take; `original` is several megabytes of print-resolution
 /// artwork per title, which is bandwidth spent on pixels no tile can show.
 const IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
+
 const POSTER_SIZE: &str = "w500";
 const BACKDROP_SIZE: &str = "w780";
+
+/// TMDB's published ceiling is around fifty requests a second and it no longer
+/// enforces a daily one. This is well under it: the point of pacing here is a
+/// burst that would look like abuse, not a rate anyone is close to.
+const REQUESTS_PER_MINUTE: u32 = 600;
+
+/// As [`crate::anilist`]'s.
+const RETRIES: usize = 2;
 
 pub struct Tmdb {
     http: reqwest::Client,
     api_key: String,
     language: String,
+    limiter: RateLimiter,
 }
 
 impl Tmdb {
@@ -52,6 +63,7 @@ impl Tmdb {
             http,
             api_key,
             language,
+            limiter: RateLimiter::per_minute(REQUESTS_PER_MINUTE),
         }
     }
 }
@@ -72,28 +84,12 @@ impl Provider for Tmdb {
             return Err(Error::MissingApiKey(ProviderId::Tmdb));
         }
 
-        let response = self
-            .http
-            .get(ENDPOINT)
-            .query(&[
-                ("api_key", self.api_key.as_str()),
-                ("query", query.name.as_str()),
-                ("language", self.language.as_str()),
-                ("include_adult", "false"),
-            ])
-            .send()
+        let payload: SearchResponse = self
+            .get(
+                ENDPOINT,
+                &[("query", query.name.as_str()), ("include_adult", "false")],
+            )
             .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(match status.as_u16() {
-                401 => Error::MissingApiKey(ProviderId::Tmdb),
-                429 => Error::RateLimited,
-                _ => Error::Http(format!("TMDB answered {status}")),
-            });
-        }
-
-        let payload: SearchResponse = response.json().await?;
         Ok(payload
             .results
             .into_iter()
@@ -172,7 +168,11 @@ impl Provider for Tmdb {
 }
 
 impl Tmdb {
-    /// One authenticated GET, with TMDB's failures named.
+    /// One authenticated GET, paced, with TMDB's failures named.
+    ///
+    /// TMDB is far more generous than AniList and a library-sized run rarely
+    /// troubles it, but the pacing costs nothing here and the `429` handling is
+    /// the same code — see [`crate::limiter`].
     async fn get<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
@@ -181,23 +181,40 @@ impl Tmdb {
         if self.api_key.trim().is_empty() {
             return Err(Error::MissingApiKey(ProviderId::Tmdb));
         }
-        let mut request = self.http.get(url).query(&[
-            ("api_key", self.api_key.as_str()),
-            ("language", self.language.as_str()),
-        ]);
-        for pair in extra {
-            request = request.query(&[pair]);
-        }
 
-        let response = request.send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(match status.as_u16() {
-                401 => Error::MissingApiKey(ProviderId::Tmdb),
-                429 => Error::RateLimited,
-                _ => Error::Http(format!("TMDB answered {status}")),
-            });
-        }
+        let mut attempts = 0usize;
+        let response = loop {
+            let mut request = self.http.get(url).query(&[
+                ("api_key", self.api_key.as_str()),
+                ("language", self.language.as_str()),
+            ]);
+            for pair in extra {
+                request = request.query(&[pair]);
+            }
+
+            self.limiter.acquire().await;
+            let response = request.send().await?;
+            let status = response.status();
+
+            if status.as_u16() == 429 {
+                let waited = self.limiter.throttled(response.headers()).await;
+                attempts += 1;
+                if attempts > RETRIES {
+                    return Err(Error::RateLimited);
+                }
+                tracing::debug!("TMDB is throttling; waiting {waited:?}");
+                continue;
+            }
+
+            if !status.is_success() {
+                return Err(match status.as_u16() {
+                    401 => Error::MissingApiKey(ProviderId::Tmdb),
+                    _ => Error::Http(format!("TMDB answered {status}")),
+                });
+            }
+            break response;
+        };
+
         Ok(response.json().await?)
     }
 }

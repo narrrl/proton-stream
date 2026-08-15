@@ -29,6 +29,7 @@
 
 pub mod anilist;
 pub mod error;
+pub mod limiter;
 pub mod matching;
 pub mod provider;
 pub mod service;

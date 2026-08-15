@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     );
     let dirs = AppDirs::ensure().context("resolve app directories")?;
 
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("proton-stream")
             .with_inner_size([1180.0, 780.0])
@@ -39,6 +39,10 @@ fn main() -> anyhow::Result<()> {
             .with_app_id("io.narl.proton-stream"),
         ..Default::default()
     };
+    // Off on Wayland, where a swap on a window nobody is looking at never
+    // returns and the compositor decides the app has hung. `pstr_app::pacing`
+    // has the whole of it, and caps the frame rate in vsync's place.
+    options.glow_options.vsync = pstr_app::pacing::vsync();
 
     eframe::run_native(
         "proton-stream",

@@ -14,10 +14,29 @@ use pstr_core::metadata::{EpisodeMetadata, ProviderId, TitleMetadata};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::limiter::RateLimiter;
 use crate::matching::{Candidate, Query};
 use crate::provider::Provider;
 
 const ENDPOINT: &str = "https://graphql.anilist.co";
+
+/// What AniList documents as its ceiling: ninety requests a minute.
+///
+/// A starting point, not a belief — the API has been running in a degraded mode
+/// that allows thirty for a long time now, and says so in `X-RateLimit-Limit` on
+/// every answer. The limiter retunes itself off that header after the first
+/// request, so the only cost of starting optimistic is one `429` on a run that
+/// begins during a degraded window.
+const REQUESTS_PER_MINUTE: u32 = 90;
+
+/// How many times to sit out a `429` before giving up on one request.
+///
+/// Two, because the pause it asks for is the rest of its rate-limit window and
+/// the limiter holds every other lookup for the same stretch — a third round is
+/// minutes of a scan spent waiting rather than matching. Giving up returns
+/// [`Error::RateLimited`], which is a failure and therefore not cached: the
+/// title stays askable and the next run picks it up.
+const RETRIES: usize = 2;
 
 /// How many answers to score. AniList's own relevance ordering is good, and the
 /// right title is essentially always in the first handful; asking for more costs
@@ -66,11 +85,16 @@ query ($id: Int) {
 
 pub struct AniList {
     http: reqwest::Client,
+    /// Shared by every lookup in flight — see [`crate::limiter`].
+    limiter: RateLimiter,
 }
 
 impl AniList {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { http }
+        Self {
+            http,
+            limiter: RateLimiter::per_minute(REQUESTS_PER_MINUTE),
+        }
     }
 }
 
@@ -132,24 +156,40 @@ impl Provider for AniList {
 }
 
 impl AniList {
-    /// One GraphQL request, with AniList's two ways of failing — an HTTP status
-    /// and an `errors` array under a 200 — folded into one.
+    /// One GraphQL request, paced, with AniList's two ways of failing — an HTTP
+    /// status and an `errors` array under a 200 — folded into one.
+    ///
+    /// A `429` is waited out rather than returned: a scan sends hundreds of
+    /// these, and the request that trips the limit is not the one that was
+    /// wrong. See [`crate::limiter`].
     async fn query<T: serde::de::DeserializeOwned>(
         &self,
         body: serde_json::Value,
     ) -> Result<Option<T>> {
-        let response = self.http.post(ENDPOINT).json(&body).send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            // 429 is the one worth naming: AniList rate-limits by the minute,
-            // and a caller that knows it was throttled can back off rather than
-            // cache a miss for a title that would have matched.
-            return Err(if status.as_u16() == 429 {
-                Error::RateLimited
-            } else {
-                Error::Http(format!("AniList answered {status}"))
-            });
-        }
+        let mut attempts = 0usize;
+        let response = loop {
+            self.limiter.acquire().await;
+            let response = self.http.post(ENDPOINT).json(&body).send().await?;
+            let status = response.status();
+
+            if status.as_u16() == 429 {
+                // The pause holds every other lookup too, so the rest of the
+                // run does not spend the window earning more 429s.
+                let waited = self.limiter.throttled(response.headers()).await;
+                attempts += 1;
+                if attempts > RETRIES {
+                    return Err(Error::RateLimited);
+                }
+                tracing::debug!("AniList is throttling; waiting {waited:?}");
+                continue;
+            }
+
+            self.limiter.observe(response.headers()).await;
+            if !status.is_success() {
+                return Err(Error::Http(format!("AniList answered {status}")));
+            }
+            break response;
+        };
 
         let payload: Response<T> = response.json().await?;
         if let Some(errors) = payload.errors

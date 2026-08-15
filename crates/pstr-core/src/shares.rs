@@ -337,42 +337,76 @@ impl SharedLibrary {
         Ok(())
     }
 
-    /// Walk one share's whole subtree, depth first, yielding every node.
+    /// Walk one share's whole subtree, level by level, yielding every node.
     ///
     /// There is no recursion helper on the visitor path — the authenticated
     /// client's `get_node_hierarchy` / `get_node_by_path` have no counterpart
     /// there — so the walk is here.
+    ///
+    /// **Breadth first and fanned out, because a media share is wide.** The
+    /// shape of one is a root holding a folder per series, each holding a folder
+    /// per season: a couple of hundred folders that are each one listing request
+    /// plus a detail fetch, and almost all of them siblings. Walking that one
+    /// folder at a time spends the whole crawl waiting on a round trip it could
+    /// have overlapped — the crawl was minutes of latency and seconds of work.
+    /// Taking a whole level at once is what collapses it.
+    ///
+    /// The client is cheap to clone and its clones share one node-key cache and
+    /// one single-flight map, so siblings that need the same ancestor key wait
+    /// on one derivation rather than each starting their own. `buffered` rather
+    /// than `buffer_unordered`: the crawl's output order is otherwise a race,
+    /// and a catalog that reorders itself between two identical crawls is
+    /// needlessly hard to diff.
     pub async fn crawl(&self, share_id: &str) -> Result<Vec<Node>> {
+        use futures::stream::{StreamExt as _, TryStreamExt as _};
+
         let client = self
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
 
         let root = client.get_root_node().await?;
-        let mut found = Vec::new();
-        let mut folders = vec![root.uid.clone()];
-        found.push(root);
+        let mut level = vec![root.uid.clone()];
+        let mut found = vec![root];
 
-        while let Some(folder) = folders.pop() {
-            let child_uids: Vec<NodeUid> =
-                client.enumerate_folder_children_node_uids(&folder).await?;
-            if child_uids.is_empty() {
-                continue;
-            }
-            // Chunked and fanned out inside the SDK, and the node keys it
-            // unlocks along the way are cached there, so a deep tree does not
-            // re-derive the same ancestors per child.
-            let children = client.enumerate_nodes(&child_uids).await?;
-            for child in children {
-                if child.is_folder() {
-                    folders.push(child.uid.clone());
+        while !level.is_empty() {
+            let listings = level.into_iter().map(|folder| {
+                let client = client.clone();
+                async move {
+                    let child_uids: Vec<NodeUid> =
+                        client.enumerate_folder_children_node_uids(&folder).await?;
+                    if child_uids.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    // Chunked and fanned out inside the SDK too, so this is a
+                    // multiplier on that concurrency rather than the only one.
+                    client.enumerate_nodes(&child_uids).await
                 }
-                found.push(child);
+            });
+
+            let mut listings = futures::stream::iter(listings).buffered(CRAWL_CONCURRENCY);
+            let mut next = Vec::new();
+            while let Some(children) = listings.try_next().await? {
+                for child in children {
+                    if child.is_folder() {
+                        next.push(child.uid.clone());
+                    }
+                    found.push(child);
+                }
             }
+            level = next;
         }
 
         Ok(found)
     }
 }
+
+/// How many folders of one level to list at once.
+///
+/// Each of these fans out again inside the SDK — up to four detail batches per
+/// folder — so this is not the number of requests in flight but a multiplier on
+/// it. Six keeps the ceiling in the low tens: enough to hide the round trip on
+/// a wide level, well short of a burst a share server would read as abuse.
+const CRAWL_CONCURRENCY: usize = 6;
 
 /// The app-version string Proton identifies this client by.
 ///

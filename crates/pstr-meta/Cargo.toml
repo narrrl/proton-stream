@@ -10,6 +10,8 @@ authors.workspace = true
 
 [dependencies]
 pstr-core.workspace = true
+# `time` for the rate limiter's sleeps, `sync` for the mutex it paces behind.
+tokio = { workspace = true, features = ["time", "sync"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -19,4 +21,4 @@ tracing.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

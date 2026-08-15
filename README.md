@@ -67,7 +67,7 @@ against the SDK's own range download.
 | Player | Embedded libmpv, drawing into the app's own GL surface: HEVC 10-bit, HDR and ASS subtitles with hardware decode. Volume, audio-track, subtitle and chapter pickers; skip-the-opening; next/previous episode and autoplay. The language picked is preferred for the next file too. |
 | Transcoding | None. mpv demuxes and decodes natively. |
 | UI | egui/eframe on glow; mpv renders into the same GL context. |
-| Themes | The shipped near-black palette plus Catppuccin Latte, Frappé, Macchiato and Mocha, each with a choice of eight accents — pink and sky among them — drawn as a gradient unless you turn that off. Picked on the Shares page, applied without a restart. |
+| Themes | The shipped near-black palette, Catppuccin Latte, Frappé, Macchiato and Mocha, and a Persona 5 one — black, white and one loud red, which is what the Red accent is there for — each with a choice of nine accents, drawn as a gradient unless you turn that off. Picked on the Settings page, applied without a restart. |
 | Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses and per-episode titles; a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. |
 | Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. A native Android 12+ client is available featuring a Material 3 UI and immersive fullscreen playback. |
 

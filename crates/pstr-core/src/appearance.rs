@@ -9,7 +9,8 @@
 use crate::config::{AppDirs, read_json, write_json};
 use crate::error::Result;
 
-/// A palette family: Catppuccin's four, plus the one this app shipped with.
+/// A palette family: Catppuccin's four, the one this app shipped with, and one
+/// borrowed from a menu screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Flavor {
@@ -22,15 +23,18 @@ pub enum Flavor {
     Frappe,
     Macchiato,
     Mocha,
+    /// Black, white and one loud red — the Persona 5 menus.
+    Persona5,
 }
 
 impl Flavor {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Proton,
         Self::Mocha,
         Self::Macchiato,
         Self::Frappe,
         Self::Latte,
+        Self::Persona5,
     ];
 
     pub fn label(self) -> &'static str {
@@ -40,6 +44,7 @@ impl Flavor {
             Self::Frappe => "Catppuccin Frappé",
             Self::Macchiato => "Catppuccin Macchiato",
             Self::Mocha => "Catppuccin Mocha",
+            Self::Persona5 => "Persona 5",
         }
     }
 
@@ -50,6 +55,7 @@ impl Flavor {
             Self::Frappe => "Dark, warm, the lowest contrast of the three",
             Self::Macchiato => "Dark, between Frappé and Mocha",
             Self::Mocha => "Dark, the deepest of Catppuccin's three",
+            Self::Persona5 => "Black and white with one loud red — pick the Red accent for it",
         }
     }
 
@@ -82,10 +88,15 @@ pub enum Accent {
     Blue,
     Teal,
     Peach,
+    /// The flavour's warning colour, used on purpose. Every flavour has one
+    /// because everything here needs a colour for a failure, and in
+    /// [`Flavor::Persona5`] it is the point of the palette rather than an
+    /// afterthought.
+    Red,
 }
 
 impl Accent {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Mauve,
         Self::Pink,
         Self::Sky,
@@ -94,6 +105,7 @@ impl Accent {
         Self::Blue,
         Self::Teal,
         Self::Peach,
+        Self::Red,
     ];
 
     pub fn label(self) -> &'static str {
@@ -106,6 +118,7 @@ impl Accent {
             Self::Blue => "Blue",
             Self::Teal => "Teal",
             Self::Peach => "Peach",
+            Self::Red => "Red",
         }
     }
 }
@@ -423,6 +436,36 @@ const MOCHA: Ramp = Ramp {
     light: false,
 };
 
+/// Persona 5's menus: black, white, and a red that is not asking permission.
+///
+/// The three colours that matter are `crust`/`base` (black), `text` (white) and
+/// `red` — everything between them is that same red bled into the black, which
+/// is what keeps a card from reading as grey furniture in a palette that has no
+/// grey in it. The other hues exist because an accent can be any of them; they
+/// are pushed to full saturation to sit on a black page, which is the one thing
+/// this palette has in common with [`PROTON`].
+const PERSONA5: Ramp = Ramp {
+    base: rgb(0x0a0708),
+    mantle: rgb(0x140d0f),
+    crust: rgb(0x000000),
+    surface0: rgb(0x1d1215),
+    surface1: rgb(0x33191d),
+    subtext0: rgb(0xb59a9d),
+    text: rgb(0xf5f2f2),
+    pink: rgb(0xff2e63),
+    mauve: rgb(0xb13bd6),
+    sky: rgb(0x2ec7ff),
+    sapphire: rgb(0x1f9bd0),
+    blue: rgb(0x2f5ee0),
+    lavender: rgb(0xa07bff),
+    teal: rgb(0x12c2a0),
+    green: rgb(0x2fbf4f),
+    peach: rgb(0xff7a1a),
+    yellow: rgb(0xffc400),
+    red: rgb(0xe60012),
+    light: false,
+};
+
 impl Ramp {
     const fn of(flavor: Flavor) -> Self {
         match flavor {
@@ -431,6 +474,7 @@ impl Ramp {
             Flavor::Frappe => FRAPPE,
             Flavor::Macchiato => MACCHIATO,
             Flavor::Mocha => MOCHA,
+            Flavor::Persona5 => PERSONA5,
         }
     }
 
@@ -450,6 +494,7 @@ impl Ramp {
             Accent::Blue => (self.blue, self.sapphire),
             Accent::Teal => (self.teal, self.green),
             Accent::Peach => (self.peach, self.yellow),
+            Accent::Red => (self.red, self.pink),
         }
     }
 }
@@ -627,6 +672,36 @@ mod tests {
             assert_eq!(palette.light, flavor.is_light());
             // And the page is on the right side of the middle either way.
             assert_eq!(luminance(palette.background) > 0.5, flavor.is_light());
+        }
+    }
+
+    #[test]
+    fn persona_5_is_black_with_that_red_in_it() {
+        let palette = Palette::resolve(Appearance {
+            flavor: Flavor::Persona5,
+            accent: Accent::Red,
+            gradients: false,
+        });
+        assert_eq!(palette.accent, PERSONA5.red);
+        assert!(!palette.light);
+        // Black enough that the artwork is the brightest thing on the page:
+        // darker than the palette this app shipped with, which is the other
+        // near-black one.
+        assert!(luminance(palette.background) < luminance(PROTON.base));
+    }
+
+    #[test]
+    fn every_flavour_can_wear_its_own_warning_colour() {
+        for flavor in Flavor::ALL {
+            let palette = Palette::resolve(Appearance {
+                flavor,
+                accent: Accent::Red,
+                gradients: true,
+            });
+            // The accent is the flavour's red — deepened on the light flavour,
+            // where it would otherwise be too bright to put a label on.
+            assert!(palette.accent.r > palette.accent.b, "{flavor:?}");
+            assert_ne!(palette.accent, palette.background, "{flavor:?}");
         }
     }
 

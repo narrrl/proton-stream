@@ -21,6 +21,7 @@
 
 pub mod app;
 pub mod engine;
+pub mod pacing;
 pub mod playback;
 pub mod theme;
 pub mod ui;

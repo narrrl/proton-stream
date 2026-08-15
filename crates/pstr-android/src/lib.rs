@@ -152,6 +152,7 @@ pub enum FlavorChoice {
     Frappe,
     Macchiato,
     Mocha,
+    Persona5,
 }
 
 /// The one strong colour. The shared `pstr_core::appearance::Accent`.
@@ -165,6 +166,7 @@ pub enum AccentChoice {
     Blue,
     Teal,
     Peach,
+    Red,
 }
 
 /// What the viewer chose, stored where the desktop client reads it too.
@@ -2348,6 +2350,7 @@ fn appearance_record(appearance: Appearance) -> AppearanceRecord {
             Flavor::Frappe => FlavorChoice::Frappe,
             Flavor::Macchiato => FlavorChoice::Macchiato,
             Flavor::Mocha => FlavorChoice::Mocha,
+            Flavor::Persona5 => FlavorChoice::Persona5,
         },
         accent: match appearance.accent {
             Accent::Mauve => AccentChoice::Mauve,
@@ -2358,6 +2361,7 @@ fn appearance_record(appearance: Appearance) -> AppearanceRecord {
             Accent::Blue => AccentChoice::Blue,
             Accent::Teal => AccentChoice::Teal,
             Accent::Peach => AccentChoice::Peach,
+            Accent::Red => AccentChoice::Red,
         },
         gradients: appearance.gradients,
     }
@@ -2371,6 +2375,7 @@ fn appearance_choice(record: AppearanceRecord) -> Appearance {
             FlavorChoice::Frappe => Flavor::Frappe,
             FlavorChoice::Macchiato => Flavor::Macchiato,
             FlavorChoice::Mocha => Flavor::Mocha,
+            FlavorChoice::Persona5 => Flavor::Persona5,
         },
         accent: match record.accent {
             AccentChoice::Mauve => Accent::Mauve,
@@ -2381,6 +2386,7 @@ fn appearance_choice(record: AppearanceRecord) -> Appearance {
             AccentChoice::Blue => Accent::Blue,
             AccentChoice::Teal => Accent::Teal,
             AccentChoice::Peach => Accent::Peach,
+            AccentChoice::Red => Accent::Red,
         },
         gradients: record.gradients,
     }

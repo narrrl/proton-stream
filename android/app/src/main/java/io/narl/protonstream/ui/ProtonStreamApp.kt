@@ -1624,6 +1624,7 @@ private fun FlavorChoice.label() = when (this) {
     FlavorChoice.FRAPPE -> "Catppuccin Frappé"
     FlavorChoice.MACCHIATO -> "Catppuccin Macchiato"
     FlavorChoice.MOCHA -> "Catppuccin Mocha"
+    FlavorChoice.PERSONA5 -> "Persona 5"
 }
 
 /**

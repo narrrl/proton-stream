@@ -17,6 +17,7 @@ use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord};
 use crate::engine::{
     DownloadItem, DownloadKey, Engine, Event, ImageCache, describe_failures, watch_state,
 };
+use crate::pacing::Pacer;
 use crate::playback::{Playback, PlaybackTarget};
 use crate::ui::player::UpNextCard;
 use crate::{theme, ui};
@@ -297,6 +298,9 @@ pub struct App {
     pub offline_files: std::collections::HashSet<DownloadKey>,
     pub confirm_partial_delete: Option<DownloadKey>,
     pub status: Option<Status>,
+    /// The frame ceiling, where this session is pacing itself rather than
+    /// letting vsync do it — see [`crate::pacing`].
+    pacer: Pacer,
 }
 
 impl App {
@@ -347,6 +351,7 @@ impl App {
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
             status: None,
+            pacer: Pacer::new(),
         })
     }
 
@@ -973,6 +978,10 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Before the timer: this is the frame budget being spent waiting, not
+        // the frame taking longer, and `FrameTimer` reports slow frames.
+        self.pacer.wait();
+
         let _timer = FrameTimer::new(&self.page);
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
