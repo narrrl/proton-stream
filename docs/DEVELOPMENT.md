@@ -55,6 +55,17 @@ chosen by hand sets `alang`/`slang` for every file loaded afterwards — the poi
 being that picking Japanese audio once picks it for the rest of the season.
 A dragged volume slider writes to disk on release, not per frame.
 
+Done: **the track choice follows the title, by name as well as language.** A
+track picked by hand is stored per title in the catalog (`title_track_prefs`,
+schema v8 added `audio_title`/`subtitle_title`) as its language *and* the name
+the muxer gave it. On `FileLoaded`, `playback::restore_tracks` re-selects the
+track whose name matches (`pstr_player::pick_track`) — which is what tells
+"Signs & Songs" from "Full Subtitles" when both are English, and finds an
+untagged track at all; `alang`/`slang` could only ever say the language. A name
+in the wrong language is not a match, and a title with only a language stored
+keeps mpv's own pick. Android stores languages only and keeps a desktop-stored
+name while its language is unchanged.
+
 Done: the player page's overlay — a full-width seek bar with the file's chapters
 marked on it and the current chapter named beside the clock, a transport cluster
 (previous / −10s / play / +30s / next), and volume plus the audio, subtitle and

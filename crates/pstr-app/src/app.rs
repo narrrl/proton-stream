@@ -866,28 +866,35 @@ impl App {
             Action::SelectTrack { kind, id } => {
                 self.send_player(crate::playback::Command::SelectTrack(kind, id));
 
-                // Remember the *language*, not the track number: the next
-                // episode is a different file, where track 3 may be a
-                // commentary and Japanese may be track 2.
-                let language = id.and_then(|id| {
-                    self.playback.as_ref().and_then(|playback| {
-                        playback
-                            .tracks_of(kind)
-                            .find(|track| track.id == id)
-                            .and_then(|track| track.language.clone())
+                // Remember the language and the track's name, not its number:
+                // the next episode is a different file, where track 3 may be a
+                // commentary and Japanese may be track 2. The name is what
+                // tells "Signs & Songs" from "Full Subtitles" in one language.
+                let (language, title) = id
+                    .and_then(|id| {
+                        self.playback.as_ref().and_then(|playback| {
+                            playback
+                                .tracks_of(kind)
+                                .find(|track| track.id == id)
+                                .map(|track| (track.language.clone(), track.title.clone()))
+                        })
                     })
-                });
+                    .unwrap_or_default();
                 if let Some(playback) = &self.playback {
                     let mut show = self
                         .engine
                         .title_track_prefs(&playback.target.title_key)
                         .unwrap_or_default();
                     match kind {
-                        pstr_player::TrackKind::Audio => show.audio_language = language,
+                        pstr_player::TrackKind::Audio => {
+                            show.audio_language = language;
+                            show.audio_title = title;
+                        }
                         pstr_player::TrackKind::Subtitle => {
                             show.subtitles = id.is_some();
                             if id.is_some() {
                                 show.subtitle_language = language;
+                                show.subtitle_title = title;
                             }
                         }
                         pstr_player::TrackKind::Video => {}

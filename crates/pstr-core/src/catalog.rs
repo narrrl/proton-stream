@@ -21,7 +21,7 @@ use crate::metadata::{EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId,
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -146,6 +146,13 @@ CREATE TABLE title_track_prefs (
 );
 "#;
 
+/// A language cannot tell two English subtitle tracks apart — "Signs & Songs"
+/// and "Full Subtitles" — so the track's title is remembered beside it.
+const MIGRATION_V8: &str = r#"
+ALTER TABLE title_track_prefs ADD COLUMN audio_title TEXT;
+ALTER TABLE title_track_prefs ADD COLUMN subtitle_title TEXT;
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfflineFile {
     pub revision_id: String,
@@ -157,6 +164,12 @@ pub struct TitleTrackPrefs {
     pub audio_language: Option<String>,
     pub subtitle_language: Option<String>,
     pub subtitles: bool,
+    /// The name the muxer gave the chosen audio track, when it had one. What
+    /// picks between two tracks in the same language on the next episode.
+    #[serde(default)]
+    pub audio_title: Option<String>,
+    #[serde(default)]
+    pub subtitle_title: Option<String>,
 }
 impl Default for TitleTrackPrefs {
     fn default() -> Self {
@@ -164,8 +177,24 @@ impl Default for TitleTrackPrefs {
             audio_language: None,
             subtitle_language: None,
             subtitles: true,
+            audio_title: None,
+            subtitle_title: None,
         }
     }
+}
+
+/// One `title_track_prefs` row, its columns starting at `first`.
+fn title_track_prefs_row(
+    row: &rusqlite::Row<'_>,
+    first: usize,
+) -> rusqlite::Result<TitleTrackPrefs> {
+    Ok(TitleTrackPrefs {
+        audio_language: row.get(first)?,
+        subtitle_language: row.get(first + 1)?,
+        subtitles: row.get::<_, i64>(first + 2)? != 0,
+        audio_title: row.get(first + 3)?,
+        subtitle_title: row.get(first + 4)?,
+    })
 }
 
 /// What `season = -1` means in `episode_metadata`: no season at all.
@@ -295,6 +324,12 @@ impl Catalog {
             let tx = self.conn.transaction()?;
             tx.execute_batch(MIGRATION_V7)?;
             tx.pragma_update(None, "user_version", 7)?;
+            tx.commit()?;
+        }
+        if version < 8 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V8)?;
+            tx.pragma_update(None, "user_version", 8)?;
             tx.commit()?;
         }
 
@@ -510,27 +545,43 @@ impl Catalog {
     }
 
     pub fn title_track_prefs(&self, title_key: &str) -> Result<Option<TitleTrackPrefs>> {
-        self.conn.query_row("SELECT audio_language, subtitle_language, subtitles FROM title_track_prefs WHERE title_key=?1", params![title_key], |r| Ok(TitleTrackPrefs { audio_language:r.get(0)?, subtitle_language:r.get(1)?, subtitles:r.get::<_,i64>(2)? != 0 })).optional().map_err(Into::into)
+        self.conn
+            .query_row(
+                "SELECT audio_language, subtitle_language, subtitles, audio_title, subtitle_title \
+                 FROM title_track_prefs WHERE title_key=?1",
+                params![title_key],
+                |row| title_track_prefs_row(row, 0),
+            )
+            .optional()
+            .map_err(Into::into)
     }
     pub fn set_title_track_prefs(&self, title_key: &str, prefs: &TitleTrackPrefs) -> Result<()> {
-        self.conn.execute("INSERT INTO title_track_prefs (title_key,audio_language,subtitle_language,subtitles) VALUES (?1,?2,?3,?4) ON CONFLICT(title_key) DO UPDATE SET audio_language=excluded.audio_language,subtitle_language=excluded.subtitle_language,subtitles=excluded.subtitles", params![title_key,prefs.audio_language,prefs.subtitle_language,prefs.subtitles as i64])?;
+        self.conn.execute(
+            "INSERT INTO title_track_prefs \
+             (title_key,audio_language,subtitle_language,subtitles,audio_title,subtitle_title) \
+             VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(title_key) DO UPDATE SET \
+             audio_language=excluded.audio_language,subtitle_language=excluded.subtitle_language,\
+             subtitles=excluded.subtitles,audio_title=excluded.audio_title,\
+             subtitle_title=excluded.subtitle_title",
+            params![
+                title_key,
+                prefs.audio_language,
+                prefs.subtitle_language,
+                prefs.subtitles as i64,
+                prefs.audio_title,
+                prefs.subtitle_title
+            ],
+        )?;
         Ok(())
     }
 
     pub fn all_title_track_prefs(&self) -> Result<HashMap<String, TitleTrackPrefs>> {
         let mut statement = self.conn.prepare(
-            "SELECT title_key, audio_language, subtitle_language, subtitles FROM title_track_prefs",
+            "SELECT title_key, audio_language, subtitle_language, subtitles, audio_title, \
+             subtitle_title FROM title_track_prefs",
         )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                TitleTrackPrefs {
-                    audio_language: row.get(1)?,
-                    subtitle_language: row.get(2)?,
-                    subtitles: row.get::<_, i64>(3)? != 0,
-                },
-            ))
-        })?;
+        let rows =
+            statement.query_map([], |row| Ok((row.get(0)?, title_track_prefs_row(row, 1)?)))?;
         Ok(rows.collect::<std::result::Result<HashMap<_, _>, _>>()?)
     }
 
@@ -1389,6 +1440,30 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read version");
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn a_titles_track_choice_round_trips_with_the_track_names() {
+        let catalog = Catalog::in_memory().expect("open");
+        assert_eq!(catalog.title_track_prefs("show").expect("read"), None);
+
+        let prefs = TitleTrackPrefs {
+            audio_language: Some("jpn".into()),
+            subtitle_language: Some("eng".into()),
+            subtitles: true,
+            audio_title: None,
+            subtitle_title: Some("Full Subtitles".into()),
+        };
+        catalog.set_title_track_prefs("show", &prefs).expect("write");
+        assert_eq!(catalog.title_track_prefs("show").expect("read"), Some(prefs.clone()));
+
+        let changed = TitleTrackPrefs {
+            subtitle_title: Some("Signs & Songs".into()),
+            ..prefs
+        };
+        catalog.set_title_track_prefs("show", &changed).expect("overwrite");
+        let all = catalog.all_title_track_prefs().expect("read all");
+        assert_eq!(all.get("show"), Some(&changed));
     }
 
     /// A newer schema is refused, not downgraded — reinterpreting it would

@@ -52,4 +52,4 @@ pub use player::{
 };
 pub use registry::{PROTOCOL, StreamHandle, StreamRegistry};
 pub use render::VideoRenderer;
-pub use tracks::{Track, TrackKind, language_name};
+pub use tracks::{Track, TrackKind, language_name, pick_track};

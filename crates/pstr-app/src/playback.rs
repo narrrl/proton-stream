@@ -487,8 +487,12 @@ fn run(
             PlayerEvent::FileLoaded => {
                 duration = player.duration();
                 // The first moment there is a track list to read: mpv has
-                // demuxed the file and made its own default selection, which
-                // is what the menus have to open showing.
+                // demuxed the file and made its own default selection. Put the
+                // title's own choice over it before the menus are told, so they
+                // open showing what is actually playing.
+                if let Some(show) = target.track_prefs.as_deref() {
+                    restore_tracks(&player, show);
+                }
                 emit_tracks(&engine, id, &player);
                 // Only now is there a timeline to seek within.
                 if !resumed && let Some(at) = target.resume_at {
@@ -609,6 +613,44 @@ fn select_track(
         event: PlayerEvent::Tracks(tracks),
     });
     Ok(())
+}
+
+/// Put back the tracks this title was last watched with.
+///
+/// `alang`/`slang` already steered mpv's pick by language. This is for what a
+/// language cannot say — which of two English subtitle tracks, or an audio track
+/// with a name and no tag — so only a remembered *title* acts here; a title with
+/// nothing but a language keeps mpv's selection, which honours it already.
+fn restore_tracks(player: &Player, show: &pstr_core::catalog::TitleTrackPrefs) {
+    let tracks = player.tracks();
+    let wanted = [
+        (
+            TrackKind::Audio,
+            show.audio_language.as_deref(),
+            show.audio_title.as_deref(),
+            true,
+        ),
+        (
+            TrackKind::Subtitle,
+            show.subtitle_language.as_deref(),
+            show.subtitle_title.as_deref(),
+            show.subtitles,
+        ),
+    ];
+    for (kind, language, title, enabled) in wanted {
+        if !enabled || title.is_none() {
+            continue;
+        }
+        let Some(track) = pstr_player::pick_track(&tracks, kind, language, title) else {
+            continue;
+        };
+        let playing = tracks
+            .iter()
+            .any(|candidate| candidate.kind == kind && candidate.id == track && candidate.selected);
+        if !playing && let Err(error) = player.select_track(kind, Some(track)) {
+            tracing::warn!("restore {} track {track}: {error}", kind.label());
+        }
+    }
 }
 
 /// Tell the UI what the file contains and what of it is playing.

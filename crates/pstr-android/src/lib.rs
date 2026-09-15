@@ -1127,13 +1127,27 @@ impl AndroidEngine {
         title_key: String,
         preferences: TrackPreferencesRecord,
     ) -> Result<(), BridgeError> {
+        let catalog = self.catalog.lock();
+        let existing = catalog
+            .title_track_prefs(&title_key)
+            .map_err(BridgeError::from_display)?
+            .unwrap_or_default();
+        let audio_language = normalized_language(preferences.audio_language);
+        let subtitle_language = normalized_language(preferences.subtitle_language);
+        // This bridge carries languages only. A track title stored beside one
+        // stays for as long as the language it was picked under does.
         let preferences = TitleTrackPrefs {
-            audio_language: normalized_language(preferences.audio_language),
-            subtitle_language: normalized_language(preferences.subtitle_language),
+            audio_title: existing
+                .audio_title
+                .filter(|_| existing.audio_language == audio_language),
+            subtitle_title: existing
+                .subtitle_title
+                .filter(|_| existing.subtitle_language == subtitle_language),
+            audio_language,
+            subtitle_language,
             subtitles: preferences.subtitles,
         };
-        self.catalog
-            .lock()
+        catalog
             .set_title_track_prefs(&title_key, &preferences)
             .map_err(BridgeError::from_display)
     }

@@ -107,6 +107,56 @@ pub(crate) fn read(mpv: &Mpv) -> Vec<Track> {
         .collect()
 }
 
+/// The track of `kind` that matches a choice remembered from another file.
+///
+/// A title outranks a language: two English subtitle tracks — "Signs & Songs"
+/// and "Full Subtitles" — share a language and differ only by name, and the
+/// name is what was picked. A title in the wrong language is not a match, since
+/// "Full Subtitles" in German is not what someone reading English chose. Without
+/// a title match, a track in the language wins, the container's default first.
+/// `None` when nothing matches, which leaves the current selection standing.
+pub fn pick_track(
+    tracks: &[Track],
+    kind: TrackKind,
+    language: Option<&str>,
+    title: Option<&str>,
+) -> Option<i64> {
+    let in_language = |track: &Track| match (language, track.language.as_deref()) {
+        (None, _) => true,
+        (Some(wanted), Some(have)) => same_language(wanted, have),
+        (Some(_), None) => false,
+    };
+    let of_kind = || tracks.iter().filter(move |track| track.kind == kind);
+
+    if let Some(title) = title
+        && let Some(track) = of_kind().find(|track| {
+            in_language(track)
+                && track
+                    .title
+                    .as_deref()
+                    .is_some_and(|have| have.eq_ignore_ascii_case(title))
+        })
+    {
+        return Some(track.id);
+    }
+
+    language?;
+    let mut matching = of_kind().filter(|track| in_language(track));
+    let first = matching.next()?;
+    Some(
+        std::iter::once(first)
+            .chain(matching)
+            .find(|track| track.default)
+            .unwrap_or(first)
+            .id,
+    )
+}
+
+/// Whether two container tags name the same language: "en" and "eng" do.
+fn same_language(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b) || language_name(a) == language_name(b)
+}
+
 fn read_one(mpv: &Mpv, index: i64) -> Option<Track> {
     let kind = TrackKind::from_mpv(&text(mpv, index, "type")?)?;
     let id: i64 = mpv
@@ -240,6 +290,87 @@ mod tests {
         // An unknown tag is shown as it stands rather than as "Unknown", which
         // would make two of them indistinguishable.
         assert_eq!(language_name("mis"), "mis");
+    }
+
+    fn named(kind: TrackKind, id: i64, language: Option<&str>, title: Option<&str>) -> Track {
+        Track {
+            language: language.map(Into::into),
+            title: title.map(Into::into),
+            ..track(kind, id)
+        }
+    }
+
+    #[test]
+    fn a_remembered_title_picks_between_tracks_of_one_language() {
+        let tracks = [
+            named(TrackKind::Subtitle, 1, Some("eng"), Some("Signs & Songs")),
+            named(TrackKind::Subtitle, 2, Some("eng"), Some("Full Subtitles")),
+        ];
+        let mut signs = tracks[0].clone();
+        signs.default = true;
+        let tracks = [signs, tracks[1].clone()];
+        assert_eq!(
+            pick_track(
+                &tracks,
+                TrackKind::Subtitle,
+                Some("eng"),
+                Some("full subtitles")
+            ),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_title_in_another_language_is_not_the_one_that_was_chosen() {
+        let tracks = [
+            named(TrackKind::Subtitle, 1, Some("ger"), Some("Full Subtitles")),
+            named(TrackKind::Subtitle, 2, Some("en"), Some("Dialogue")),
+        ];
+        // Falls back to the language, and "en" is the same language as "eng".
+        assert_eq!(
+            pick_track(
+                &tracks,
+                TrackKind::Subtitle,
+                Some("eng"),
+                Some("Full Subtitles")
+            ),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn an_untagged_track_is_found_by_its_title_alone() {
+        let tracks = [
+            named(TrackKind::Audio, 1, None, Some("Stereo")),
+            named(TrackKind::Audio, 2, None, Some("Commentary")),
+        ];
+        assert_eq!(
+            pick_track(&tracks, TrackKind::Audio, None, Some("Commentary")),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_language_match_prefers_the_default_track_and_nothing_matching_is_none() {
+        let mut second = named(TrackKind::Audio, 2, Some("jpn"), None);
+        second.default = true;
+        let tracks = [
+            named(TrackKind::Audio, 1, Some("jpn"), Some("Commentary")),
+            second,
+            named(TrackKind::Subtitle, 3, Some("jpn"), None),
+        ];
+        assert_eq!(
+            pick_track(&tracks, TrackKind::Audio, Some("ja"), None),
+            Some(2)
+        );
+        assert_eq!(
+            pick_track(&tracks, TrackKind::Audio, Some("fre"), None),
+            None
+        );
+        assert_eq!(
+            pick_track(&tracks, TrackKind::Audio, None, Some("Stereo")),
+            None
+        );
     }
 
     #[test]
