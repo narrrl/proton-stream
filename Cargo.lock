@@ -2404,6 +2404,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "http",
+ "indexmap",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2592,6 +2611,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
+ "h2",
  "http",
  "http-body",
  "httparse",
@@ -4202,9 +4222,9 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "proton-drive-rs"
-version = "0.5.1"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3abae5e90e6889b120208159eb2c60b332612e5b708fdf3c14287307ce01715d"
+checksum = "11faa95cf40bd87d4d48435cdf9b16fff5f14caf45b3a565a941fd4a6e18cefe"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4229,9 +4249,9 @@ dependencies = [
 
 [[package]]
 name = "proton-sdk"
-version = "0.5.1"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fa729310c1a66e12bb41b9f5f036c86b9857e76536556052203ffecdb0b44c3"
+checksum = "7de99acbd776f7bad5e1e1f3c40d7df3e4ef7411984d02370008ba1ff270a047"
 dependencies = [
  "aes-gcm 0.11.0",
  "async-trait",
@@ -4262,7 +4282,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-android"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "android_logger",
  "jni 0.21.1",
@@ -4281,7 +4301,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-app"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "eframe",
@@ -4303,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -4321,7 +4341,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "directories",
  "futures",
@@ -4339,7 +4359,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-meta"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "pstr-core",
  "reqwest",
@@ -4352,7 +4372,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-player"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "libloading",
@@ -4367,7 +4387,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-stream"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "futures",
@@ -4647,6 +4667,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -5644,6 +5665,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "libc",
  "pin-project-lite",
  "tokio",
 ]

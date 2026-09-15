@@ -1454,14 +1454,21 @@ mod tests {
             audio_title: None,
             subtitle_title: Some("Full Subtitles".into()),
         };
-        catalog.set_title_track_prefs("show", &prefs).expect("write");
-        assert_eq!(catalog.title_track_prefs("show").expect("read"), Some(prefs.clone()));
+        catalog
+            .set_title_track_prefs("show", &prefs)
+            .expect("write");
+        assert_eq!(
+            catalog.title_track_prefs("show").expect("read"),
+            Some(prefs.clone())
+        );
 
         let changed = TitleTrackPrefs {
             subtitle_title: Some("Signs & Songs".into()),
             ..prefs
         };
-        catalog.set_title_track_prefs("show", &changed).expect("overwrite");
+        catalog
+            .set_title_track_prefs("show", &changed)
+            .expect("overwrite");
         let all = catalog.all_title_track_prefs().expect("read all");
         assert_eq!(all.get("show"), Some(&changed));
     }
@@ -1614,6 +1621,8 @@ mod tests {
             photo: None,
             album: None,
             verification: Default::default(),
+            direct_role: None,
+            share_id: None,
         }
     }
 
