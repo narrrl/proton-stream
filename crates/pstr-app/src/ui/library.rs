@@ -45,6 +45,10 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if !searching {
+                if let Some(title) = featured(library, view, art.metadata, today()) {
+                    hero(ui, art, title, actions);
+                    ui.add_space(18.0);
+                }
                 let resumable = pick(&view.resumable);
                 if !resumable.is_empty() {
                     ui::section(ui, "Continue watching");
@@ -84,6 +88,178 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
 
             grid(ui, art, &matches, actions);
         });
+}
+
+/// Days since the epoch: what the featured title turns over on.
+fn today() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() / 86_400)
+}
+
+/// The title the banner shows: whatever was watched last, so the top of the
+/// page is one click from carrying on. With nothing part-watched, one of the
+/// titles a provider has a backdrop for, turning over once a day — the same
+/// one every time the page is opened today, rather than a new one per frame.
+fn featured<'a>(
+    library: &'a Library,
+    view: &LibraryView,
+    metadata: &std::collections::HashMap<String, pstr_core::metadata::MetadataRecord>,
+    day: u64,
+) -> Option<&'a Title> {
+    if let Some(title) = view
+        .resumable
+        .first()
+        .and_then(|&index| library.titles.get(index))
+    {
+        return Some(title);
+    }
+    let pictured: Vec<&Title> = library
+        .titles
+        .iter()
+        .filter(|title| {
+            metadata
+                .get(&title.key)
+                .and_then(|record| record.metadata.as_ref())
+                .is_some_and(|found| found.backdrop_url.is_some())
+        })
+        .collect();
+    if pictured.is_empty() {
+        return None;
+    }
+    pictured
+        .get((day % pictured.len() as u64) as usize)
+        .copied()
+}
+
+/// The banner across the top of the library: one title, large, with what it
+/// is and a way to play it.
+fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<Action>) {
+    let height = (ui.ctx().content_rect().height() * 0.42).clamp(220.0, 360.0);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let radius = egui::CornerRadius::same(12);
+    let picture = art.of(title);
+    let found = art
+        .metadata
+        .get(&title.key)
+        .and_then(|record| record.metadata.clone());
+
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, radius, theme::card());
+    let art_in = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("art"), picture.is_some(), 0.3);
+    if art_in < 1.0 {
+        ui::placeholder(&painter, rect, "", 1.0 - art_in);
+    }
+    if let Some((texture, _)) = &picture {
+        painter.add(
+            egui::epaint::RectShape::filled(
+                rect,
+                radius,
+                egui::Color32::WHITE.gamma_multiply(art_in),
+            )
+            .with_texture(texture.id(), ui::cover_uv(texture.size_vec2(), rect.size())),
+        );
+    }
+    // The same two coats as the title page's band, for the same reason: a
+    // still is arbitrary, and the text over it has to read whatever it is.
+    if theme::ramps_on() {
+        painter.rect_filled(rect, radius, theme::background().gamma_multiply(0.25));
+        let text_side = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.left() + rect.width() * 0.7, rect.bottom()),
+        );
+        painter.add(theme::fade_shape(
+            ui.ctx(),
+            text_side,
+            theme::background(),
+            theme::Direction::Horizontal,
+            false,
+        ));
+        let bottom =
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 90.0), rect.max);
+        painter.add(theme::fade_shape(
+            ui.ctx(),
+            bottom,
+            theme::background(),
+            theme::Direction::Vertical,
+            true,
+        ));
+    } else {
+        painter.rect_filled(rect, radius, theme::background().gamma_multiply(0.82));
+    }
+
+    let inner = egui::Rect::from_min_max(
+        rect.min + egui::vec2(32.0, 0.0),
+        egui::pos2(
+            rect.left() + (rect.width() * 0.55).max(360.0),
+            rect.bottom() - 28.0,
+        ),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::bottom_up(egui::Align::Min)),
+        |ui| {
+            ui.horizontal(|ui| {
+                if let Some(episode) = title.next_up() {
+                    let label = match (title.resume(), episode.numbering()) {
+                        (Some(_), Some(numbering)) => format!("▶  Resume {numbering}"),
+                        (Some(_), None) => "▶  Resume".to_owned(),
+                        (None, _) => "▶  Play".to_owned(),
+                    };
+                    if ui::accent_button(ui, &label).clicked() {
+                        actions.push(Action::Play(PlaybackTarget::new(title, episode)));
+                    }
+                    ui.add_space(6.0);
+                }
+                if ui.button("More info").clicked() {
+                    actions.push(Action::Goto(Page::Title(title.key.clone())));
+                }
+            });
+            ui.add_space(14.0);
+            if let Some(overview) = found.as_ref().and_then(|found| found.overview.as_deref()) {
+                let mut job = egui::text::LayoutJob::simple(
+                    overview.to_owned(),
+                    theme::Role::Body.font(),
+                    theme::text(),
+                    ui.available_width(),
+                );
+                job.wrap.max_rows = 3;
+                ui.label(job);
+                ui.add_space(8.0);
+            }
+            let mut facts = vec![subtitle(title)];
+            if let Some(found) = &found {
+                if let Some(rating) = found.rating {
+                    facts.push(format!("★ {rating:.1}"));
+                }
+                facts.extend(found.genres.iter().take(3).cloned());
+            }
+            ui.label(ui::muted(facts.join("  ·  ")));
+            ui.add_space(2.0);
+            ui.add(
+                egui::Label::new(
+                    theme::Role::Display
+                        .rich(&title.name)
+                        .strong()
+                        .color(theme::text()),
+                )
+                .truncate(),
+            );
+        },
+    );
+
+    if response.clicked() {
+        actions.push(Action::Goto(Page::Title(title.key.clone())));
+    }
 }
 
 /// The filter pills and the order, at the right of the grid's heading.
@@ -419,6 +595,23 @@ mod tests {
         assert_eq!(
             subtitle(&title(TitleKind::Series, Some(1995))),
             "0 episodes"
+        );
+    }
+
+    #[test]
+    fn the_banner_features_the_title_watched_last_and_nothing_without_a_picture() {
+        let mut second = title(TitleKind::Film, None);
+        second.key = "second".into();
+        let library = Library {
+            titles: vec![title(TitleKind::Film, None), second],
+        };
+        let metadata = std::collections::HashMap::new();
+        let mut view = LibraryView::default();
+        assert!(featured(&library, &view, &metadata, 0).is_none());
+        view.resumable = vec![1];
+        assert_eq!(
+            featured(&library, &view, &metadata, 0).map(|title| title.key.as_str()),
+            Some("second")
         );
     }
 

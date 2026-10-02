@@ -702,7 +702,7 @@ pub fn cover_uv(image: Vec2, target: Vec2) -> Rect {
 ///
 /// The hash is FNV-1a: stable across runs and platforms, which the standard
 /// library's hasher deliberately is not.
-fn placeholder(painter: &egui::Painter, rect: Rect, name: &str, opacity: f32) {
+pub(crate) fn placeholder(painter: &egui::Painter, rect: Rect, name: &str, opacity: f32) {
     let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     });
