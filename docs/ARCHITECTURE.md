@@ -120,4 +120,7 @@ an edge case.
 | Catalog | data dir, `catalog.db` | Yes — recrawl |
 | Watch state | same DB, own table | **No** — deliberately survives a recrawl |
 | Block cache | cache dir, `blocks/` | Yes — must work correctly after deletion |
-| Poster thumbnails | cache dir, `thumbs/` | Yes — refetched per file, one small decrypt each |
+| Poster thumbnails | cache dir, `thumbs/` | Yes — refetched per file, one small decrypt each; stored scaled to 640 px |
+| Provider artwork | cache dir, `posters/` | Yes — refetched by URL; stored scaled to 640 px |
+| Desktop-only settings | config dir, `desktop.json` | Defaults if missing — hardware decoding, cache budget; never overwritten when unparseable |
+| Window size | config dir, `window.json` | Defaults if missing or implausible |

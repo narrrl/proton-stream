@@ -103,8 +103,12 @@ see [`docs/ANDROID.md`](docs/ANDROID.md) for exact setup and release signing.
   a local HTTP server: there is no port for another process on the machine to ask
   for the plaintext, and mpv is handed an opaque token rather than a URL that
   would put a share secret in its log and window title.
-- The block cache holds decrypted content. It lives in your cache directory and
-  can be deleted at any time the app is not running.
+- The block cache holds decrypted content. It lives in your cache directory,
+  can be deleted at any time the app is not running, and can be sized or
+  emptied from Settings → Storage.
+- The desktop's media widget is handed the title, the episode and a `file://`
+  path to artwork already on disk — never a provider URL, so the shell never
+  contacts a metadata provider on its own.
 
 ## License
 
