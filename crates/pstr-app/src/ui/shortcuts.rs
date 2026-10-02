@@ -15,6 +15,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("F5  or  Ctrl R", "Crawl every share again"),
             ("Ctrl 1 – 4", "Library, Shares, Downloads, Settings"),
             ("Ctrl ,", "Settings"),
+            ("Ctrl V", "Paste a share link to add it"),
             ("Alt ←  or  mouse back", "Back"),
             ("?", "This list"),
         ],

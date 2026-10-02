@@ -23,6 +23,7 @@ pub mod app;
 pub mod engine;
 pub mod inhibit;
 pub mod media;
+pub mod notify;
 pub mod pacing;
 pub mod playback;
 pub mod theme;

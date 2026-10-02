@@ -186,6 +186,8 @@ pub enum Event {
     CrawlProgress { share: String, found: usize },
     /// Every requested crawl is done.
     CrawlFinished,
+    /// A download finished; this is what it was.
+    Downloaded(String),
     /// That share's crawl was stopped before it stored anything.
     CrawlStopped { share_id: String },
     /// A decoded Proton thumbnail, keyed as [`thumbnail_key`].
@@ -1145,10 +1147,7 @@ impl Engine {
                         item.state = DownloadState::Completed;
                     });
                     engine.load_offline_files();
-                    engine.emit(Event::Status(format!(
-                        "{} is available offline",
-                        task_target.name
-                    )));
+                    engine.emit(Event::Downloaded(task_target.caption_or_name()));
                 }
                 Ok(DownloadEnd::Cancelled) => {
                     engine.update_download(&task_key, |item| item.state = DownloadState::Cancelled);

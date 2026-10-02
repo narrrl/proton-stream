@@ -110,6 +110,16 @@ impl PlaybackTarget {
 
     /// The line under the title while this plays: the numbering, and the
     /// episode's name when a provider has given one.
+    /// How to name this file to someone not looking at its title page:
+    /// the title and the episode, or the file name when there is no title.
+    pub fn caption_or_name(&self) -> String {
+        match (self.title_name.is_empty(), self.caption()) {
+            (false, caption) if !caption.is_empty() => format!("{} — {caption}", self.title_name),
+            (false, _) => self.title_name.clone(),
+            (true, _) => self.name.clone(),
+        }
+    }
+
     pub fn caption(&self) -> String {
         match &self.episode_name {
             Some(name) if !self.subtitle.is_empty() => format!("{}  ·  {name}", self.subtitle),

@@ -105,6 +105,8 @@ pub enum Action {
     Crawl(Option<String>),
     /// Stop the crawls still listing.
     StopCrawl,
+    /// A share link was pasted outside the form: open the form with it.
+    PasteShare(String),
     AddShare {
         name: String,
         url: String,
@@ -434,6 +436,7 @@ pub struct App {
     media_cover: Option<(u64, Option<String>)>,
     /// Holds the screensaver off while a film is on screen and playing.
     inhibitor: crate::inhibit::Inhibitor,
+    notifier: crate::notify::Notifier,
     pub downloads: Vec<DownloadItem>,
     pub offline_files: std::collections::HashSet<DownloadKey>,
     pub confirm_partial_delete: Option<DownloadKey>,
@@ -503,6 +506,7 @@ impl App {
             media: crate::media::MediaSession::new(&cc.egui_ctx, window_handle(cc)),
             media_cover: None,
             inhibitor: crate::inhibit::Inhibitor::new(),
+            notifier: crate::notify::Notifier::new(),
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
@@ -573,6 +577,10 @@ impl App {
                         format!("{name}: {files} playable of {nodes} nodes in {seconds:.0}s"),
                         false,
                     );
+                    // Only a crawl long enough to have walked away from.
+                    if seconds >= 30.0 {
+                        self.notify(ctx, &format!("Crawled {name}"), &format!("{files} files"));
+                    }
                 }
                 Event::CrawlFinished => {
                     self.crawling = false;
@@ -581,6 +589,21 @@ impl App {
                 Event::CrawlProgress { share, found } => {
                     self.crawling = true;
                     self.crawl_progress.insert(share, found);
+                }
+                Event::Downloaded(name) => {
+                    self.note(ctx, format!("{name} is available offline"), false);
+                    // Once per batch, when the last of it lands: a season is
+                    // two dozen files, and two dozen notifications is spam.
+                    let more = self.downloads.iter().any(|item| {
+                        matches!(
+                            item.state,
+                            crate::engine::DownloadState::Queued
+                                | crate::engine::DownloadState::Running
+                        )
+                    });
+                    if !more {
+                        self.notify(ctx, "Downloads finished", &name);
+                    }
                 }
                 Event::CrawlStopped { share_id } => {
                     let name = self.share_name(&share_id);
@@ -775,6 +798,15 @@ impl App {
             .map(|path| format!("file://{}", path.display()));
         self.media_cover = Some((playback.id, cover.clone()));
         cover
+    }
+
+    /// A desktop notification, if the window is not what the viewer is
+    /// looking at. When it is, the toast already said it.
+    fn notify(&self, ctx: &egui::Context, summary: &str, body: &str) {
+        let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        if !focused {
+            self.notifier.send(summary, body);
+        }
     }
 
     fn share_name(&self, id: &str) -> String {
@@ -1125,6 +1157,12 @@ impl App {
                 self.engine.crawl(share);
             }
             Action::StopCrawl => self.engine.stop_crawl(),
+            Action::PasteShare(url) => {
+                self.page = Page::Shares;
+                self.form.url = url;
+                self.form.error = None;
+                self.note(ctx, "share link pasted — name it and add it", false);
+            }
             Action::AddShare {
                 name,
                 url,
@@ -1806,6 +1844,17 @@ fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>)
         }
         if input.consume_key(Modifiers::COMMAND, Key::Comma) {
             tab = Some(3);
+        }
+        // A share link pasted anywhere outside a text field is someone adding
+        // a share, wherever they happen to be.
+        if !typing {
+            for event in &input.events {
+                if let egui::Event::Paste(text) = event
+                    && pstr_core::shares::share_token(text.trim()).is_ok()
+                {
+                    actions.push(Action::PasteShare(text.trim().to_owned()));
+                }
+            }
         }
     });
     if let Some(index) = tab {
