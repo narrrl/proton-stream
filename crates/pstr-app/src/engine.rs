@@ -307,6 +307,10 @@ pub struct Engine {
     /// whenever the settings change, so nothing holds a client for a provider
     /// the viewer has switched away from.
     metadata: Arc<Mutex<Enrichment>>,
+    /// False until [`Engine::metadata`] holds what the settings resolve to.
+    /// Only ever false at launch, while the API key is read off the UI
+    /// thread; see [`Engine::new`].
+    enrichment_settled: Arc<tokio::sync::watch::Sender<bool>>,
     /// Volume, mute and language preferences. Held here rather than in the UI
     /// because a new player is built from them, and the player is started from
     /// a background event.
@@ -402,6 +406,21 @@ impl Engine {
             Appearance::default()
         });
 
+        // A provider with an API key needs it out of the OS credential store,
+        // and that can be a D-Bus round trip to a keyring that has to unlock
+        // first — not something to hold the first frame for. Built on the
+        // blocking pool instead; until it lands, everything that needs the
+        // provider waits for it rather than concluding there is none.
+        let deferred = config.enabled && config.provider.needs_api_key();
+        let enrichment = if deferred {
+            Enrichment {
+                config: config.clone(),
+                service: None,
+            }
+        } else {
+            Enrichment::build(config.clone())
+        };
+
         let track_prefs = catalog.all_title_track_prefs().unwrap_or_else(|error| {
             tracing::warn!("read show track preferences: {error}");
             HashMap::new()
@@ -415,7 +434,8 @@ impl Engine {
             catalog: Arc::new(Mutex::new(catalog)),
             thumbnails: Arc::new(tokio::sync::Semaphore::new(THUMBNAIL_CONCURRENCY)),
             lookups: Arc::new(tokio::sync::Semaphore::new(LOOKUP_CONCURRENCY)),
-            metadata: Arc::new(Mutex::new(Enrichment::build(config))),
+            metadata: Arc::new(Mutex::new(enrichment)),
+            enrichment_settled: Arc::new(tokio::sync::watch::channel(!deferred).0),
             prefs: Arc::new(Mutex::new(prefs)),
             appearance: Arc::new(Mutex::new(appearance)),
             track_prefs: Arc::new(Mutex::new(track_prefs)),
@@ -428,6 +448,12 @@ impl Engine {
             events,
             ctx,
         };
+        if deferred {
+            let deferred = engine.clone();
+            engine.runtime.spawn_blocking(move || {
+                deferred.install_enrichment(Enrichment::build(config), true);
+            });
+        }
         Ok((engine, receiver))
     }
 
@@ -537,12 +563,15 @@ impl Engine {
 
     // ---------------------------------------------------------------- shares
 
-    /// Re-read the share list.
+    /// Re-read the share list, off the UI thread: it is a file read, and at
+    /// launch the first frame should not wait on the disk for it.
     pub fn load_shares(&self) {
-        match self.store.list() {
-            Ok(shares) => self.emit(Event::Shares(shares)),
-            Err(error) => self.fail("read the share list", error),
-        }
+        let engine = self.clone();
+        self.runtime
+            .spawn_blocking(move || match engine.store.list() {
+                Ok(shares) => engine.emit(Event::Shares(shares)),
+                Err(error) => engine.fail("read the share list", error),
+            });
     }
 
     /// Add a share, then open and crawl it — which is what "add" means to
@@ -1742,6 +1771,38 @@ impl Engine {
         });
     }
 
+    /// Put `built` in place and mark the provider settled.
+    ///
+    /// `only_if_unsettled` is for the launch-time build: a settings change
+    /// that landed while it was reading the keyring is newer, and wins. The
+    /// check and the write share the lock, so the two cannot interleave.
+    fn install_enrichment(&self, built: Enrichment, only_if_unsettled: bool) {
+        let mut slot = self.metadata.lock();
+        if only_if_unsettled && *self.enrichment_settled.borrow() {
+            return;
+        }
+        *slot = built;
+        self.enrichment_settled.send_replace(true);
+    }
+
+    /// The provider, once the launch-time build has settled. `None` when
+    /// enrichment is off or has no usable key.
+    async fn metadata_service(&self) -> Option<MetadataService> {
+        let mut settled = self.enrichment_settled.subscribe();
+        let _ = settled.wait_for(|settled| *settled).await;
+        self.metadata.lock().service.clone()
+    }
+
+    /// Why there is no provider, for the viewer who asked for one.
+    fn no_service_reason(&self) -> String {
+        let config = self.metadata_config();
+        if !config.enabled {
+            "turn on metadata enrichment first".into()
+        } else {
+            format!("{} needs an API key", config.provider.label())
+        }
+    }
+
     /// The enrichment settings as they stand.
     pub fn metadata_config(&self) -> MetadataConfig {
         self.metadata.lock().config.clone()
@@ -1774,7 +1835,7 @@ impl Engine {
                 tracing::warn!("clear stored metadata: {error}");
             }
 
-            *engine.metadata.lock() = Enrichment::build(config.clone());
+            engine.install_enrichment(Enrichment::build(config.clone()), false);
             engine.emit(Event::MetadataConfig(config));
             engine.load_metadata();
         });
@@ -1788,7 +1849,7 @@ impl Engine {
                 return engine.fail("store the API key", error);
             }
             let config = engine.metadata_config();
-            *engine.metadata.lock() = Enrichment::build(config);
+            engine.install_enrichment(Enrichment::build(config), false);
             engine.emit(Event::Status(if key.trim().is_empty() {
                 format!("cleared the {} key", provider.label())
             } else {
@@ -1837,13 +1898,8 @@ impl Engine {
     }
 
     async fn run_match(&self, titles: Vec<Title>, force: bool) {
-        let Some(service) = self.metadata.lock().service.clone() else {
-            let config = self.metadata_config();
-            return self.emit(Event::Error(if !config.enabled {
-                "turn on metadata enrichment first".into()
-            } else {
-                format!("{} needs an API key", config.provider.label())
-            }));
+        let Some(service) = self.metadata_service().await else {
+            return self.emit(Event::Error(self.no_service_reason()));
         };
         let provider = service.provider();
 
@@ -1979,21 +2035,13 @@ impl Engine {
     /// Unscored and unfiltered — see [`MetadataService::search`]. Nothing is
     /// stored: this is a look, and only [`Engine::choose_match`] writes.
     pub fn search_matches(&self, title_key: String, term: String, kind: TitleKind) {
-        let Some(service) = self.metadata.lock().service.clone() else {
-            let config = self.metadata_config();
-            return self.emit(Event::MatchSearchFailed {
-                title_key,
-                error: if !config.enabled {
-                    "turn on metadata enrichment first".into()
-                } else {
-                    format!("{} needs an API key", config.provider.label())
-                },
-            });
-        };
-
         let engine = self.clone();
         let permits = Arc::clone(&self.lookups);
         self.runtime.spawn(async move {
+            let Some(service) = engine.metadata_service().await else {
+                let error = engine.no_service_reason();
+                return engine.emit(Event::MatchSearchFailed { title_key, error });
+            };
             // The same permit the batch run takes: a viewer typing in the search
             // box while a match run is going must not be what earns the 429.
             let Ok(_permit) = permits.acquire().await else {
@@ -2019,12 +2067,11 @@ impl Engine {
     /// to the next match run, because the point of choosing an entry by hand is
     /// usually that its episode names were wrong too.
     pub fn choose_match(&self, title: Title, found: pstr_core::metadata::TitleMetadata) {
-        let Some(service) = self.metadata.lock().service.clone() else {
-            return self.emit(Event::Error("turn on metadata enrichment first".into()));
-        };
-
         let engine = self.clone();
         self.runtime.spawn(async move {
+            let Some(service) = engine.metadata_service().await else {
+                return engine.emit(Event::Error(engine.no_service_reason()));
+            };
             let name = found.name.clone();
             let record = service.chosen(title.key.clone(), found.clone());
             if let Err(error) = engine.catalog.lock().set_metadata(&record) {
@@ -2103,7 +2150,7 @@ impl Engine {
                 }
             }
 
-            let Some(service) = engine.metadata.lock().service.clone() else {
+            let Some(service) = engine.metadata_service().await else {
                 // Enrichment was turned off between the request and now.
                 return engine.emit(Event::PosterMissing { key: title_key });
             };
