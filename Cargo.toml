@@ -28,8 +28,8 @@ authors = ["Nils Pukropp <contact@narl.io>"]
 opt-level = 2
 
 [workspace.dependencies]
-proton-sdk = { version = "0.6.3" }
-proton-drive-rs = { version = "0.6.3" }
+proton-sdk = { version = "0.7.2" }
+proton-drive-rs = { version = "0.7.2" }
 
 # Internal crates.
 pstr-core = { path = "crates/pstr-core" }
@@ -102,7 +102,7 @@ windows-sys = "0.61"
 tauri-winrt-notification = "0.8"
 rpassword = "7"
 libloading = "0.8"
-lru = "0.12"
+lru = "0.18"
 # `async fn` in traits is stable at MSRV 1.96 but is not dyn-compatible, and the
 # stream layer needs a `dyn` block source so its cache, ring and read-ahead can
 # be tested against a fake without a network or an account.
