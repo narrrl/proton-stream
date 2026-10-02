@@ -2,3 +2,9 @@
 # UniFFI's default JVM cleaner references java.lang.ref.Cleaner (API 33).
 # Android uses the JNA cleaner, which is available on our minSdk 31 runtime.
 disable_java_cleaner = true
+
+[bindings.swift]
+# The iOS client (`ios/`) compiles the generated file straight into the app
+# target and reaches the C side through its bridging header, so the names are
+# what that header and `ios/project.yml` expect.
+module_name = "PstrBridge"

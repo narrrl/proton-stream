@@ -20,3 +20,9 @@
 /packaging/pkg/
 /packaging/src/
 /packaging/*.pkg.tar.zst
+
+# iOS generated state: XcodeGen owns the project and the Info.plist, and
+# scripts/build-ios.sh writes the bindings and DerivedData under ios/build.
+/ios/build/
+/ios/*.xcodeproj/
+/ios/ProtonStream/Info.plist

@@ -1,0 +1,57 @@
+# XcodeGen spec for the iOS client. The .xcodeproj and Info.plist are generated
+# from this by scripts/build-ios.sh and are not committed.
+name: ProtonStream
+options:
+  bundleIdPrefix: io.narl
+  deploymentTarget:
+    iOS: "17.0"
+
+packages:
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 1.0.0
+
+targets:
+  ProtonStream:
+    type: application
+    platform: iOS
+    sources:
+      - path: ProtonStream
+      # UniFFI output, written by `scripts/build-ios.sh bindings`.
+      - path: build/generated/PstrBridge.swift
+    dependencies:
+      # The GPL build is the one with libass and every demuxer; the app is
+      # sideloaded, never distributed through the App Store.
+      - package: MPVKit
+        product: MPVKit-GPL
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.narl.protonstream
+        MARKETING_VERSION: ${PSTR_VERSION}
+        CURRENT_PROJECT_VERSION: ${PSTR_BUILD}
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_OBJC_BRIDGING_HEADER: ProtonStream/Bridge/ProtonStream-Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(PROJECT_DIR)/build/generated
+        LIBRARY_SEARCH_PATHS: $(PROJECT_DIR)/../target/aarch64-apple-ios/release
+        OTHER_LDFLAGS: -lpstr_android
+    info:
+      path: ProtonStream/Info.plist
+      properties:
+        CFBundleDisplayName: Proton Stream
+        LSRequiresIPhoneOS: true
+        ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes: [audio]
+        UILaunchScreen: {}
+        UIRequiresFullScreen: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
