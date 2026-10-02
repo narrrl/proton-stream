@@ -164,6 +164,19 @@ pub enum Action {
     /// Seek past openings and credits without being asked.
     SetAutoSkip(bool),
     SetDesktopPrefs(crate::desktop_prefs::DesktopPrefs),
+    /// Every episode of a title, watched or not, with an Undo.
+    SetTitleWatched {
+        key: String,
+        watched: bool,
+    },
+    /// Take a title off Continue watching by forgetting where it stopped,
+    /// with an Undo.
+    ForgetPosition {
+        share_id: String,
+        link_id: String,
+    },
+    /// Put watch states back as they were — what Undo does.
+    RestoreWatch(Vec<(String, String, pstr_core::catalog::WatchState)>),
     ClearStreamCache,
     /// Repaint the window in a different palette.
     SetAppearance(Appearance),
@@ -1243,6 +1256,72 @@ impl App {
                 }
             }
             Action::SetDesktopPrefs(prefs) => self.engine.set_desktop_prefs(prefs),
+            Action::SetTitleWatched { key, watched } => {
+                let Some(title) = self.library.get(&key) else {
+                    return;
+                };
+                let name = title.name.clone();
+                let mut before = Vec::new();
+                for episode in title.episodes().filter(|e| e.is_watched() != watched) {
+                    let duration = episode.watch.and_then(|watch| watch.duration_secs);
+                    before.push((
+                        episode.node.share_id.clone(),
+                        episode.node.link_id.clone(),
+                        episode.watch.unwrap_or(watch_state(0.0, duration, false)),
+                    ));
+                    self.engine.save_watch_state(
+                        episode.node.share_id.clone(),
+                        episode.node.link_id.clone(),
+                        watch_state(
+                            if watched {
+                                duration.unwrap_or(0.0)
+                            } else {
+                                0.0
+                            },
+                            duration,
+                            watched,
+                        ),
+                    );
+                }
+                let now = ctx.input(|input| input.time);
+                self.toasts.push_with(
+                    now,
+                    format!(
+                        "marked {name} {}",
+                        if watched { "watched" } else { "unwatched" }
+                    ),
+                    "Undo",
+                    Action::RestoreWatch(before),
+                );
+            }
+            Action::ForgetPosition { share_id, link_id } => {
+                let found = self.library.titles.iter().find_map(|title| {
+                    let episode = title.episodes().find(|episode| {
+                        episode.node.share_id == share_id && episode.node.link_id == link_id
+                    })?;
+                    Some((title.name.clone(), episode.watch))
+                });
+                let Some((name, Some(before))) = found else {
+                    return;
+                };
+                self.engine.save_watch_state(
+                    share_id.clone(),
+                    link_id.clone(),
+                    watch_state(0.0, before.duration_secs, false),
+                );
+                let now = ctx.input(|input| input.time);
+                self.toasts.push_with(
+                    now,
+                    format!("removed {name} from Continue watching"),
+                    "Undo",
+                    Action::RestoreWatch(vec![(share_id, link_id, before)]),
+                );
+            }
+            Action::RestoreWatch(states) => {
+                for (share_id, link_id, state) in states {
+                    self.engine.save_watch_state(share_id, link_id, state);
+                }
+            }
             Action::ClearStreamCache => self.engine.clear_stream_cache(),
             Action::SetAutoSkip(auto_skip) => {
                 let mut prefs = self.engine.playback_prefs();
@@ -1485,7 +1564,9 @@ impl eframe::App for App {
             {
                 self.osd = None;
             }
-            self.toasts.show(ctx, self.overlay.covered());
+            if let Some(action) = self.toasts.show(ctx, self.overlay.covered()) {
+                actions.push(action);
+            }
 
             for action in actions {
                 self.apply(ctx, action);
@@ -1725,7 +1806,9 @@ impl eframe::App for App {
             if self.shortcuts_open && ui::shortcuts::show(ctx) {
                 actions.push(Action::ToggleShortcuts);
             }
-            self.toasts.show(ctx, covered);
+            if let Some(action) = self.toasts.show(ctx, covered) {
+                actions.push(action);
+            }
         }
 
         for action in actions {

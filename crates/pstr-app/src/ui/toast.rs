@@ -7,6 +7,7 @@
 
 use egui::{Align2, Color32, CornerRadius, Sense, Stroke, Vec2};
 
+use crate::app::Action;
 use crate::theme;
 
 /// How long a message stays up.
@@ -24,6 +25,8 @@ pub struct Toast {
     text: String,
     error: bool,
     at: f64,
+    /// A button on the toast — "Undo" — and what it does.
+    action: Option<(&'static str, Action)>,
 }
 
 /// The messages on screen.
@@ -35,12 +38,33 @@ pub struct Toasts {
 
 impl Toasts {
     pub fn push(&mut self, now: f64, text: impl Into<String>, error: bool) {
-        let text = text.into();
+        self.push_inner(now, text.into(), error, None);
+    }
+
+    /// A message with a button on it, which runs `action` when pressed.
+    pub fn push_with(
+        &mut self,
+        now: f64,
+        text: impl Into<String>,
+        label: &'static str,
+        action: Action,
+    ) {
+        self.push_inner(now, text.into(), false, Some((label, action)));
+    }
+
+    fn push_inner(
+        &mut self,
+        now: f64,
+        text: String,
+        error: bool,
+        action: Option<(&'static str, Action)>,
+    ) {
         // The same message again — a retry that failed the same way — restarts
         // the one already up rather than stacking a copy of it.
         if let Some(existing) = self.items.iter_mut().find(|toast| toast.text == text) {
             existing.at = now;
             existing.error = error;
+            existing.action = action;
             return;
         }
         self.next += 1;
@@ -49,6 +73,7 @@ impl Toasts {
             text,
             error,
             at: now,
+            action,
         });
         if self.items.len() > MOST {
             self.items.remove(0);
@@ -56,11 +81,13 @@ impl Toasts {
     }
 
     /// Draw the stack above `bottom` points from the window's bottom edge, and
-    /// drop whatever has expired or been closed.
-    pub fn show(&mut self, ctx: &egui::Context, bottom: f32) {
+    /// drop whatever has expired or been closed. Returns the action of a
+    /// toast whose button was pressed.
+    pub fn show(&mut self, ctx: &egui::Context, bottom: f32) -> Option<Action> {
         let now = ctx.input(|input| input.time);
         let pointer = ctx.input(|input| input.pointer.hover_pos());
         let mut closed = None;
+        let mut pressed = None;
         let mut hovered = false;
         let mut y = ctx.content_rect().bottom() - bottom - 16.0;
         let right = ctx.content_rect().right() - 16.0;
@@ -82,8 +109,10 @@ impl Toasts {
                     ui.set_opacity(opacity);
                     card(ui, toast)
                 });
-            if area.inner {
-                closed = Some(toast.id);
+            match area.inner {
+                Pressed::Close => closed = Some(toast.id),
+                Pressed::Action => pressed = Some(toast.id),
+                Pressed::Nothing => {}
             }
             if pointer.is_some_and(|at| area.response.rect.contains(at)) {
                 hovered = true;
@@ -94,6 +123,12 @@ impl Toasts {
         if let Some(id) = closed {
             self.items.retain(|toast| toast.id != id);
         }
+        // Pressed once, and gone: an "Undo" left up after it ran is an
+        // invitation to undo the undo, which it does not do.
+        let action = pressed.and_then(|id| {
+            let index = self.items.iter().position(|toast| toast.id == id)?;
+            self.items.remove(index).action.map(|(_, action)| action)
+        });
         // Under the pointer, nothing leaves: someone is reading it.
         if hovered {
             for toast in &mut self.items {
@@ -107,6 +142,7 @@ impl Toasts {
             // Enough frames to animate the edges and to notice an expiry.
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
+        action
     }
 }
 
@@ -118,9 +154,16 @@ fn ease(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-/// One message. Returns whether its close button was pressed.
-fn card(ui: &mut egui::Ui, toast: &Toast) -> bool {
-    let mut close = false;
+/// Which of a toast's buttons was pressed.
+enum Pressed {
+    Nothing,
+    Close,
+    Action,
+}
+
+/// One message. Returns which of its buttons was pressed.
+fn card(ui: &mut egui::Ui, toast: &Toast) -> Pressed {
+    let mut pressed = Pressed::Nothing;
     let edge = if toast.error {
         theme::danger()
     } else {
@@ -145,30 +188,50 @@ fn card(ui: &mut egui::Ui, toast: &Toast) -> bool {
         .show(ui, |ui| {
             ui.set_width(WIDTH);
             let frame = ui.max_rect();
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::Label::new(theme::Role::Label.rich(&toast.text).color(theme::text()))
-                        .wrap(),
+            // The buttons first, from the right, so the text wraps in what
+            // they leave rather than pushing them off the card.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                let (rect, response) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+                let ink = if response.hovered() {
+                    theme::text()
+                } else {
+                    theme::muted()
+                };
+                let d = 4.0;
+                let c = rect.center();
+                ui.painter().line_segment(
+                    [c + Vec2::new(-d, -d), c + Vec2::new(d, d)],
+                    Stroke::new(1.5, ink),
                 );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    let (rect, response) =
-                        ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
-                    let ink = if response.hovered() {
-                        theme::text()
-                    } else {
-                        theme::muted()
-                    };
-                    let d = 4.0;
-                    let c = rect.center();
-                    ui.painter().line_segment(
-                        [c + Vec2::new(-d, -d), c + Vec2::new(d, d)],
-                        Stroke::new(1.5, ink),
+                ui.painter().line_segment(
+                    [c + Vec2::new(-d, d), c + Vec2::new(d, -d)],
+                    Stroke::new(1.5, ink),
+                );
+                if response.on_hover_text("Dismiss").clicked() {
+                    pressed = Pressed::Close;
+                }
+                if let Some((label, _)) = &toast.action {
+                    ui.add_space(4.0);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                theme::Role::Label
+                                    .rich(*label)
+                                    .strong()
+                                    .color(theme::accent()),
+                            )
+                            .frame(false),
+                        )
+                        .clicked()
+                    {
+                        pressed = Pressed::Action;
+                    }
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    ui.add(
+                        egui::Label::new(theme::Role::Label.rich(&toast.text).color(theme::text()))
+                            .wrap(),
                     );
-                    ui.painter().line_segment(
-                        [c + Vec2::new(-d, d), c + Vec2::new(d, -d)],
-                        Stroke::new(1.5, ink),
-                    );
-                    close = response.on_hover_text("Dismiss").clicked();
                 });
             });
             // A strip down the leading edge says which kind it is before a word
@@ -179,7 +242,7 @@ fn card(ui: &mut egui::Ui, toast: &Toast) -> bool {
             );
             ui.painter().rect_filled(strip, CornerRadius::same(2), edge);
         });
-    close
+    pressed
 }
 
 #[cfg(test)]

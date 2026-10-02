@@ -441,16 +441,10 @@ fn tile_menu(
             })
             .clicked()
         {
-            for episode in title.episodes() {
-                if episode.is_watched() == all_watched {
-                    actions.push(Action::SetWatched {
-                        share_id: episode.node.share_id.clone(),
-                        link_id: episode.node.link_id.clone(),
-                        watched: !all_watched,
-                        duration: episode.watch.and_then(|watch| watch.duration_secs),
-                    });
-                }
-            }
+            actions.push(Action::SetTitleWatched {
+                key: title.key.clone(),
+                watched: !all_watched,
+            });
         }
         if continuing
             && let Some(episode) = title.resume()
@@ -459,11 +453,9 @@ fn tile_menu(
                 .on_hover_text("Forget where you stopped in it")
                 .clicked()
         {
-            actions.push(Action::SetWatched {
+            actions.push(Action::ForgetPosition {
                 share_id: episode.node.share_id.clone(),
                 link_id: episode.node.link_id.clone(),
-                watched: false,
-                duration: episode.watch.and_then(|watch| watch.duration_secs),
             });
         }
 
