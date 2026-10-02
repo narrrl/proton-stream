@@ -740,14 +740,27 @@ fn still(
         );
     }
 
-    let hover = ui
-        .ctx()
-        .animate_bool_with_time(response.id, response.hovered(), 0.12);
+    if response.gained_focus() {
+        response.scroll_to_me(None);
+    }
+    let hover = ui.ctx().animate_bool_with_time(
+        response.id,
+        response.hovered() || response.has_focus(),
+        0.12,
+    );
     if hover > 0.0 {
         painter.rect_filled(
             rect,
             radius,
             egui::Color32::from_black_alpha((90.0 * hover) as u8),
+        );
+    }
+    if response.has_focus() {
+        painter.rect_stroke(
+            rect,
+            radius,
+            egui::Stroke::new(2.0, theme::accent()),
+            egui::StrokeKind::Inside,
         );
     }
     // A play mark, always faintly there and full under the pointer.

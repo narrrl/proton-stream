@@ -514,6 +514,11 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
 
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, image_height + text_height), Sense::click());
+    // Reached with the arrow keys or Tab: bring it into view, before the
+    // early return below would skip a tile that is just off screen.
+    if response.gained_focus() {
+        response.scroll_to_me(None);
+    }
     if !ui.is_rect_visible(rect) {
         return response;
     }
@@ -523,9 +528,13 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     // ride it, so they arrive together rather than each snapping on its own.
     // egui drives this from wall-clock time, so it is the same speed whatever
     // the frame rate — and it needs no state kept here.
-    let hover =
-        ui.ctx()
-            .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.12);
+    // Focus lights a tile the way the pointer does, so the keyboard can be
+    // followed across the grid.
+    let hover = ui.ctx().animate_bool_with_time(
+        response.id.with("hover"),
+        response.hovered() || response.has_focus(),
+        0.12,
+    );
     // The picture arrives whenever its download finishes, several frames after
     // the tile first drew. Fading it in over the placeholder turns a wall of
     // letters popping into stills into one settle.

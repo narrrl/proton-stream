@@ -1901,7 +1901,9 @@ fn changed_art(
 fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>) {
     use egui::{Key, Modifiers};
 
-    let typing = ctx.egui_wants_keyboard_input();
+    // A text field, not any focused widget: a tile reached with Tab or the
+    // arrow keys has focus too, and "/" over it should still search.
+    let typing = ctx.text_edit_focused();
     let mut tab = None;
     ctx.input_mut(|input| {
         if input.consume_key(Modifiers::COMMAND, Key::F)

@@ -16,6 +16,8 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Ctrl 1 – 4", "Library, Shares, Downloads, Settings"),
             ("Ctrl ,", "Settings"),
             ("Ctrl V", "Paste a share link to add it"),
+            ("Tab  or  arrows", "Move between titles and episodes"),
+            ("Enter", "Open or play what is highlighted"),
             ("Alt ←  or  mouse back", "Back"),
             ("?", "This list"),
         ],
