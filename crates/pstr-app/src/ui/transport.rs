@@ -81,9 +81,9 @@ pub fn full(
         });
 
         ui.add_space(12.0);
-        if playback.seeking || !playback.loaded {
+        if playback.seeking || playback.buffering || !playback.loaded {
             ui.add(egui::Spinner::new().size(16.0));
-            ui.label(ui::muted(if playback.loaded {
+            ui.label(ui::muted(if playback.loaded && playback.seeking {
                 "seeking"
             } else {
                 "buffering"
@@ -170,7 +170,7 @@ pub fn mini(
             ui.add_space(6.0);
             volume(ui, playback, actions);
 
-            if playback.seeking || !playback.loaded {
+            if playback.seeking || playback.buffering || !playback.loaded {
                 ui.add_space(6.0);
                 ui.add(egui::Spinner::new().size(14.0));
             }
@@ -511,6 +511,20 @@ fn seek_bar(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>, t
     painter.rect_filled(track, radius, theme::muted().gamma_multiply(0.35));
 
     let duration = playback.duration.filter(|duration| *duration > 0.0);
+    // What is already read ahead, a shade lighter than the empty track: on a
+    // link this slow, whether a jump lands in it is the difference between an
+    // instant seek and a fetch.
+    if let (Some(duration), Some(end)) = (duration, playback.buffered)
+        && end > playback.position
+    {
+        let from = (playback.position / duration).clamp(0.0, 1.0) as f32;
+        let to = (end / duration).clamp(0.0, 1.0) as f32;
+        let buffered = Rect::from_min_max(
+            egui::pos2(track.left() + track.width() * from, track.top()),
+            egui::pos2(track.left() + track.width() * to, track.bottom()),
+        );
+        painter.rect_filled(buffered, radius, theme::muted().gamma_multiply(0.30));
+    }
     let pointer = response
         .interact_pointer_pos()
         .or_else(|| response.hover_pos())

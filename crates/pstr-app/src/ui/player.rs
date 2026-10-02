@@ -206,6 +206,8 @@ pub fn show(
 
     if !picture {
         waiting(ui, playback, rect);
+    } else if playback.buffering || playback.seeking {
+        stalled(ui, rect);
     }
 
     // Click anywhere on the picture to pause, which is the one control that
@@ -326,6 +328,18 @@ fn waiting(ui: &mut egui::Ui, playback: &Playback, rect: Rect) {
         },
         theme::Role::Label.font(),
         theme::muted(),
+    );
+}
+
+/// A spinner over a picture held waiting for data. Without it, a frozen frame
+/// with the controls hidden looks the same as a hang.
+fn stalled(ui: &mut egui::Ui, rect: Rect) {
+    let disc = Rect::from_center_size(rect.center(), Vec2::splat(64.0));
+    ui.painter()
+        .circle_filled(disc.center(), 32.0, Color32::from_black_alpha(140));
+    ui.put(
+        Rect::from_center_size(disc.center(), Vec2::splat(36.0)),
+        egui::Spinner::new().size(36.0).color(Color32::WHITE),
     );
 }
 

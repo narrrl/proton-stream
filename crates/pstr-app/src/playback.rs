@@ -189,6 +189,10 @@ pub struct Playback {
     /// A seek was issued and the picture has not come back yet — the thing
     /// worth showing a spinner for on a link this slow.
     pub seeking: bool,
+    /// The end of what mpv has read ahead, in seconds from the start.
+    pub buffered: Option<f64>,
+    /// Playback is held waiting for data.
+    pub buffering: bool,
 }
 
 impl Playback {
@@ -253,6 +257,8 @@ impl Playback {
             duration: None,
             loaded: false,
             seeking: false,
+            buffered: None,
+            buffering: false,
             target,
         })
     }
@@ -358,6 +364,8 @@ impl Playback {
             PlayerEvent::Paused(paused) => self.paused = *paused,
             PlayerEvent::Seek => self.seeking = true,
             PlayerEvent::PlaybackRestart => self.seeking = false,
+            PlayerEvent::Buffered(end) => self.buffered = Some(*end),
+            PlayerEvent::Buffering(held) => self.buffering = *held,
             _ => {}
         }
     }

@@ -94,6 +94,11 @@ pub enum PlayerEvent {
     /// Output volume, 0–100.
     Volume(f64),
     Muted(bool),
+    /// How far into the file the demuxer has read ahead, in seconds from the
+    /// start — the end of what can play without another fetch.
+    Buffered(f64),
+    /// Whether playback is held waiting for data.
+    Buffering(bool),
     /// What the file contains and what is playing of it.
     ///
     /// Not an mpv event: mpv reports a track list as a node property, and this
@@ -308,6 +313,10 @@ impl Player {
         // it clamps a restored value to.
         self.mpv.observe_property("volume", Format::Double, 0)?;
         self.mpv.observe_property("mute", Format::Flag, 0)?;
+        self.mpv
+            .observe_property("demuxer-cache-time", Format::Double, 0)?;
+        self.mpv
+            .observe_property("paused-for-cache", Format::Flag, 0)?;
         Ok(())
     }
 
@@ -523,6 +532,8 @@ fn translate(event: Event<'_>) -> PlayerEvent {
             ("pause", PropertyData::Flag(value)) => PlayerEvent::Paused(value),
             ("volume", PropertyData::Double(value)) => PlayerEvent::Volume(value),
             ("mute", PropertyData::Flag(value)) => PlayerEvent::Muted(value),
+            ("demuxer-cache-time", PropertyData::Double(value)) => PlayerEvent::Buffered(value),
+            ("paused-for-cache", PropertyData::Flag(value)) => PlayerEvent::Buffering(value),
             _ => PlayerEvent::Other,
         },
         _ => PlayerEvent::Other,

@@ -3,6 +3,7 @@
 use pstr_core::library::{Library, Title, TitleKind};
 
 use crate::app::{Action, Filter, LibraryView, Page, Sort};
+use crate::playback::PlaybackTarget;
 use crate::theme;
 use crate::ui::Art;
 use crate::ui::{self, Card};
@@ -156,7 +157,7 @@ fn continue_row(
                         })
                         .unwrap_or_else(|| episode.label());
 
-                    let clicked = ui::card(
+                    let response = ui::card(
                         ui,
                         Card {
                             art: art.of(title),
@@ -168,10 +169,10 @@ fn continue_row(
                             // to reach, so nothing to flex to.
                             width: theme::CARD_WIDTH,
                         },
-                    )
-                    .clicked();
+                    );
+                    tile_menu(&response, title, true, actions);
 
-                    if clicked {
+                    if response.clicked() {
                         actions.push(Action::Goto(Page::Title(title.key.clone())));
                     }
                 }
@@ -205,7 +206,7 @@ fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut V
             // the left edge.
             ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
             for title in row {
-                let clicked = ui::card(
+                let response = ui::card(
                     ui,
                     Card {
                         art: art.of(title),
@@ -217,16 +218,98 @@ fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut V
                         badge: None,
                         width: grid.width,
                     },
-                )
-                .clicked();
+                );
+                tile_menu(&response, title, false, actions);
 
-                if clicked {
+                if response.clicked() {
                     actions.push(Action::Goto(Page::Title(title.key.clone())));
                 }
             }
         });
         ui.add_space(theme::CARD_GAP);
     }
+}
+
+/// What a right-click on a tile offers: the things otherwise one page away.
+///
+/// `continuing` is the Continue watching shelf, where the tile can also be
+/// taken off the shelf.
+fn tile_menu(
+    response: &egui::Response,
+    title: &Title,
+    continuing: bool,
+    actions: &mut Vec<Action>,
+) {
+    response.context_menu(|ui| {
+        if let Some(episode) = title.next_up() {
+            let label = match (title.resume(), episode.numbering()) {
+                (Some(_), Some(numbering)) => format!("Resume {numbering}"),
+                (Some(_), None) => "Resume".to_owned(),
+                (None, _) => "Play".to_owned(),
+            };
+            if ui.button(label).clicked() {
+                actions.push(Action::Play(PlaybackTarget::new(title, episode)));
+            }
+        }
+        if ui.button("Open").clicked() {
+            actions.push(Action::Goto(Page::Title(title.key.clone())));
+        }
+        ui.separator();
+
+        let all_watched = title.watched_count() == title.episode_count();
+        if ui
+            .button(if all_watched {
+                "Mark unwatched"
+            } else {
+                "Mark watched"
+            })
+            .clicked()
+        {
+            for episode in title.episodes() {
+                if episode.is_watched() == all_watched {
+                    actions.push(Action::SetWatched {
+                        share_id: episode.node.share_id.clone(),
+                        link_id: episode.node.link_id.clone(),
+                        watched: !all_watched,
+                        duration: episode.watch.and_then(|watch| watch.duration_secs),
+                    });
+                }
+            }
+        }
+        if continuing
+            && let Some(episode) = title.resume()
+            && ui
+                .button("Remove from Continue watching")
+                .on_hover_text("Forget where you stopped in it")
+                .clicked()
+        {
+            actions.push(Action::SetWatched {
+                share_id: episode.node.share_id.clone(),
+                link_id: episode.node.link_id.clone(),
+                watched: false,
+                duration: episode.watch.and_then(|watch| watch.duration_secs),
+            });
+        }
+
+        let count = title.episode_count();
+        let download = if count == 1 {
+            "Download".to_owned()
+        } else {
+            format!("Download all {count}")
+        };
+        if ui.button(download).clicked() {
+            actions.push(Action::MakeOffline(
+                title
+                    .episodes()
+                    .map(|episode| PlaybackTarget::new(title, episode))
+                    .collect(),
+            ));
+        }
+        ui.separator();
+        if ui.button("Change match…").clicked() {
+            actions.push(Action::OpenMatcher(title.key.clone()));
+        }
+    });
 }
 
 /// The grey line under a card: what it is, how much there is, and how much is

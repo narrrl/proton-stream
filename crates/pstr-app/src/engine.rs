@@ -478,10 +478,12 @@ impl Engine {
     /// Send an event and wake the UI. A closed channel means the window is
     /// gone, which is not an error worth propagating anywhere.
     pub(crate) fn emit(&self, event: Event) {
+        // The two that arrive on mpv's clock rather than on anything happening.
         let ticking = matches!(
             event,
             Event::Player {
-                event: pstr_player::PlayerEvent::Position(_),
+                event: pstr_player::PlayerEvent::Position(_)
+                    | pstr_player::PlayerEvent::Buffered(_),
                 ..
             }
         );
