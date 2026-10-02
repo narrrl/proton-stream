@@ -449,6 +449,24 @@ impl Player {
         Ok(())
     }
 
+    /// Where subtitles sit, as a percentage of the window's height from the
+    /// top: 100 is mpv's usual place along the bottom edge.
+    ///
+    /// `sub-pos` rather than a margin, because it moves styled (ASS) subtitles
+    /// too — and those are most of what an anime library carries.
+    pub fn set_subtitle_position(&self, percent: f64) -> Result<()> {
+        self.mpv
+            .set_property("sub-pos", percent.clamp(0.0, 150.0).round() as i64)?;
+        Ok(())
+    }
+
+    /// Playback speed, where 1.0 is normal. Pitch is corrected, which is mpv's
+    /// default and what keeps a voice a voice at 1.5×.
+    pub fn set_speed(&self, speed: f64) -> Result<()> {
+        self.mpv.set_property("speed", speed.clamp(0.25, 4.0))?;
+        Ok(())
+    }
+
     pub fn stop(&self) -> Result<()> {
         self.mpv.command("stop", &[])?;
         Ok(())
