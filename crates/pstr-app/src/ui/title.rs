@@ -580,7 +580,7 @@ fn episode_row(
         let ui = &mut prepared.content_ui;
         ui.set_width(ui.available_width());
         ui.horizontal_top(|ui| {
-            still(ui, art, title, episode, watched, actions);
+            still(ui, art, title, episode, watched, STILL, actions);
             ui.add_space(theme::space::S);
 
             let controls = 96.0;
@@ -716,15 +716,16 @@ fn details(episode: &Episode, air_date: Option<&str>) -> String {
 /// An explicit target rather than a clickable row: the row also carries the
 /// watched mark and the download button, and a click that meant either of
 /// those must never be one that starts a 1.4 GiB stream instead.
-fn still(
+pub(crate) fn still(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
     title: &Title,
     episode: &Episode,
     watched: bool,
+    size: egui::Vec2,
     actions: &mut Vec<Action>,
 ) {
-    let (rect, response) = ui.allocate_exact_size(STILL, egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if !ui.is_rect_visible(rect) {
         return;
     }

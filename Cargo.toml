@@ -51,6 +51,8 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "5"
+# Local dates for the history page. Already in the tree through the SDK.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 sha2 = "0.10"
 # `bundled` so a Windows build needs no system SQLite.
 rusqlite = { version = "0.32", features = ["bundled"] }

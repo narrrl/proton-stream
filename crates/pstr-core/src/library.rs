@@ -369,6 +369,26 @@ impl Library {
         titles
     }
 
+    /// Every episode that has been started or finished, most recently
+    /// touched first. The history page.
+    ///
+    /// An episode marked unwatched keeps a row with position zero, which is
+    /// "never played" for every purpose here, so it is left out.
+    pub fn history(&self) -> Vec<(&Title, &Episode)> {
+        let mut played: Vec<(&Title, &Episode)> = self
+            .titles
+            .iter()
+            .flat_map(|title| title.episodes().map(move |episode| (title, episode)))
+            .filter(|(_, episode)| {
+                episode
+                    .watch
+                    .is_some_and(|watch| watch.watched || watch.position_secs > 0.0)
+            })
+            .collect();
+        played.sort_by_key(|(_, episode)| std::cmp::Reverse(episode.last_played()));
+        played
+    }
+
     /// Substring match over the display name and every filename under it, so
     /// searching for a release group or an episode name finds its title.
     pub fn search(&self, query: &str) -> Vec<&Title> {
@@ -515,6 +535,41 @@ mod tests {
             watched,
             updated_at: at,
         }
+    }
+
+    #[test]
+    fn history_is_every_played_episode_newest_first_across_titles() {
+        let watch_state = HashMap::from([
+            (
+                ("s".to_string(), "a".to_string()),
+                watch(600.0, 1400.0, false, 10),
+            ),
+            (
+                ("s".to_string(), "c".to_string()),
+                watch(1400.0, 1400.0, true, 30),
+            ),
+            // Marked unwatched again: a row at zero, which is not a play.
+            (
+                ("s".to_string(), "b".to_string()),
+                watch(0.0, 1400.0, false, 40),
+            ),
+        ]);
+        let library = Library::build(
+            vec![
+                node("s", "a", "Show - S01E01", Some(1), Some(1)),
+                node("s", "b", "Show - S01E02", Some(1), Some(2)),
+                node("s", "c", "Film", None, None),
+                node("s", "d", "Other - S01E01", Some(1), Some(1)),
+            ],
+            &watch_state,
+        );
+
+        let order: Vec<&str> = library
+            .history()
+            .iter()
+            .map(|(_, episode)| episode.node.link_id.as_str())
+            .collect();
+        assert_eq!(order, ["c", "a"]);
     }
 
     #[test]

@@ -4404,6 +4404,7 @@ name = "pstr-app"
 version = "0.4.2"
 dependencies = [
  "anyhow",
+ "chrono",
  "dbus",
  "directories",
  "eframe",

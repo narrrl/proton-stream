@@ -31,6 +31,7 @@ parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 directories.workspace = true
+chrono.workspace = true
 souvlaki.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

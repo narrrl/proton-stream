@@ -46,6 +46,7 @@ impl FrameTimer {
             started: std::time::Instant::now(),
             page: match page {
                 Page::Library => "library",
+                Page::History => "history",
                 Page::Title(_) => "title",
                 Page::Shares => "shares",
                 Page::Downloads => "downloads",
@@ -80,6 +81,8 @@ const UP_NEXT_SECONDS: f64 = 10.0;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Page {
     Library,
+    /// Everything played, newest first.
+    History,
     /// One title, by [`pstr_core::library::Title::key`].
     Title(String),
     Shares,
@@ -90,6 +93,15 @@ pub enum Page {
     /// playback — the transport bar at the bottom is how you get back to it.
     Player,
 }
+
+/// The pages in the top bar, in order. Ctrl+1 to Ctrl+5 go by position here.
+const NAV: [Page; 5] = [
+    Page::Library,
+    Page::History,
+    Page::Shares,
+    Page::Downloads,
+    Page::Settings,
+];
 
 /// Something a click asked for, applied once the frame is drawn.
 pub enum Action {
@@ -174,6 +186,12 @@ pub enum Action {
     /// Take a title off Continue watching by forgetting where it stopped,
     /// with an Undo.
     ForgetPosition {
+        share_id: String,
+        link_id: String,
+    },
+    /// Take one file off the history page: forget its position and its
+    /// watched mark, with an Undo.
+    RemoveFromHistory {
         share_id: String,
         link_id: String,
     },
@@ -293,6 +311,8 @@ pub struct LibraryView {
     built_with: (Filter, Sort),
     /// Indices into [`Library::titles`].
     pub matches: Vec<usize>,
+    /// Every played episode, newest first, for the history page.
+    pub history: Vec<ui::history::Entry>,
     /// The "Continue watching" shelf, most recent first, as indices.
     pub resumable: Vec<usize>,
     /// The library changed under the lists.
@@ -366,6 +386,7 @@ impl LibraryView {
         self.matches = matches.into_iter().filter_map(index_of).collect();
         self.built_with = (self.filter, self.sort);
         if self.stale {
+            self.history = ui::history::entries(library);
             self.resumable = library
                 .continue_watching()
                 .into_iter()
@@ -1053,6 +1074,39 @@ impl App {
         self.engine.set_playback_prefs(prefs, commit);
     }
 
+    /// Reset one file to never played, with an Undo. What leaving Continue
+    /// watching and leaving the history both come down to: the two are read
+    /// off the same watch state.
+    fn forget_watch(
+        &mut self,
+        ctx: &egui::Context,
+        share_id: String,
+        link_id: String,
+        place: &str,
+    ) {
+        let found = self.library.titles.iter().find_map(|title| {
+            let episode = title.episodes().find(|episode| {
+                episode.node.share_id == share_id && episode.node.link_id == link_id
+            })?;
+            Some((title.name.clone(), episode.watch))
+        });
+        let Some((name, Some(before))) = found else {
+            return;
+        };
+        self.engine.save_watch_state(
+            share_id.clone(),
+            link_id.clone(),
+            watch_state(0.0, before.duration_secs, false),
+        );
+        let now = ctx.input(|input| input.time);
+        self.toasts.push_with(
+            now,
+            format!("removed {name} from {place}"),
+            "Undo",
+            Action::RestoreWatch(vec![(share_id, link_id, before)]),
+        );
+    }
+
     fn apply(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::Goto(page) => self.page = page,
@@ -1318,27 +1372,10 @@ impl App {
                 );
             }
             Action::ForgetPosition { share_id, link_id } => {
-                let found = self.library.titles.iter().find_map(|title| {
-                    let episode = title.episodes().find(|episode| {
-                        episode.node.share_id == share_id && episode.node.link_id == link_id
-                    })?;
-                    Some((title.name.clone(), episode.watch))
-                });
-                let Some((name, Some(before))) = found else {
-                    return;
-                };
-                self.engine.save_watch_state(
-                    share_id.clone(),
-                    link_id.clone(),
-                    watch_state(0.0, before.duration_secs, false),
-                );
-                let now = ctx.input(|input| input.time);
-                self.toasts.push_with(
-                    now,
-                    format!("removed {name} from Continue watching"),
-                    "Undo",
-                    Action::RestoreWatch(vec![(share_id, link_id, before)]),
-                );
+                self.forget_watch(ctx, share_id, link_id, "Continue watching");
+            }
+            Action::RemoveFromHistory { share_id, link_id } => {
+                self.forget_watch(ctx, share_id, link_id, "history");
             }
             Action::RestoreWatch(states) => {
                 for (share_id, link_id, state) in states {
@@ -1459,12 +1496,13 @@ impl App {
             } else {
                 format!("Downloads ({active})")
             };
-            let pages = [Page::Library, Page::Shares, Page::Downloads, Page::Settings];
+            let pages = NAV;
             let clicked = ui::tabs(
                 ui,
                 ui.id().with("nav"),
                 &[
                     ("Library", on_library),
+                    ("History", self.page == Page::History),
                     ("Shares", self.page == Page::Shares),
                     (&downloads, self.page == Page::Downloads),
                     ("Settings", self.page == Page::Settings),
@@ -1776,6 +1814,9 @@ impl eframe::App for App {
                             ui::settings::show(ui, settings, prefs, api_key, &mut actions)
                         }
                         Page::Downloads => ui::downloads::show(ui, downloads, &mut actions),
+                        Page::History => {
+                            ui::history::show(ui, &mut art, library, &view.history, &mut actions)
+                        }
                         // Drawn above, without any of these panels.
                         Page::Player => {}
                     }
@@ -2008,13 +2049,14 @@ fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>)
             (Key::Num2, 1),
             (Key::Num3, 2),
             (Key::Num4, 3),
+            (Key::Num5, 4),
         ] {
             if input.consume_key(Modifiers::COMMAND, key) {
                 tab = Some(index);
             }
         }
         if input.consume_key(Modifiers::COMMAND, Key::Comma) {
-            tab = Some(3);
+            tab = Some(4);
         }
         // A share link pasted anywhere outside a text field is someone adding
         // a share, wherever they happen to be.
@@ -2029,7 +2071,7 @@ fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>)
         }
     });
     if let Some(index) = tab {
-        let page = [Page::Library, Page::Shares, Page::Downloads, Page::Settings][index].clone();
+        let page = NAV[index].clone();
         actions.push(Action::Goto(page));
     }
 }

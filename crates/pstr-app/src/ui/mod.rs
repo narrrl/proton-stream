@@ -4,6 +4,7 @@
 //! applies them after the frame is drawn.
 
 pub mod downloads;
+pub mod history;
 pub mod library;
 pub mod matcher;
 pub mod player;

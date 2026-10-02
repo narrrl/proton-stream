@@ -13,7 +13,10 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("Ctrl F  or  /", "Search the library"),
             ("F5  or  Ctrl R", "Crawl every share again"),
-            ("Ctrl 1 – 4", "Library, Shares, Downloads, Settings"),
+            (
+                "Ctrl 1 – 5",
+                "Library, History, Shares, Downloads, Settings",
+            ),
             ("Ctrl ,", "Settings"),
             ("Ctrl V", "Paste a share link to add it"),
             ("Tab  or  arrows", "Move between titles and episodes"),
