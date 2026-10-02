@@ -9,6 +9,7 @@ use pstr_core::appearance::{Accent, Appearance, Flavor};
 use pstr_core::metadata::{MetadataConfig, ProviderId};
 
 use crate::app::Action;
+use crate::desktop_prefs::{CACHE_CHOICES, DesktopPrefs};
 use crate::theme;
 use crate::ui;
 
@@ -22,6 +23,9 @@ pub struct Prefs {
     pub autoplay: bool,
     pub auto_skip: bool,
     pub appearance: Appearance,
+    pub desktop: DesktopPrefs,
+    /// What the streaming cache holds, once the shares are open.
+    pub cache_used: Option<u64>,
 }
 
 /// The widest the settings column gets. Rows that run the width of a 2K window
@@ -49,6 +53,7 @@ pub fn show(
                     ui.add_space(8.0);
                     appearance_form(ui, prefs.appearance, actions);
                     playback_form(ui, prefs, actions);
+                    storage_form(ui, prefs, actions);
                     metadata_form(ui, settings, api_key, actions);
                     about(ui);
                 });
@@ -253,6 +258,65 @@ fn playback_form(ui: &mut egui::Ui, prefs: Prefs, actions: &mut Vec<Action>) {
                 |ui| {
                     if ui::widgets::toggle(ui, &mut auto_skip, "").changed() {
                         actions.push(Action::SetAutoSkip(auto_skip));
+                    }
+                },
+            );
+            let mut desktop = prefs.desktop;
+            ui::widgets::settings_row(
+                ui,
+                "Hardware decoding",
+                Some(
+                    "Decode on the graphics card. Turn off if video shows green frames or nothing at all; it costs CPU, not quality. From the next file.",
+                ),
+                |ui| {
+                    if ui::widgets::toggle(ui, &mut desktop.hardware_decoding, "").changed() {
+                        actions.push(Action::SetDesktopPrefs(desktop));
+                    }
+                },
+            );
+        },
+    );
+}
+
+/// The streaming cache: how big it may get, and a way to empty it.
+fn storage_form(ui: &mut egui::Ui, prefs: Prefs, actions: &mut Vec<Action>) {
+    ui::widgets::settings_group(
+        ui,
+        "Storage",
+        Some(
+            "Video already fetched is kept on disk, so watching it again or seeking back costs nothing. Downloads are separate and never count towards this.",
+        ),
+        |ui| {
+            let budget = ui::format_size(prefs.desktop.cache_bytes() as i64);
+            let used = match prefs.cache_used {
+                Some(used) => format!("{} of {budget} in use", ui::format_size(used as i64)),
+                None => format!("Up to {budget}"),
+            };
+            ui::widgets::settings_row(ui, "Streaming cache", Some(&used), |ui| {
+                let choices: Vec<(u32, String)> = CACHE_CHOICES
+                    .iter()
+                    .map(|&gib| (gib, format!("{gib} GiB")))
+                    .collect();
+                let labels: Vec<(u32, &str)> = choices
+                    .iter()
+                    .map(|(gib, label)| (*gib, label.as_str()))
+                    .collect();
+                if let Some(cache_gib) =
+                    ui::widgets::segmented(ui, prefs.desktop.cache_gib, &labels)
+                {
+                    actions.push(Action::SetDesktopPrefs(DesktopPrefs {
+                        cache_gib,
+                        ..prefs.desktop
+                    }));
+                }
+            });
+            ui::widgets::settings_row(
+                ui,
+                "Clear the streaming cache",
+                Some("Frees the space now. Whatever plays next is fetched again."),
+                |ui| {
+                    if ui.button("Clear").clicked() {
+                        actions.push(Action::ClearStreamCache);
                     }
                 },
             );

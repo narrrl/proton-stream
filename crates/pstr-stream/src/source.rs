@@ -200,6 +200,21 @@ impl StreamSource {
     pub fn disk_stats(&self) -> Option<crate::disk::DiskStats> {
         self.inner.disk.as_ref().map(|disk| disk.stats())
     }
+
+    /// Change the disk cache's budget, evicting at once if it is now over.
+    pub async fn set_disk_budget(&self, bytes: u64) {
+        if let Some(disk) = &self.inner.disk {
+            disk.set_budget(bytes).await;
+        }
+    }
+
+    /// Empty the disk cache. Streams already open carry on; what they had
+    /// cached is fetched again if it is wanted.
+    pub async fn clear_disk_cache(&self) {
+        if let Some(disk) = &self.inner.disk {
+            disk.clear().await;
+        }
+    }
 }
 
 impl Inner {

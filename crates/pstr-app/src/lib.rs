@@ -20,6 +20,7 @@
 //! `examples/embedded_video.rs`, which is the smoke test for [`video`].
 
 pub mod app;
+pub mod desktop_prefs;
 pub mod engine;
 pub mod inhibit;
 pub mod media;

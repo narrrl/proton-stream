@@ -70,7 +70,8 @@ pub struct DiskStats {
 
 pub(crate) struct DiskCache {
     root: PathBuf,
-    budget: u64,
+    /// Atomic so it can be changed under a running cache, from settings.
+    budget: std::sync::atomic::AtomicU64,
     index: Mutex<Index>,
 }
 
@@ -115,7 +116,7 @@ impl DiskCache {
 
         let cache = Self {
             root: config.root,
-            budget: config.budget_bytes,
+            budget: std::sync::atomic::AtomicU64::new(config.budget_bytes),
             index: Mutex::new(Index {
                 lru,
                 bytes,
@@ -169,7 +170,7 @@ impl DiskCache {
     /// written is a slower app, not a broken one.
     pub(crate) async fn put(&self, key: &BlockKey, block: &[u8]) {
         let len = block.len() as u64;
-        if len > self.budget {
+        if len > self.budget() {
             return;
         }
 
@@ -190,6 +191,30 @@ impl DiskCache {
         self.evict_to_budget().await;
     }
 
+    fn budget(&self) -> u64 {
+        self.budget.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Change the budget, shrinking the cache to it at once if it is now over.
+    pub(crate) async fn set_budget(&self, bytes: u64) {
+        self.budget
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
+        self.evict_to_budget().await;
+    }
+
+    /// Delete every entry. The cache carries on, empty, under the same budget.
+    pub(crate) async fn clear(&self) {
+        let doomed: Vec<PathBuf> = {
+            let mut index = self.lock();
+            let doomed = std::iter::from_fn(|| index.lru.pop_lru().map(|(path, _)| path)).collect();
+            index.bytes = 0;
+            doomed
+        };
+        for path in doomed {
+            self.discard(&path).await;
+        }
+    }
+
     pub(crate) fn stats(&self) -> DiskStats {
         let index = self.lock();
         DiskStats {
@@ -204,7 +229,7 @@ impl DiskCache {
         loop {
             let doomed = {
                 let mut index = self.lock();
-                if index.bytes <= self.budget {
+                if index.bytes <= self.budget() {
                     return;
                 }
                 match index.lru.pop_lru() {
@@ -509,6 +534,31 @@ mod tests {
         assert_eq!(cache.get(&key("a", "rev1", 0)).await, Some(vec![7_u8; 256]));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn a_cleared_cache_is_empty_on_disk_and_in_its_index() {
+        let root = temp_root("clear");
+        let cache = DiskCache::open(DiskCacheConfig::new(&root)).await.unwrap();
+        for index in 0..3 {
+            cache.put(&key("a", "rev1", index), &[7u8; 100]).await;
+        }
+        cache.clear().await;
+        assert_eq!(cache.stats().stored_bytes, 0);
+        assert!(cache.get(&key("a", "rev1", 0)).await.is_none());
+        let reopened = DiskCache::open(DiskCacheConfig::new(&root)).await.unwrap();
+        assert_eq!(reopened.stats().entries, 0);
+    }
+
+    #[tokio::test]
+    async fn lowering_the_budget_shrinks_a_running_cache() {
+        let root = temp_root("lower");
+        let cache = DiskCache::open(DiskCacheConfig::new(&root)).await.unwrap();
+        for index in 0..5 {
+            cache.put(&key("a", "rev1", index), &[7u8; 100]).await;
+        }
+        cache.set_budget(250).await;
+        assert!(cache.stats().stored_bytes <= 250);
     }
 
     /// Reopening with a smaller budget must shrink the cache, not sit over it

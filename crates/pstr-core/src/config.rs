@@ -73,6 +73,11 @@ impl AppDirs {
         Ok(())
     }
 
+    /// Settings only the desktop app has: hardware decoding, the cache budget.
+    pub fn desktop_prefs_file(&self) -> PathBuf {
+        self.config.join("desktop.json")
+    }
+
     /// The desktop window's size, for the next launch to open at.
     pub fn window_file(&self) -> PathBuf {
         self.config.join("window.json")

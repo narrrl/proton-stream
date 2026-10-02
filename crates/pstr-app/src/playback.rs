@@ -423,6 +423,7 @@ fn build_player(
             // controller would be a second set of controls over the same file.
             on_screen_controller: false,
             default_keybindings: false,
+            hardware_decoding: engine.desktop_prefs().hardware_decoding,
             ..from_prefs(prefs, target.track_prefs.as_deref())
         };
 
@@ -456,6 +457,7 @@ fn build_player(
 
     let config = PlayerConfig {
         window_title: title,
+        hardware_decoding: engine.desktop_prefs().hardware_decoding,
         ..from_prefs(prefs, target.track_prefs.as_deref())
     };
     let player = Player::new(engine.runtime().clone(), config)

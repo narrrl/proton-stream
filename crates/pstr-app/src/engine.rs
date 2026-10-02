@@ -37,6 +37,8 @@ use pstr_core::proton_drive_rs::ThumbnailType;
 use pstr_core::proton_sdk::ids::{LinkId, NodeUid, VolumeId};
 use pstr_core::{Share, ShareStore, SharedLibrary};
 use pstr_meta::MetadataService;
+
+use crate::desktop_prefs::{DesktopPrefs, DesktopPrefsFile};
 use pstr_stream::{
     BlockSource, DiskCacheConfig, FileBlocks, LibraryOpener, StreamConfig, StreamSource,
     VideoStream,
@@ -318,6 +320,9 @@ pub struct Engine {
     download_permits: Arc<tokio::sync::Semaphore>,
     /// Whether the player page is on screen. See [`Engine::wake`].
     picture_shown: Arc<AtomicBool>,
+    /// Settings only the desktop has, and the file they are kept in.
+    desktop: Arc<Mutex<DesktopPrefs>>,
+    desktop_file: Arc<DesktopPrefsFile>,
     /// Bumped to stop the crawls in flight; each watches it from its start.
     crawl_cancel: Arc<tokio::sync::watch::Sender<u64>>,
     events: Sender<Event>,
@@ -371,6 +376,7 @@ impl Engine {
     ) -> anyhow::Result<(Self, Receiver<Event>)> {
         let catalog = Catalog::open(&dirs.catalog_db())?;
         let (events, receiver) = channel();
+        let (desktop_file, desktop) = DesktopPrefsFile::load(dirs.desktop_prefs_file());
 
         // An unreadable settings file must not stop the app starting: the
         // library is the point and enrichment is decoration. It is reported and
@@ -417,6 +423,8 @@ impl Engine {
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
             picture_shown: Arc::new(AtomicBool::new(false)),
             crawl_cancel: Arc::new(tokio::sync::watch::channel(0).0),
+            desktop: Arc::new(Mutex::new(desktop)),
+            desktop_file: Arc::new(desktop_file),
             events,
             ctx,
         };
@@ -667,7 +675,10 @@ impl Engine {
             // mpv brings its own read-ahead; a second one under it only competes
             // for the bandwidth mpv is blocked on. See `pstr_player::READAHEAD_BLOCKS`.
             .with_readahead(pstr_player::READAHEAD_BLOCKS)
-            .with_disk_cache(DiskCacheConfig::new(self.dirs.block_cache()));
+            .with_disk_cache(
+                DiskCacheConfig::new(self.dirs.block_cache())
+                    .with_budget(self.desktop_prefs().cache_bytes()),
+            );
 
         let source = match StreamSource::new(opener, config).await {
             Ok(source) => source,
@@ -1683,6 +1694,54 @@ impl Engine {
 // ---------------------------------------------------------------- enrichment
 
 impl Engine {
+    pub fn desktop_prefs(&self) -> DesktopPrefs {
+        *self.desktop.lock()
+    }
+
+    /// Change the desktop-only settings, write them, and apply what can be
+    /// applied now. Hardware decoding takes effect from the next file.
+    pub fn set_desktop_prefs(&self, prefs: DesktopPrefs) {
+        *self.desktop.lock() = prefs;
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let file = Arc::clone(&engine.desktop_file);
+            let saved = tokio::task::spawn_blocking(move || file.save(&prefs)).await;
+            if let Ok(Err(error)) = saved {
+                engine.fail("save the desktop settings", error);
+            }
+            if let Some((_, source)) = engine.opened() {
+                source.set_disk_budget(prefs.cache_bytes()).await;
+            }
+        });
+    }
+
+    /// How much the streaming cache holds, once the shares are open.
+    pub fn cache_used(&self) -> Option<u64> {
+        let (_, source) = self.opened()?;
+        source.disk_stats().map(|stats| stats.stored_bytes)
+    }
+
+    /// Empty the streaming cache.
+    pub fn clear_stream_cache(&self) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            match engine.opened() {
+                Some((_, source)) => source.clear_disk_cache().await,
+                // Not open, so nothing holds an index of it to fall out of step
+                // with: the directory can simply go.
+                None => {
+                    let root = engine.dirs.block_cache();
+                    if let Err(error) = tokio::fs::remove_dir_all(&root).await
+                        && error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        return engine.fail("clear the streaming cache", error);
+                    }
+                }
+            }
+            engine.emit(Event::Status("cleared the streaming cache".into()));
+        });
+    }
+
     /// The enrichment settings as they stand.
     pub fn metadata_config(&self) -> MetadataConfig {
         self.metadata.lock().config.clone()

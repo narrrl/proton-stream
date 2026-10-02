@@ -163,6 +163,8 @@ pub enum Action {
     SetSpeed(f64),
     /// Seek past openings and credits without being asked.
     SetAutoSkip(bool),
+    SetDesktopPrefs(crate::desktop_prefs::DesktopPrefs),
+    ClearStreamCache,
     /// Repaint the window in a different palette.
     SetAppearance(Appearance),
     /// In or out of fullscreen, from the player page.
@@ -1240,6 +1242,8 @@ impl App {
                     self.note(ctx, text, false);
                 }
             }
+            Action::SetDesktopPrefs(prefs) => self.engine.set_desktop_prefs(prefs),
+            Action::ClearStreamCache => self.engine.clear_stream_cache(),
             Action::SetAutoSkip(auto_skip) => {
                 let mut prefs = self.engine.playback_prefs();
                 prefs.auto_skip = auto_skip;
@@ -1509,6 +1513,10 @@ impl eframe::App for App {
                 autoplay: playback_prefs.autoplay_next,
                 auto_skip: playback_prefs.auto_skip,
                 appearance: self.engine.appearance(),
+                desktop: self.engine.desktop_prefs(),
+                cache_used: (self.page == Page::Settings)
+                    .then(|| self.engine.cache_used())
+                    .flatten(),
             };
 
             const NAV_MARGIN: egui::Vec2 = egui::vec2(14.0, 10.0);
