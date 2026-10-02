@@ -29,7 +29,7 @@ internal val ProtonShapes = Shapes(
 /** The radius `pstr-app` draws everything at. */
 internal const val CORNER = 8f
 
-/** A badge over artwork — `ui/mod.rs` is the other place this number lives. */
+/** A badge over artwork — `theme::radius::BADGE` in pstr-app is the other place this number lives. */
 internal const val CORNER_TIGHT = 4f
 
 /** A bottom sheet, which has no desktop counterpart. */

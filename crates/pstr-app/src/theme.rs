@@ -107,6 +107,59 @@ impl Role {
     }
 }
 
+/// The spacing scale. Gaps between things come from here rather than being
+/// picked per call site, so two neighbouring groups are 12 apart or 16 apart
+/// and never 14 in one place and 15 in the next.
+pub mod space {
+    /// Between lines that belong to one thing: a title and its caption.
+    pub const XXS: f32 = 2.0;
+    pub const XS: f32 = 4.0;
+    /// Between controls in one cluster.
+    pub const S: f32 = 6.0;
+    pub const M: f32 = 8.0;
+    /// Between clusters on one row, and between rows of a form.
+    pub const L: f32 = 12.0;
+    /// Between the groups on a page.
+    pub const XL: f32 = 16.0;
+    /// Between sections.
+    pub const XXL: f32 = 24.0;
+}
+
+/// Corner radii, as `egui::CornerRadius::same` takes them.
+pub mod radius {
+    /// A progress bar, or a strip along an edge.
+    pub const BAR: u8 = 3;
+    /// A badge over artwork. Android's `Shape.kt` has the same number.
+    pub const BADGE: u8 = 4;
+    /// A small control inside something else: a menu entry, a chip.
+    pub const SM: u8 = 6;
+    /// Everything else either client paints: cards, buttons, the tab pill.
+    pub const MD: u8 = 8;
+    /// Something that floats: a row card, a dialog, a toast, the hero.
+    pub const LG: u8 = 12;
+}
+
+/// How long things take to change, in seconds, for `Context::animate_*`.
+pub mod motion {
+    /// A press, which has to answer before the finger is off the button.
+    pub const PRESS: f32 = 0.05;
+    /// A hover arriving and leaving.
+    pub const HOVER: f32 = 0.12;
+    /// A control changing state: a switch flipping, the tab pill travelling,
+    /// one page giving way to the next.
+    pub const STATE: f32 = 0.15;
+    /// Chrome fading in and out: the player's controls, a toast.
+    pub const FADE: f32 = 0.18;
+    /// Artwork arriving over its placeholder. Slower, because it replaces
+    /// something rather than adding to it, and a fast swap reads as a flicker.
+    pub const ARRIVE: f32 = 0.24;
+
+    /// Fast out, slow in: the curve every hand-driven transition uses.
+    pub fn ease_out(t: f32) -> f32 {
+        1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+    }
+}
+
 /// The UI typeface, bundled rather than taken from the system so a title
 /// sets the same on every desktop. Inter, under the OFL — the licence is
 /// beside the files.
@@ -626,7 +679,7 @@ pub fn apply(ctx: &egui::Context, appearance: Appearance) {
     visuals.selection.stroke = Stroke::new(1.0, palette.text);
     visuals.hyperlink_color = palette.accent;
 
-    let radius = CornerRadius::same(8);
+    let radius = CornerRadius::same(radius::MD);
     visuals.widgets.noninteractive.bg_fill = palette.surface;
     visuals.widgets.noninteractive.corner_radius = radius;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette.border);

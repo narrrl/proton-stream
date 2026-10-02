@@ -43,7 +43,7 @@ pub fn show(
             egui::Frame::new()
                 .fill(theme::surface())
                 .inner_margin(egui::Margin::same(18))
-                .corner_radius(egui::CornerRadius::same(10)),
+                .corner_radius(egui::CornerRadius::same(theme::radius::LG)),
         )
         .show(ctx, |ui| {
             ui.set_width(620.0);
@@ -58,21 +58,21 @@ pub fn show(
                 "Everything {} answers with, in its own order — nothing is scored here.",
                 provider.label()
             )));
-            ui.add_space(10.0);
+            ui.add_space(theme::space::L);
 
             search_row(ui, matcher, actions);
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
             current_row(ui, matcher, current.as_ref(), actions);
-            ui.add_space(10.0);
+            ui.add_space(theme::space::L);
 
             if let Some(error) = &matcher.error {
                 ui.label(theme::Role::Caption.rich(error).color(theme::danger()));
-                ui.add_space(6.0);
+                ui.add_space(theme::space::S);
             }
 
             results(ui, matcher, art, actions);
 
-            ui.add_space(12.0);
+            ui.add_space(theme::space::L);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Close").clicked() {
@@ -178,7 +178,7 @@ fn results(ui: &mut egui::Ui, matcher: &Matcher, art: &mut Art<'_>, actions: &mu
                 if row(ui, art, found).clicked() {
                     actions.push(Action::ChooseMatch(Box::new(found.clone())));
                 }
-                ui.add_space(4.0);
+                ui.add_space(theme::space::XS);
             }
         });
 }
@@ -188,7 +188,7 @@ fn results(ui: &mut egui::Ui, matcher: &Matcher, art: &mut Art<'_>, actions: &mu
 fn row(ui: &mut egui::Ui, art: &mut Art<'_>, found: &TitleMetadata) -> egui::Response {
     let response = egui::Frame::new()
         .fill(theme::card())
-        .corner_radius(egui::CornerRadius::same(6))
+        .corner_radius(egui::CornerRadius::same(theme::radius::SM))
         .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -204,12 +204,12 @@ fn row(ui: &mut egui::Ui, art: &mut Art<'_>, found: &TitleMetadata) -> egui::Res
                 } else {
                     ui.painter().rect_filled(
                         rect,
-                        egui::CornerRadius::same(4),
+                        egui::CornerRadius::same(theme::radius::BADGE),
                         theme::card_hover(),
                     );
                 }
 
-                ui.add_space(10.0);
+                ui.add_space(theme::space::L);
                 ui.vertical(|ui| {
                     ui.label(
                         theme::Role::Body
@@ -241,7 +241,7 @@ fn row(ui: &mut egui::Ui, art: &mut Art<'_>, found: &TitleMetadata) -> egui::Res
     if response.hovered() {
         ui.painter().rect_stroke(
             response.rect,
-            egui::CornerRadius::same(6),
+            egui::CornerRadius::same(theme::radius::SM),
             egui::Stroke::new(1.5, theme::accent()),
             egui::StrokeKind::Inside,
         );

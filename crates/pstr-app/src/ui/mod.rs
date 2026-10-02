@@ -141,14 +141,14 @@ pub fn format_size(bytes: i64) -> String {
 
 /// A section title with a rule under it.
 pub fn section(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(theme::space::S);
     ui.label(
         theme::Role::Section
             .rich(text)
             .strong()
             .color(theme::text()),
     );
-    ui.add_space(2.0);
+    ui.add_space(theme::space::XXS);
 }
 
 /// Small grey text, for everything that is context rather than content.
@@ -173,7 +173,7 @@ pub fn search_field(ui: &mut egui::Ui, search: &mut String, focus: bool) {
     let has_focus = ui.memory(|memory| memory.has_focus(id));
     let lit = ui
         .ctx()
-        .animate_bool_with_time(id.with("lit"), has_focus, 0.12);
+        .animate_bool_with_time(id.with("lit"), has_focus, theme::motion::HOVER);
 
     let radius = CornerRadius::same((height / 2.0) as u8);
     ui.painter().rect_filled(outer, radius, theme::card());
@@ -258,7 +258,7 @@ pub fn search_field(ui: &mut egui::Ui, search: &mut String, focus: bool) {
 pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, width: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
     if ui.is_rect_visible(rect) {
-        let radius = CornerRadius::same(3);
+        let radius = CornerRadius::same(theme::radius::BAR);
         ui.painter().rect_filled(rect, radius, theme::card_hover());
         let mut done = rect;
         done.set_width(rect.width() * fraction.clamp(0.0, 1.0));
@@ -275,7 +275,7 @@ pub fn empty_state(ui: &mut egui::Ui, heading: &str, body: &str) {
     ui.vertical_centered(|ui| {
         ui.add_space(96.0);
         ui.label(theme::Role::Title.rich(heading).strong());
-        ui.add_space(6.0);
+        ui.add_space(theme::space::S);
         ui.label(muted(body));
     });
 }
@@ -311,7 +311,7 @@ pub fn confirm(ctx: &egui::Context, id: &str, heading: &str, body: &str, verb: &
             egui::Frame::new()
                 .fill(theme::surface())
                 .inner_margin(egui::Margin::same(18))
-                .corner_radius(CornerRadius::same(10)),
+                .corner_radius(CornerRadius::same(theme::radius::LG)),
         )
         .show(ctx, |ui| {
             ui.set_width(420.0);
@@ -321,9 +321,9 @@ pub fn confirm(ctx: &egui::Context, id: &str, heading: &str, body: &str, verb: &
                     .strong()
                     .color(theme::text()),
             );
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
             ui.label(theme::Role::Body.rich(body).color(theme::muted()));
-            ui.add_space(16.0);
+            ui.add_space(theme::space::XL);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if danger_button(ui, verb).clicked() {
                     answer = Answer::Confirmed;
@@ -382,15 +382,17 @@ pub fn tabs(ui: &mut egui::Ui, id: egui::Id, items: &[(&str, bool)]) -> Option<u
         // the pill from overshooting when it moves between tabs of different
         // lengths — both edges arrive at the same time.
         let ctx = ui.ctx();
-        let left = ctx.animate_value_with_time(id.with("left"), target.left(), 0.16);
-        let right = ctx.animate_value_with_time(id.with("right"), target.right(), 0.16);
+        let left =
+            ctx.animate_value_with_time(id.with("left"), target.left(), theme::motion::STATE);
+        let right =
+            ctx.animate_value_with_time(id.with("right"), target.right(), theme::motion::STATE);
         let rect = Rect::from_min_max(
             egui::pos2(left, target.top()),
             egui::pos2(right, target.bottom()),
         );
         ui.painter().set(
             pill,
-            theme::accent_shape(ui.ctx(), rect, CornerRadius::same(8)),
+            theme::accent_shape(ui.ctx(), rect, CornerRadius::same(theme::radius::MD)),
         );
     }
 
@@ -431,17 +433,21 @@ fn filled(ui: &mut egui::Ui, text: &str, fill: Fill, extra: Vec2) -> egui::Respo
         return response;
     }
 
-    let radius = CornerRadius::same(8);
+    let radius = CornerRadius::same(theme::radius::MD);
     // Eased rather than switched, so the veil arrives over a few frames instead
     // of appearing whole the moment the pointer crosses the edge. The press is
     // quicker than the hover: a click should feel like it registered, not like
     // it was considered.
     let ctx = ui.ctx().clone();
-    let hover = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.10);
+    let hover = ctx.animate_bool_with_time(
+        response.id.with("hover"),
+        response.hovered(),
+        theme::motion::HOVER,
+    );
     let press = ctx.animate_bool_with_time(
         response.id.with("press"),
         response.is_pointer_button_down_on(),
-        0.05,
+        theme::motion::PRESS,
     );
     let lift = 0.10 * hover * (1.0 - press) - 0.14 * press;
 
@@ -510,7 +516,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     let width = card.width;
     let image_height = (width * theme::CARD_ASPECT).round();
     let text_height = CARD_TEXT_HEIGHT;
-    let radius = CornerRadius::same(8);
+    let radius = CornerRadius::same(theme::radius::MD);
 
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, image_height + text_height), Sense::click());
@@ -533,14 +539,16 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     let hover = ui.ctx().animate_bool_with_time(
         response.id.with("hover"),
         response.hovered() || response.has_focus(),
-        0.12,
+        theme::motion::HOVER,
     );
     // The picture arrives whenever its download finishes, several frames after
     // the tile first drew. Fading it in over the placeholder turns a wall of
     // letters popping into stills into one settle.
-    let art_in = ui
-        .ctx()
-        .animate_bool_with_time(response.id.with("art"), card.art.is_some(), 0.22);
+    let art_in = ui.ctx().animate_bool_with_time(
+        response.id.with("art"),
+        card.art.is_some(),
+        theme::motion::ARRIVE,
+    );
     let painter = ui.painter();
 
     if hover > 0.0 {
@@ -591,7 +599,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
         );
         painter.rect_filled(
             background,
-            CornerRadius::same(4),
+            CornerRadius::same(theme::radius::BADGE),
             Color32::from_black_alpha(180),
         );
         painter.galley(background.min + Vec2::new(5.0, 2.0), galley, Color32::WHITE);
@@ -724,7 +732,7 @@ pub(crate) fn placeholder(painter: &egui::Painter, rect: Rect, name: &str, opaci
     theme::ramp_fill(
         painter,
         rect,
-        CornerRadius::same(8),
+        CornerRadius::same(theme::radius::MD),
         (from, to),
         theme::Direction::Vertical,
         opacity,

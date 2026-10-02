@@ -50,7 +50,7 @@ pub fn show(
                 ui.add_space(margin);
                 ui.vertical(|ui| {
                     ui.set_width(width);
-                    ui.add_space(8.0);
+                    ui.add_space(theme::space::M);
                     appearance_form(ui, prefs.appearance, actions);
                     playback_form(ui, prefs, actions);
                     storage_form(ui, prefs, actions);
@@ -68,9 +68,9 @@ pub fn show(
 /// only changed a small square would be asking someone to imagine the result.
 fn appearance_form(ui: &mut egui::Ui, appearance: Appearance, actions: &mut Vec<Action>) {
     ui::widgets::settings_group(ui, "Appearance", None, |ui| {
-        ui.add_space(12.0);
+        ui.add_space(theme::space::L);
         ui.label(theme::Role::Body.rich("Palette").color(theme::text()));
-        ui.add_space(8.0);
+        ui.add_space(theme::space::M);
         ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
         ui.horizontal_wrapped(|ui| {
             for flavor in Flavor::ALL {
@@ -86,7 +86,7 @@ fn appearance_form(ui: &mut egui::Ui, appearance: Appearance, actions: &mut Vec<
                 }
             }
         });
-        ui.add_space(14.0);
+        ui.add_space(theme::space::L);
         ui.spacing_mut().item_spacing.y = 0.0;
 
         ui::widgets::settings_row(ui, "Accent", None, |ui| {
@@ -132,11 +132,11 @@ fn palette_card(ui: &mut egui::Ui, appearance: Appearance, flavor: Flavor) -> eg
             ..appearance
         });
         let selected = appearance.flavor == flavor;
-        let hover = ui
-            .ctx()
-            .animate_bool_with_time(response.id, response.hovered(), 0.10);
+        let hover =
+            ui.ctx()
+                .animate_bool_with_time(response.id, response.hovered(), theme::motion::HOVER);
         let painter = ui.painter();
-        let radius = egui::CornerRadius::same(8);
+        let radius = egui::CornerRadius::same(theme::radius::MD);
         let preview = egui::Rect::from_min_size(rect.min, egui::vec2(size.x, 64.0));
 
         painter.rect_filled(preview, radius, palette.background);
@@ -155,11 +155,20 @@ fn palette_card(ui: &mut egui::Ui, appearance: Appearance, flavor: Flavor) -> eg
             egui::Rect::from_min_size(preview.min + egui::vec2(x, 20.0), egui::vec2(34.0, 22.0))
         };
         for x in [8.0, 49.0, 90.0] {
-            painter.rect_filled(tile(x), egui::CornerRadius::same(3), palette.card);
+            painter.rect_filled(
+                tile(x),
+                egui::CornerRadius::same(theme::radius::BAR),
+                palette.card,
+            );
         }
         let pill =
             egui::Rect::from_min_size(preview.min + egui::vec2(8.0, 3.0), egui::vec2(22.0, 6.0));
-        theme::swatch_fill(painter, pill, egui::CornerRadius::same(3), &palette);
+        theme::swatch_fill(
+            painter,
+            pill,
+            egui::CornerRadius::same(theme::radius::BAR),
+            &palette,
+        );
         painter.hline(
             (preview.left() + 8.0)..=(preview.left() + 60.0),
             preview.top() + 50.0,
@@ -354,7 +363,7 @@ fn metadata_form(
     actions: &mut Vec<Action>,
 ) {
     ui::widgets::settings_group(ui, "Posters and descriptions", None, |ui| {
-        ui.add_space(12.0);
+        ui.add_space(theme::space::L);
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.label(ui::muted(
             "A share filled by the Proton Drive desktop client carries no thumbnails, so \
@@ -362,7 +371,7 @@ fn metadata_form(
                  in your library — not your files, and nothing about what you have watched — to \
                  the provider you choose, over HTTPS, each time a new one appears.",
         ));
-        ui.add_space(10.0);
+        ui.add_space(theme::space::L);
 
         let mut changed = false;
         let mut enabled = settings.enabled;
@@ -372,7 +381,7 @@ fn metadata_form(
         }
 
         if settings.enabled {
-            ui.add_space(10.0);
+            ui.add_space(theme::space::L);
             ui.label(ui::muted("Provider"));
             for provider in ProviderId::ALL {
                 if ui
@@ -387,7 +396,7 @@ fn metadata_form(
             }
 
             if settings.provider.needs_api_key() {
-                ui.add_space(10.0);
+                ui.add_space(theme::space::L);
                 ui.label(ui::muted(format!("{} API key", settings.provider.label())));
                 ui.horizontal(|ui| {
                     ui.add(
@@ -409,7 +418,7 @@ fn metadata_form(
                 ));
             }
 
-            ui.add_space(12.0);
+            ui.add_space(theme::space::L);
             ui.horizontal(|ui| {
                 if ui::accent_button(ui, "Match the library").clicked() {
                     actions.push(Action::MatchTitles { force: false });
@@ -423,7 +432,7 @@ fn metadata_form(
                 }
             });
         } else {
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
             ui.label(ui::muted(
                 "Off. Nothing is sent anywhere, and turning it off also deletes the answers \
                      already stored.",
@@ -433,6 +442,6 @@ fn metadata_form(
         if changed {
             actions.push(Action::SetMetadataConfig(settings.clone()));
         }
-        ui.add_space(12.0);
+        ui.add_space(theme::space::L);
     });
 }

@@ -12,10 +12,11 @@ is the contract, and each side's copy is asserted against it by a test.
 |---|---|---|---|
 | Colour roles | `pstr_core::appearance::Palette` | `ui/theme/Theme.kt` `schemeOf` | `SchemeRolesTest` |
 | Type ramp | `pstr_app::theme::Role` | `ui/theme/Type.kt` | `TypeRampTest` |
-| Corner radius | `pstr-app` `ui/mod.rs` | `ui/theme/Shape.kt` | `TypeRampTest` |
+| Corner radius | `pstr_app::theme::radius` | `ui/theme/Shape.kt` | `TypeRampTest` |
 | Gradient rule | `Palette::resolve` | — (derived, see below) | `appearance.rs` tests |
 | Depth | `pstr_app::theme::{tile_shadow, bar_shadow}` | Material elevation | — |
-| Motion | `Context::animate_*` | Compose defaults | — |
+| Spacing | `pstr_app::theme::space` | Compose `dp` literals | — |
+| Motion | `pstr_app::theme::motion` | Compose defaults | — |
 
 ## Type
 
@@ -54,9 +55,19 @@ this module, and keep Material's sizes. Nothing in the app draws with them.
 
 ## Shape
 
-**Radius 8** for everything either client paints: cards, buttons, the tab pill,
-progress bars, dialogs. **4** for a badge over artwork. **16** for an Android
-bottom sheet, which has no desktop counterpart.
+**Radius 8** (`radius::MD`) for everything either client paints: cards,
+buttons, the tab pill. **4** (`BADGE`) for a badge over artwork. The desktop
+also has **3** (`BAR`) for progress bars and edge strips, **6** (`SM`) for a
+small control inside something else, and **12** (`LG`) for what floats — row
+cards, dialogs, toasts, the hero. **16** for an Android bottom sheet, which has
+no desktop counterpart.
+
+## Spacing
+
+The desktop spaces things from one scale, `theme::space`: 2, 4, 6, 8, 12, 16,
+24 (`XXS` to `XXL`). Use a step of the scale for a gap, not a literal. Sizes of
+things — a still, a button, a column — are not spacing and stay where they are
+defined.
 
 Two traps, both Android's:
 
@@ -104,9 +115,11 @@ page is a smudge on a near-white one. Android gets Material's elevation, which
 already adapts. Neither uses a tint to say "raised".
 
 Transitions on the desktop go through `Context::animate_*`: wall-clock driven,
-frame-rate independent, no state held by the caller. Durations in use are 0.05 s
-for a press, 0.10–0.12 s for a hover, 0.16 s for the tab pill's travel and 0.22 s
-for artwork arriving. Compose's defaults are close enough that nothing here
+frame-rate independent, no state held by the caller. Durations come from
+`theme::motion`: `PRESS` 0.05 s, `HOVER` 0.12 s, `STATE` 0.15 s (a switch, the
+tab pill's travel, a page change), `FADE` 0.18 s (player chrome, toasts) and
+`ARRIVE` 0.24 s (artwork over its placeholder). A hand-driven transition eases
+with `motion::ease_out`. Compose's defaults are close enough that nothing here
 overrides them.
 
 ## Desktop widgets

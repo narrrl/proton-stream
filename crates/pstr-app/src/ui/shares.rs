@@ -38,7 +38,7 @@ pub fn show(
                 share_row(ui, share, titles, actions);
             }
 
-            ui.add_space(22.0);
+            ui.add_space(theme::space::XXL);
             add_form(ui, shares, form, actions);
         });
 }
@@ -46,7 +46,7 @@ pub fn show(
 fn share_row(ui: &mut egui::Ui, share: &Share, titles: usize, actions: &mut Vec<Action>) {
     egui::Frame::new()
         .fill(theme::card())
-        .corner_radius(egui::CornerRadius::same(8))
+        .corner_radius(egui::CornerRadius::same(theme::radius::MD))
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -76,7 +76,7 @@ fn share_row(ui: &mut egui::Ui, share: &Share, titles: usize, actions: &mut Vec<
                 });
             });
         });
-    ui.add_space(6.0);
+    ui.add_space(theme::space::S);
 }
 
 fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: &mut Vec<Action>) {
@@ -85,11 +85,11 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
         "Paste the whole link, including everything after the # — that part is the key that \
          decrypts it, and it is stored in your system keyring rather than on disk.",
     ));
-    ui.add_space(10.0);
+    ui.add_space(theme::space::L);
 
     egui::Frame::new()
         .fill(theme::card())
-        .corner_radius(egui::CornerRadius::same(8))
+        .corner_radius(egui::CornerRadius::same(theme::radius::MD))
         .inner_margin(egui::Margin::same(14))
         .show(ui, |ui| {
             ui.set_width(ui.available_width().min(640.0));
@@ -100,7 +100,7 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
                     .hint_text("Anime")
                     .desired_width(f32::INFINITY),
             );
-            ui.add_space(8.0);
+            ui.add_space(theme::space::M);
 
             ui.label(ui::muted("Link"));
             ui.horizontal(|ui| {
@@ -134,11 +134,11 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
             if let Some(problem) = &problem {
                 ui.label(theme::Role::Caption.rich(problem).color(theme::danger()));
             }
-            ui.add_space(8.0);
+            ui.add_space(theme::space::M);
 
             ui::widgets::toggle(ui, &mut form.has_password, "The link asks for a password");
             if form.has_password {
-                ui.add_space(6.0);
+                ui.add_space(theme::space::S);
                 ui.add(
                     egui::TextEdit::singleline(&mut form.password)
                         .password(true)
@@ -147,7 +147,7 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
                 );
             }
 
-            ui.add_space(12.0);
+            ui.add_space(theme::space::L);
             let ready = !form.name.trim().is_empty()
                 && !form.url.trim().is_empty()
                 && problem.is_none()
@@ -156,7 +156,7 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
 
             if let Some(error) = &form.error {
                 ui.label(theme::Role::Caption.rich(error).color(theme::danger()));
-                ui.add_space(6.0);
+                ui.add_space(theme::space::S);
             }
             ui.horizontal(|ui| {
                 if ui

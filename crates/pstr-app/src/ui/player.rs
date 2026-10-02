@@ -251,7 +251,7 @@ pub fn show(
 
     // Faded rather than switched, both ways: controls that blink out under a
     // reading eye are more distracting than the ones that were there.
-    let fade = ctx.animate_bool_with_time(ui.id().with("chrome"), visible, 0.18);
+    let fade = ctx.animate_bool_with_time(ui.id().with("chrome"), visible, theme::motion::FADE);
     if fade > 0.0 {
         overlay.chrome_height = ui
             .scope(|ui| {
@@ -379,7 +379,7 @@ fn between(ui: &mut egui::Ui, opening: Option<&str>, rect: Rect, actions: &mut V
             if ui.button("Back").clicked() {
                 actions.push(Action::LeavePlayer);
             }
-            ui.add_space(8.0);
+            ui.add_space(theme::space::M);
             ui.add(egui::Spinner::new().size(14.0));
         },
     );
@@ -479,7 +479,7 @@ fn up_next_card(
         egui::Frame::new()
             .fill(Color32::from_black_alpha(215))
             .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(120)))
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(theme::radius::MD))
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
                 ui.set_width(size.x - 24.0);
@@ -488,7 +488,7 @@ fn up_next_card(
                     // coming and when, read in one glance.
                     let (frame, response) = ui.allocate_exact_size(STILL, Sense::click());
                     let painter = ui.painter();
-                    let radius = CornerRadius::same(6);
+                    let radius = CornerRadius::same(theme::radius::SM);
                     match &card.still {
                         Some(texture) => {
                             painter.add(
@@ -518,7 +518,7 @@ fn up_next_card(
                         actions.push(Action::PlayAdjacent(Adjacent::Next));
                     }
 
-                    ui.add_space(10.0);
+                    ui.add_space(theme::space::L);
                     ui.vertical(|ui| {
                         ui.label(
                             theme::Role::Caption
@@ -535,12 +535,12 @@ fn up_next_card(
                             )
                             .truncate(),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(theme::space::S);
                         ui.horizontal(|ui| {
                             if ui::accent_button(ui, "Play now").clicked() {
                                 actions.push(Action::PlayAdjacent(Adjacent::Next));
                             }
-                            ui.add_space(6.0);
+                            ui.add_space(theme::space::S);
                             if ui
                                 .button("Watch till the end")
                                 .on_hover_text("Play this one out — nothing will be skipped")
@@ -633,7 +633,7 @@ fn chrome(
                 .add(
                     egui::Button::new(theme::Role::Label.rich("Library"))
                         .fill(Color32::from_black_alpha(160))
-                        .corner_radius(CornerRadius::same(8))
+                        .corner_radius(CornerRadius::same(theme::radius::MD))
                         .min_size(Vec2::new(96.0, 32.0)),
                 )
                 .on_hover_text("Keep playing, and go back to the library (Esc)")
@@ -641,7 +641,7 @@ fn chrome(
             {
                 actions.push(Action::LeavePlayer);
             }
-            ui.add_space(14.0);
+            ui.add_space(theme::space::L);
             ui.vertical(|ui| {
                 ui.label(
                     theme::Role::Heading
@@ -666,7 +666,7 @@ fn chrome(
                             egui_phosphor::regular::CORNERS_OUT
                         }))
                         .fill(Color32::from_black_alpha(160))
-                        .corner_radius(CornerRadius::same(8))
+                        .corner_radius(CornerRadius::same(theme::radius::MD))
                         .min_size(Vec2::new(38.0, 32.0)),
                     )
                     .on_hover_text(if fullscreen {

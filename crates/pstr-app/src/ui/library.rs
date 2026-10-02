@@ -47,13 +47,13 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
             if !searching {
                 if let Some(title) = featured(library, view, art.metadata, today()) {
                     hero(ui, art, title, actions);
-                    ui.add_space(18.0);
+                    ui.add_space(theme::space::XL);
                 }
                 let resumable = pick(&view.resumable);
                 if !resumable.is_empty() {
                     ui::section(ui, "Continue watching");
                     continue_row(ui, art, &resumable, actions);
-                    ui.add_space(16.0);
+                    ui.add_space(theme::space::XL);
                 }
             }
 
@@ -74,10 +74,10 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
                     shelf_controls(ui, view, actions);
                 });
             });
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
 
             if matches.is_empty() {
-                ui.add_space(8.0);
+                ui.add_space(theme::space::M);
                 ui.label(ui::muted(if searching {
                     "Nothing here by that name."
                 } else {
@@ -143,7 +143,7 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
     if !ui.is_rect_visible(rect) {
         return;
     }
-    let radius = egui::CornerRadius::same(12);
+    let radius = egui::CornerRadius::same(theme::radius::LG);
     let picture = art.of(title);
     let found = art
         .metadata
@@ -152,9 +152,11 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
 
     let painter = ui.painter().with_clip_rect(rect);
     painter.rect_filled(rect, radius, theme::card());
-    let art_in = ui
-        .ctx()
-        .animate_bool_with_time(response.id.with("art"), picture.is_some(), 0.3);
+    let art_in = ui.ctx().animate_bool_with_time(
+        response.id.with("art"),
+        picture.is_some(),
+        theme::motion::ARRIVE,
+    );
     if art_in < 1.0 {
         ui::placeholder(&painter, rect, "", 1.0 - art_in);
     }
@@ -220,13 +222,13 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
                     if ui::accent_button(ui, &label).clicked() {
                         actions.push(Action::Play(PlaybackTarget::new(title, episode)));
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(theme::space::S);
                 }
                 if ui.button("More info").clicked() {
                     actions.push(Action::Goto(Page::Title(title.key.clone())));
                 }
             });
-            ui.add_space(14.0);
+            ui.add_space(theme::space::L);
             if let Some(overview) = found.as_ref().and_then(|found| found.overview.as_deref()) {
                 let mut job = egui::text::LayoutJob::simple(
                     overview.to_owned(),
@@ -236,7 +238,7 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
                 );
                 job.wrap.max_rows = 3;
                 ui.label(job);
-                ui.add_space(8.0);
+                ui.add_space(theme::space::M);
             }
             let mut facts = vec![subtitle(title)];
             if let Some(found) = &found {
@@ -246,7 +248,7 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
                 facts.extend(found.genres.iter().take(3).cloned());
             }
             ui.label(ui::muted(facts.join("  ·  ")));
-            ui.add_space(2.0);
+            ui.add_space(theme::space::XXS);
             ui.add(
                 egui::Label::new(
                     theme::Role::Display
@@ -290,7 +292,7 @@ fn shelf_controls(ui: &mut egui::Ui, view: &LibraryView, actions: &mut Vec<Actio
     if let Some(Some(sort)) = sort.inner {
         actions.push(Action::SetShelf(view.filter, sort));
     }
-    ui.add_space(10.0);
+    ui.add_space(theme::space::L);
     if let Some(filter) = ui::widgets::segmented(
         ui,
         view.filter,
@@ -527,8 +529,11 @@ fn placeholder(ui: &mut egui::Ui) {
                     rect.min,
                     egui::vec2(grid.width, (grid.width * theme::CARD_ASPECT).round()),
                 );
-                ui.painter()
-                    .rect_filled(image, egui::CornerRadius::same(8), theme::card());
+                ui.painter().rect_filled(
+                    image,
+                    egui::CornerRadius::same(theme::radius::MD),
+                    theme::card(),
+                );
             }
         });
         ui.add_space(theme::CARD_GAP);
@@ -543,11 +548,11 @@ fn empty_state(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
                 .rich("Nothing in the library yet")
                 .strong(),
         );
-        ui.add_space(6.0);
+        ui.add_space(theme::space::S);
         ui.label(ui::muted(
             "Add a Proton Drive share link, and everything playable behind it shows up here.",
         ));
-        ui.add_space(18.0);
+        ui.add_space(theme::space::XL);
         if ui::accent_button(ui, "Add a share").clicked() {
             actions.push(Action::Goto(Page::Shares));
         }

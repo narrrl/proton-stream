@@ -17,7 +17,7 @@ const ERROR_SECONDS: f64 = 9.0;
 /// How many fit at once. A burst beyond that drops the oldest.
 const MOST: usize = 4;
 /// How long one takes to arrive and to leave.
-const FADE: f64 = 0.18;
+const FADE: f64 = theme::motion::FADE as f64;
 const WIDTH: f32 = 340.0;
 
 pub struct Toast {
@@ -98,7 +98,7 @@ impl Toasts {
             let age = now - toast.at;
             let arriving = (age / FADE).clamp(0.0, 1.0) as f32;
             let leaving = ((life - age) / FADE).clamp(0.0, 1.0) as f32;
-            let opacity = ease(arriving.min(leaving));
+            let opacity = theme::motion::ease_out(arriving.min(leaving));
 
             let area = egui::Area::new(egui::Id::new(("toast", toast.id)))
                 .order(egui::Order::Foreground)
@@ -150,10 +150,6 @@ fn lifetime(error: bool) -> f64 {
     if error { ERROR_SECONDS } else { SECONDS }
 }
 
-fn ease(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
 /// Which of a toast's buttons was pressed.
 enum Pressed {
     Nothing,
@@ -172,7 +168,7 @@ fn card(ui: &mut egui::Ui, toast: &Toast) -> Pressed {
     egui::Frame::new()
         .fill(theme::surface())
         .stroke(Stroke::new(1.0, theme::card_hover()))
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(CornerRadius::same(theme::radius::LG))
         .inner_margin(egui::Margin {
             left: 16,
             right: 10,
@@ -211,7 +207,7 @@ fn card(ui: &mut egui::Ui, toast: &Toast) -> Pressed {
                     pressed = Pressed::Close;
                 }
                 if let Some((label, _)) = &toast.action {
-                    ui.add_space(4.0);
+                    ui.add_space(theme::space::XS);
                     if ui
                         .add(
                             egui::Button::new(
@@ -240,7 +236,8 @@ fn card(ui: &mut egui::Ui, toast: &Toast) -> Pressed {
                 egui::pos2(frame.left() - 10.0, frame.top() - 4.0),
                 egui::pos2(frame.left() - 7.0, frame.bottom() + 4.0),
             );
-            ui.painter().rect_filled(strip, CornerRadius::same(2), edge);
+            ui.painter()
+                .rect_filled(strip, CornerRadius::same(theme::radius::BAR), edge);
         });
     pressed
 }

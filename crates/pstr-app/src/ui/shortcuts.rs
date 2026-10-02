@@ -47,7 +47,7 @@ pub fn show(ctx: &egui::Context) -> bool {
             egui::Frame::new()
                 .fill(theme::surface())
                 .inner_margin(egui::Margin::same(20))
-                .corner_radius(egui::CornerRadius::same(12)),
+                .corner_radius(egui::CornerRadius::same(theme::radius::LG)),
         )
         .show(ctx, |ui| {
             ui.set_width(460.0);
@@ -60,9 +60,9 @@ pub fn show(ctx: &egui::Context) -> bool {
                 });
             });
             for (heading, keys) in GROUPS {
-                ui.add_space(12.0);
+                ui.add_space(theme::space::L);
                 ui.label(ui::muted(heading.to_uppercase()));
-                ui.add_space(4.0);
+                ui.add_space(theme::space::XS);
                 egui::Grid::new(*heading)
                     .num_columns(2)
                     .spacing([18.0, 8.0])

@@ -56,7 +56,7 @@ pub fn full(
 ) {
     seek_bar(ui, playback, actions, 6.0);
     times(ui, playback, true);
-    ui.add_space(6.0);
+    ui.add_space(theme::space::S);
 
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT_FULL);
@@ -87,7 +87,7 @@ pub fn full(
             },
         );
 
-        ui.add_space(12.0);
+        ui.add_space(theme::space::L);
         if playback.seeking || playback.buffering || !playback.loaded {
             ui.add(egui::Spinner::new().size(16.0));
             ui.label(ui::muted(if playback.loaded && playback.seeking {
@@ -100,11 +100,11 @@ pub fn full(
         // Right cluster: everything that is a choice rather than a move.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             track_menus(ui, playback, actions);
-            ui.add_space(8.0);
+            ui.add_space(theme::space::M);
             speed_menu(ui, playback, actions);
-            ui.add_space(8.0);
+            ui.add_space(theme::space::M);
             chapter_menu(ui, playback, actions);
-            ui.add_space(8.0);
+            ui.add_space(theme::space::M);
             volume(ui, playback, actions);
         });
     });
@@ -130,7 +130,7 @@ pub fn mini(
             Some(texture) => {
                 let (rect, response) = ui.allocate_exact_size(MINI_PICTURE, Sense::click());
                 let painter = ui.painter();
-                let radius = CornerRadius::same(6);
+                let radius = CornerRadius::same(theme::radius::SM);
                 painter.rect_filled(rect, radius, Color32::BLACK);
                 painter.add(
                     egui::epaint::RectShape::filled(rect, radius, Color32::WHITE).with_texture(
@@ -141,7 +141,7 @@ pub fn mini(
                 let hover = ui.ctx().animate_bool_with_time(
                     response.id.with("hover"),
                     response.hovered(),
-                    0.12,
+                    theme::motion::HOVER,
                 );
                 if hover > 0.0 {
                     painter.rect_filled(
@@ -172,7 +172,7 @@ pub fn mini(
                     .add(
                         egui::Button::new(theme::Role::Label.rich("Back to video"))
                             .fill(theme::card_hover())
-                            .corner_radius(CornerRadius::same(8)),
+                            .corner_radius(CornerRadius::same(theme::radius::MD)),
                     )
                     .on_hover_text("Show the picture again")
                     .clicked()
@@ -181,7 +181,7 @@ pub fn mini(
                 }
             }
         }
-        ui.add_space(10.0);
+        ui.add_space(theme::space::L);
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(ROW_HEIGHT_MINI);
@@ -208,7 +208,7 @@ pub fn mini(
                     if ui.button("Stop").clicked() {
                         actions.push(Action::Player(Command::Stop));
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(theme::space::S);
                     step_button(
                         ui,
                         egui_phosphor::regular::SKIP_FORWARD,
@@ -231,18 +231,18 @@ pub fn mini(
                         },
                     );
 
-                    ui.add_space(8.0);
+                    ui.add_space(theme::space::M);
                     track_menus(ui, playback, actions);
-                    ui.add_space(6.0);
+                    ui.add_space(theme::space::S);
                     volume(ui, playback, actions);
 
                     if playback.seeking || playback.buffering || !playback.loaded {
-                        ui.add_space(6.0);
+                        ui.add_space(theme::space::S);
                         ui.add(egui::Spinner::new().size(14.0));
                     }
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(theme::space::XS);
             seek_bar(ui, playback, actions, 5.0);
             times(ui, playback, false);
         });
@@ -569,11 +569,11 @@ fn seek_bar(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>, t
 
     let active = response.hovered() || response.dragged();
     // Grows rather than jumps when the pointer arrives.
-    let grow = ui
-        .ctx()
-        .animate_bool_with_time(response.id.with("grow"), active, 0.12);
+    let grow =
+        ui.ctx()
+            .animate_bool_with_time(response.id.with("grow"), active, theme::motion::HOVER);
     let track = Rect::from_center_size(rect.center(), Vec2::new(width, thickness + 3.0 * grow));
-    let radius = CornerRadius::same(3);
+    let radius = CornerRadius::same(theme::radius::BAR);
     let painter = ui.painter();
     // From the palette rather than a fixed grey: the same bar sits on the
     // video's dark scrim and on a light theme's transport strip.
@@ -692,6 +692,10 @@ fn bubble(ui: &egui::Ui, anchor: egui::Pos2, text: &str) {
     let screen = ui.ctx().content_rect();
     let left = (anchor.x - size.x / 2.0).clamp(screen.left() + 4.0, screen.right() - size.x - 4.0);
     let frame = Rect::from_min_size(egui::pos2(left, anchor.y - size.y), size);
-    painter.rect_filled(frame, CornerRadius::same(6), Color32::from_black_alpha(215));
+    painter.rect_filled(
+        frame,
+        CornerRadius::same(theme::radius::SM),
+        Color32::from_black_alpha(215),
+    );
     painter.galley(frame.min + Vec2::new(8.0, 4.0), galley, Color32::WHITE);
 }

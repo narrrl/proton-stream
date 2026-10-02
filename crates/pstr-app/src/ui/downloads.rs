@@ -20,7 +20,7 @@ pub fn show(ui: &mut egui::Ui, downloads: &[DownloadItem], actions: &mut Vec<Act
         .show(ui, |ui| {
             ui.set_max_width(960.0);
             summary(ui, downloads);
-            ui.add_space(12.0);
+            ui.add_space(theme::space::L);
 
             let mut start = 0;
             while start < downloads.len() {
@@ -30,7 +30,7 @@ pub fn show(ui: &mut egui::Ui, downloads: &[DownloadItem], actions: &mut Vec<Act
                     .position(|item| item.target.title_key != *title_key)
                     .map_or(downloads.len(), |offset| start + offset);
                 group(ui, &downloads[start..end], actions);
-                ui.add_space(14.0);
+                ui.add_space(theme::space::L);
                 start = end;
             }
         });
@@ -108,7 +108,7 @@ fn group(ui: &mut egui::Ui, group: &[DownloadItem], actions: &mut Vec<Action>) {
     if totals_known && group.len() > 1 {
         ui::progress_bar(ui, fraction(downloaded, total), ui.available_width());
     }
-    ui.add_space(6.0);
+    ui.add_space(theme::space::S);
     for item in group {
         row(ui, item, actions);
     }
@@ -117,7 +117,7 @@ fn group(ui: &mut egui::Ui, group: &[DownloadItem], actions: &mut Vec<Action>) {
 fn row(ui: &mut egui::Ui, item: &DownloadItem, actions: &mut Vec<Action>) {
     egui::Frame::new()
         .fill(theme::card())
-        .corner_radius(egui::CornerRadius::same(6))
+        .corner_radius(egui::CornerRadius::same(theme::radius::SM))
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -142,7 +142,7 @@ fn row(ui: &mut egui::Ui, item: &DownloadItem, actions: &mut Vec<Action>) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     buttons(ui, item, actions);
                     if item.total > 0 && item.state != DownloadState::Completed {
-                        ui.add_space(8.0);
+                        ui.add_space(theme::space::M);
                         ui.label(ui::muted(format!(
                             "{} / {}",
                             size(item.downloaded),
@@ -154,7 +154,7 @@ fn row(ui: &mut egui::Ui, item: &DownloadItem, actions: &mut Vec<Action>) {
                 });
             });
         });
-    ui.add_space(4.0);
+    ui.add_space(theme::space::XS);
 }
 
 /// What a row says about itself, and in what colour.

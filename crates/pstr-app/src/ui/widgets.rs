@@ -40,8 +40,12 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
 
     if ui.is_rect_visible(rect) {
         let ctx = ui.ctx();
-        let t = ctx.animate_bool_with_time(response.id, *on, 0.14);
-        let hover = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.10);
+        let t = ctx.animate_bool_with_time(response.id, *on, theme::motion::STATE);
+        let hover = ctx.animate_bool_with_time(
+            response.id.with("hover"),
+            response.hovered(),
+            theme::motion::HOVER,
+        );
         let track = egui::Rect::from_min_size(
             egui::pos2(rect.left(), rect.center().y - TRACK.y / 2.0),
             TRACK,
@@ -96,8 +100,12 @@ pub fn watched_mark(ui: &mut egui::Ui, watched: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(SIZE), Sense::click());
     if ui.is_rect_visible(rect) {
         let ctx = ui.ctx();
-        let t = ctx.animate_bool_with_time(response.id, watched, 0.14);
-        let hover = ctx.animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.10);
+        let t = ctx.animate_bool_with_time(response.id, watched, theme::motion::STATE);
+        let hover = ctx.animate_bool_with_time(
+            response.id.with("hover"),
+            response.hovered(),
+            theme::motion::HOVER,
+        );
         let painter = ui.painter();
         let center = rect.center();
         let radius = SIZE / 2.0 - 1.0;
@@ -147,7 +155,7 @@ pub fn settings_group<R>(
     description: Option<&str>,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    ui.add_space(4.0);
+    ui.add_space(theme::space::XS);
     ui.label(
         theme::Role::Subhead
             .rich(heading)
@@ -155,13 +163,13 @@ pub fn settings_group<R>(
             .color(theme::text()),
     );
     if let Some(description) = description {
-        ui.add_space(2.0);
+        ui.add_space(theme::space::XXS);
         ui.label(crate::ui::muted(description));
     }
-    ui.add_space(8.0);
+    ui.add_space(theme::space::M);
     let inner = egui::Frame::new()
         .fill(theme::card())
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(CornerRadius::same(theme::radius::LG))
         .inner_margin(egui::Margin::symmetric(16, 6))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -169,7 +177,7 @@ pub fn settings_group<R>(
             add(ui)
         })
         .inner;
-    ui.add_space(26.0);
+    ui.add_space(theme::space::XXL);
     inner
 }
 
@@ -192,7 +200,7 @@ pub fn settings_row<R>(
             Stroke::new(1.0, theme::card_hover()),
         );
     }
-    ui.add_space(10.0);
+    ui.add_space(theme::space::L);
     let inner = ui
         .horizontal(|ui| {
             ui.set_min_height(28.0);
@@ -209,7 +217,7 @@ pub fn settings_row<R>(
                 .inner
         })
         .inner;
-    ui.add_space(10.0);
+    ui.add_space(theme::space::L);
     inner
 }
 
@@ -224,7 +232,7 @@ pub fn segmented<T: Copy + PartialEq>(
     let mut picked = None;
     egui::Frame::new()
         .fill(theme::card_hover())
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(theme::radius::MD))
         .inner_margin(egui::Margin::same(3))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -237,7 +245,7 @@ pub fn segmented<T: Copy + PartialEq>(
                         theme::text()
                     });
                     let button = egui::Button::new(text)
-                        .corner_radius(CornerRadius::same(6))
+                        .corner_radius(CornerRadius::same(theme::radius::SM))
                         .fill(if selected {
                             theme::accent()
                         } else {
@@ -273,9 +281,9 @@ pub fn download_button(ui: &mut egui::Ui, glyph: DownloadGlyph) -> egui::Respons
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    let hover = ui
-        .ctx()
-        .animate_bool_with_time(response.id, response.hovered(), 0.10);
+    let hover =
+        ui.ctx()
+            .animate_bool_with_time(response.id, response.hovered(), theme::motion::HOVER);
     let painter = ui.painter();
     let c = rect.center();
     if hover > 0.0 {
@@ -352,7 +360,7 @@ pub fn download_button(ui: &mut egui::Ui, glyph: DownloadGlyph) -> egui::Respons
 pub fn chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
     egui::Frame::new()
         .fill(theme::card_hover().gamma_multiply(0.8))
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(CornerRadius::same(theme::radius::LG))
         .inner_margin(egui::Margin::symmetric(9, 3))
         .show(ui, |ui| {
             ui.label(theme::Role::Caption.rich(text).color(theme::text()));

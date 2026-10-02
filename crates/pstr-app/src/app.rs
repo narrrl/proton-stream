@@ -1432,14 +1432,14 @@ impl App {
         focus_search: bool,
     ) {
         ui.horizontal(|ui| {
-            ui.add_space(4.0);
+            ui.add_space(theme::space::XS);
             ui.label(
                 theme::Role::Heading
                     .rich("proton-stream")
                     .strong()
                     .color(theme::accent()),
             );
-            ui.add_space(12.0);
+            ui.add_space(theme::space::L);
 
             let on_library = matches!(self.page, Page::Library | Page::Title(_));
             let active = self
@@ -1475,7 +1475,7 @@ impl App {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(4.0);
+                ui.add_space(theme::space::XS);
                 if self.crawling {
                     if ui
                         .small_button("Stop")
@@ -1504,7 +1504,7 @@ impl App {
                 }
 
                 if on_library && !self.library.is_empty() {
-                    ui.add_space(8.0);
+                    ui.add_space(theme::space::M);
                     ui::search_field(ui, search, focus_search);
                 }
             });
@@ -1914,7 +1914,7 @@ fn screenshot_name(title: &str, caption: &str, position: f64) -> String {
 /// rather than in one: the cut between two pages of tiles reads as a flicker,
 /// a short fade as a change of place.
 fn page_fade(ctx: &egui::Context, shown: &mut (Option<Page>, f64), page: &Page) -> f32 {
-    const SECONDS: f64 = 0.14;
+    const SECONDS: f64 = theme::motion::STATE as f64;
     let now = ctx.input(|input| input.time);
     if shown.0.as_ref() != Some(page) {
         // The first page of a launch is there at once; only changes fade.
@@ -1925,7 +1925,7 @@ fn page_fade(ctx: &egui::Context, shown: &mut (Option<Page>, f64), page: &Page) 
     if progress < 1.0 {
         ctx.request_repaint();
     }
-    1.0 - (1.0 - progress).powi(3)
+    theme::motion::ease_out(progress)
 }
 
 /// What the top bar says while shares are being listed: one share by name,

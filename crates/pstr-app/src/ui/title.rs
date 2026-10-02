@@ -33,13 +33,13 @@ pub fn show(
     if back_link(ui).clicked() {
         actions.push(Action::Goto(Page::Library));
     }
-    ui.add_space(6.0);
+    ui.add_space(theme::space::S);
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             header(ui, art, title, &offline, actions);
-            ui.add_space(18.0);
+            ui.add_space(theme::space::XL);
 
             // One season at a time, picked from a row of pills, rather than
             // every season stacked as a collapsing header: a four-season show
@@ -78,7 +78,7 @@ pub fn show(
                         picked = index;
                         ui.data_mut(|data| data.insert_temp(picked_id, index));
                     }
-                    ui.add_space(10.0);
+                    ui.add_space(theme::space::L);
                 }
                 ui.label(ui::muted(ui::library::plural(
                     season.episodes.len(),
@@ -88,7 +88,7 @@ pub fn show(
                     season_download(ui, title, season, &offline, actions);
                 });
             });
-            ui.add_space(10.0);
+            ui.add_space(theme::space::L);
 
             let Some(season) = title.seasons.get(picked) else {
                 return;
@@ -96,7 +96,7 @@ pub fn show(
             for episode in &season.episodes {
                 episode_row(ui, art, title, season, episode, &offline, actions);
             }
-            ui.add_space(12.0);
+            ui.add_space(theme::space::L);
         });
 }
 
@@ -105,7 +105,7 @@ pub fn show(
 fn poster(ui: &mut egui::Ui, texture: &egui::TextureHandle, progress: Option<f64>) {
     let size = egui::vec2(180.0, 270.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let radius = egui::CornerRadius::same(10);
+    let radius = egui::CornerRadius::same(theme::radius::LG);
     ui.painter()
         .add(theme::tile_shadow(1.0).as_shape(rect, radius));
     ui.painter().add(
@@ -201,7 +201,7 @@ fn header(
         .as_ref()
         .map(|(texture, _)| (texture.clone(), ui.painter().add(egui::Shape::Noop)));
 
-    ui.add_space(6.0);
+    ui.add_space(theme::space::S);
     ui.horizontal_top(|ui| {
         match &picture {
             // A poster is drawn as a poster. Fitted into the 16:9 tile the grid
@@ -224,7 +224,7 @@ fn header(
             }
         }
 
-        ui.add_space(22.0);
+        ui.add_space(theme::space::XXL);
         ui.vertical(|ui| {
             // Text in a column a person can read, with the picture to the
             // right of it rather than under it.
@@ -242,9 +242,9 @@ fn header(
                     if by_hand { " (chosen by hand)" } else { "" }
                 )));
             }
-            ui.add_space(4.0);
+            ui.add_space(theme::space::XS);
             ui.label(ui::muted(meta_line(title, found.as_ref())));
-            ui.add_space(14.0);
+            ui.add_space(theme::space::L);
 
             ui.horizontal(|ui| {
                 if let Some(episode) = title.next_up() {
@@ -342,14 +342,14 @@ fn header(
             });
 
             if let Some(found) = &found {
-                ui.add_space(14.0);
+                ui.add_space(theme::space::L);
                 description(ui, found);
             }
         });
     });
 
     if let Some((texture, index)) = backdrop {
-        ui.add_space(10.0);
+        ui.add_space(theme::space::L);
         band(ui, &texture, index);
     }
 }
@@ -456,7 +456,7 @@ fn description(ui: &mut egui::Ui, found: &TitleMetadata) {
                 ui::widgets::chip(ui, genre);
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(theme::space::M);
     }
     if let Some(overview) = &found.overview {
         // Four lines, then "More". A provider's synopsis runs to three
@@ -496,7 +496,7 @@ fn description(ui: &mut egui::Ui, found: &TitleMetadata) {
         }
     }
     if let Some(url) = &found.url {
-        ui.add_space(8.0);
+        ui.add_space(theme::space::M);
         ui.hyperlink_to(
             ui::muted(format!("More on {}", found.provider.label())),
             url,
@@ -573,7 +573,7 @@ fn episode_row(
     let row_id = ui.id().with(("episode", &episode.node.link_id));
 
     let frame = egui::Frame::new()
-        .corner_radius(egui::CornerRadius::same(10))
+        .corner_radius(egui::CornerRadius::same(theme::radius::LG))
         .inner_margin(egui::Margin::same(8));
     let mut prepared = frame.begin(ui);
     {
@@ -581,7 +581,7 @@ fn episode_row(
         ui.set_width(ui.available_width());
         ui.horizontal_top(|ui| {
             still(ui, art, title, episode, watched, actions);
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
 
             let controls = 96.0;
             let text_width = (ui.available_width() - controls).max(120.0);
@@ -665,7 +665,7 @@ fn episode_row(
                         duration: episode.watch.and_then(|watch| watch.duration_secs),
                     });
                 }
-                ui.add_space(6.0);
+                ui.add_space(theme::space::S);
                 download(ui, title, episode, offline, actions);
             });
         });
@@ -676,11 +676,11 @@ fn episode_row(
     let lit = ui.ctx().animate_bool_with_time(
         row_id,
         response.hovered() || response.contains_pointer(),
-        0.10,
+        theme::motion::HOVER,
     );
     prepared.frame.fill = theme::card().gamma_multiply(0.35 + 0.65 * lit);
     prepared.paint(ui);
-    ui.add_space(2.0);
+    ui.add_space(theme::space::XXS);
 }
 
 /// The grey line under an episode's name: when it aired, how big it is, and
@@ -728,7 +728,7 @@ fn still(
     if !ui.is_rect_visible(rect) {
         return;
     }
-    let radius = egui::CornerRadius::same(8);
+    let radius = egui::CornerRadius::same(theme::radius::MD);
     let painter = ui.painter();
     painter.rect_filled(rect, radius, theme::card_hover());
     // Asked for only once the row is on screen: a season of twenty-five is
@@ -751,7 +751,7 @@ fn still(
     let hover = ui.ctx().animate_bool_with_time(
         response.id,
         response.hovered() || response.has_focus(),
-        0.12,
+        theme::motion::HOVER,
     );
     if hover > 0.0 {
         painter.rect_filled(
