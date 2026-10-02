@@ -31,10 +31,12 @@ fn main() -> anyhow::Result<()> {
     );
     let dirs = AppDirs::ensure().context("resolve app directories")?;
 
+    let window = pstr_app::window::WindowState::load(&dirs.window_file());
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("proton-stream")
-            .with_inner_size([1180.0, 780.0])
+            .with_inner_size(window.map_or([1180.0, 780.0], |state| [state.width, state.height]))
+            .with_maximized(window.is_some_and(|state| state.maximized))
             .with_min_inner_size([720.0, 480.0])
             .with_app_id("io.narl.proton-stream"),
         ..Default::default()

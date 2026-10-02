@@ -26,3 +26,4 @@ pub mod playback;
 pub mod theme;
 pub mod ui;
 pub mod video;
+pub mod window;

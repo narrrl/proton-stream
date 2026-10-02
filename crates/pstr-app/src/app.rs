@@ -426,6 +426,8 @@ pub struct App {
     /// Which share the crawl is on, and how far it has got.
     /// Files found so far, by share name, for each share still listing.
     crawl_progress: std::collections::BTreeMap<String, usize>,
+    /// The window's size, written at exit for the next launch.
+    window: crate::window::WindowMemory,
     pub downloads: Vec<DownloadItem>,
     pub offline_files: std::collections::HashSet<DownloadKey>,
     pub confirm_partial_delete: Option<DownloadKey>,
@@ -447,6 +449,7 @@ impl App {
         // After the engine, not before: the engine is what reads the stored
         // theme, and a window that paints one frame in the default palette
         // before switching is a window that flashes on every launch.
+        let window = crate::window::WindowMemory::new(dirs.window_file());
         let (engine, events) = Engine::new(runtime, dirs, cc.egui_ctx.clone())?;
         theme::install_font_fallbacks(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, engine.appearance());
@@ -490,6 +493,7 @@ impl App {
             connecting: true,
             crawling: false,
             crawl_progress: Default::default(),
+            window,
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
@@ -837,10 +841,26 @@ impl App {
         // Nothing else causes a frame while a film plays and the mouse is
         // still, and a countdown that only ticks when the pointer moves is
         // worse than none.
-        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        let still = next.as_ref().and_then(|target| {
+            let title = self.library.get(&target.title_key)?;
+            let episode = title.episodes().find(|episode| {
+                episode.node.share_id == target.share_id && episode.node.link_id == target.link_id
+            })?;
+            ui::Art {
+                engine: &self.engine,
+                thumbs: &mut self.thumbs,
+                posters: &mut self.posters,
+                metadata: &self.metadata,
+                episodes: &self.episodes,
+            }
+            .still(&title.key, episode)
+        });
         Some(UpNextCard {
             seconds: left,
+            left: (left / UP_NEXT_SECONDS) as f32,
             caption: next.map(|target| target.caption()).unwrap_or_default(),
+            still,
         })
     }
 
@@ -1320,6 +1340,7 @@ impl eframe::App for App {
         self.pump(ctx, frame);
         self.warm_next();
         self.auto_skip(ctx);
+        self.window.observe(ctx);
 
         let mut actions: Vec<Action> = Vec::new();
 
@@ -1625,6 +1646,7 @@ impl eframe::App for App {
     /// immediately before tearing the painter down, which is the last moment
     /// that is true.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.window.save();
         if let Some(playback) = &self.playback {
             playback.stop_and_wait(std::time::Duration::from_secs(2));
         }

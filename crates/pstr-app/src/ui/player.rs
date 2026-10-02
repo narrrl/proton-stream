@@ -118,8 +118,12 @@ pub struct Chrome<'a> {
 pub struct UpNextCard {
     /// Seconds until the next episode starts.
     pub seconds: f64,
+    /// The same, as a fraction of the whole countdown, for the ring.
+    pub left: f32,
     /// Which episode that is.
     pub caption: String,
+    /// Its still, once there is one.
+    pub still: Option<egui::TextureHandle>,
 }
 
 impl Overlay {
@@ -468,58 +472,112 @@ fn up_next_card(
     bottom_margin: f32,
     actions: &mut Vec<Action>,
 ) {
-    let size = Vec2::new(330.0, 104.0);
+    const STILL: Vec2 = Vec2::new(128.0, 72.0);
+    let size = Vec2::new(400.0, 104.0);
 
     floating(ui, rect, size, bottom_margin, |ui| {
         egui::Frame::new()
             .fill(Color32::from_black_alpha(215))
             .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(120)))
             .corner_radius(CornerRadius::same(8))
-            .inner_margin(egui::Margin::symmetric(14, 12))
+            .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
-                ui.set_width(size.x - 28.0);
+                ui.set_width(size.x - 24.0);
                 ui.horizontal(|ui| {
-                    ui.label(
-                        theme::Role::Caption
-                            .rich("Up next")
-                            .strong()
-                            .color(Color32::from_white_alpha(200)),
+                    // The still, with the countdown running round it: what is
+                    // coming and when, read in one glance.
+                    let (frame, response) = ui.allocate_exact_size(STILL, Sense::click());
+                    let painter = ui.painter();
+                    let radius = CornerRadius::same(6);
+                    match &card.still {
+                        Some(texture) => {
+                            painter.add(
+                                egui::epaint::RectShape::filled(frame, radius, Color32::WHITE)
+                                    .with_texture(
+                                        texture.id(),
+                                        ui::cover_uv(texture.size_vec2(), frame.size()),
+                                    ),
+                            );
+                        }
+                        None => {
+                            painter.rect_filled(frame, radius, Color32::from_white_alpha(20));
+                        }
+                    }
+                    painter.rect_filled(frame, radius, Color32::from_black_alpha(90));
+                    countdown_ring(painter, frame.center(), 22.0, card.left);
+                    // Rounded up, so a ring that says "1" is never followed by
+                    // a second of nothing happening.
+                    painter.text(
+                        frame.center(),
+                        Align2::CENTER_CENTER,
+                        card.seconds.ceil() as u32,
+                        theme::Role::Body.font(),
+                        Color32::WHITE,
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Rounded up, so a card that says "1s" is never
-                        // followed by a second of nothing happening.
-                        ui.label(
-                            theme::Role::Caption
-                                .rich(format!("in {}s", card.seconds.ceil() as u32))
-                                .color(theme::accent()),
-                        );
-                    });
-                });
-                ui.add(
-                    egui::Label::new(
-                        theme::Role::Body
-                            .rich(&card.caption)
-                            .strong()
-                            .color(Color32::WHITE),
-                    )
-                    .truncate(),
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui::accent_button(ui, "Play now").clicked() {
+                    if response.on_hover_text("Play now").clicked() {
                         actions.push(Action::PlayAdjacent(Adjacent::Next));
                     }
-                    ui.add_space(6.0);
-                    if ui
-                        .button("Watch till the end")
-                        .on_hover_text("Play this one out — nothing will be skipped")
-                        .clicked()
-                    {
-                        actions.push(Action::WatchToEnd);
-                    }
+
+                    ui.add_space(10.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            theme::Role::Caption
+                                .rich("Up next")
+                                .strong()
+                                .color(Color32::from_white_alpha(200)),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                theme::Role::Body
+                                    .rich(&card.caption)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .truncate(),
+                        );
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui::accent_button(ui, "Play now").clicked() {
+                                actions.push(Action::PlayAdjacent(Adjacent::Next));
+                            }
+                            ui.add_space(6.0);
+                            if ui
+                                .button("Watch till the end")
+                                .on_hover_text("Play this one out — nothing will be skipped")
+                                .clicked()
+                            {
+                                actions.push(Action::WatchToEnd);
+                            }
+                        });
+                    });
                 });
             });
     });
+}
+
+/// A ring that empties clockwise from twelve o'clock as `left` runs to zero.
+fn countdown_ring(painter: &egui::Painter, center: egui::Pos2, radius: f32, left: f32) {
+    painter.circle_stroke(
+        center,
+        radius,
+        egui::Stroke::new(3.0, Color32::from_white_alpha(60)),
+    );
+    let left = left.clamp(0.0, 1.0);
+    if left <= 0.0 {
+        return;
+    }
+    let steps = (64.0 * left).ceil().max(2.0) as usize;
+    let sweep = std::f32::consts::TAU * left;
+    let points: Vec<egui::Pos2> = (0..=steps)
+        .map(|step| {
+            let angle = -std::f32::consts::FRAC_PI_2 + sweep * step as f32 / steps as f32;
+            center + radius * Vec2::new(angle.cos(), angle.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(3.0, theme::accent()),
+    ));
 }
 
 /// Put something in the bottom-right corner, `bottom_margin` above the edge.

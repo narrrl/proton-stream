@@ -73,6 +73,11 @@ impl AppDirs {
         Ok(())
     }
 
+    /// The desktop window's size, for the next launch to open at.
+    pub fn window_file(&self) -> PathBuf {
+        self.config.join("window.json")
+    }
+
     /// The share list.
     pub fn shares_file(&self) -> PathBuf {
         self.config.join("shares.json")
