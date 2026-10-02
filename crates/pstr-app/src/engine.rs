@@ -80,9 +80,17 @@ pub struct DownloadItem {
     pub state: DownloadState,
     pub downloaded: u64,
     pub total: u64,
+    /// Bytes a second, smoothed. Only meaningful while it is running.
+    pub rate: f64,
 }
 
 impl DownloadItem {
+    /// Seconds until done at the current rate, while that is knowable.
+    pub fn eta(&self) -> Option<f64> {
+        (self.state == DownloadState::Running && self.rate > 0.0 && self.total > self.downloaded)
+            .then(|| (self.total - self.downloaded) as f64 / self.rate)
+    }
+
     pub fn percent(&self) -> f32 {
         if self.total == 0 {
             0.0
@@ -153,6 +161,10 @@ const THUMBNAIL_MAX_EDGE: u32 = 640;
 pub enum Event {
     /// The share list changed on disk.
     Shares(Vec<Share>),
+    /// The share the form asked for is stored; its crawl is starting.
+    ShareAdded(String),
+    /// The share the form asked for was refused, with why. Nothing was crawled.
+    ShareRejected(String),
     /// Shares opened; playback is possible from here.
     Connected {
         /// Shares that did not open, with why.
@@ -169,6 +181,8 @@ pub enum Event {
         files: usize,
         seconds: f64,
     },
+    /// A crawl is under way: which share, and how many nodes so far.
+    CrawlProgress { share: String, found: usize },
     /// Every requested crawl is done.
     CrawlFinished,
     /// A decoded Proton thumbnail, keyed as [`thumbnail_key`].
@@ -287,6 +301,8 @@ pub struct Engine {
     track_prefs: Arc<Mutex<HashMap<String, TitleTrackPrefs>>>,
     downloads: Arc<Mutex<Downloads>>,
     download_permits: Arc<tokio::sync::Semaphore>,
+    /// Whether the player page is on screen. See [`Engine::wake`].
+    picture_shown: Arc<AtomicBool>,
     events: Sender<Event>,
     ctx: egui::Context,
 }
@@ -297,6 +313,10 @@ const THUMBNAIL_CONCURRENCY: usize = 6;
 /// How many provider lookups may be in flight at once. See [`Engine::lookups`].
 const LOOKUP_CONCURRENCY: usize = 2;
 const DOWNLOAD_CONCURRENCY: usize = 3;
+/// How many blocks of one download are fetched at once. Four is what the
+/// stream layer itself allows a single read, for the same reason: enough to
+/// hide a round trip, few enough that three downloads do not swamp a player.
+const DOWNLOAD_BLOCKS_IN_FLIGHT: usize = 4;
 
 /// Enrichment as currently configured.
 struct Enrichment {
@@ -378,6 +398,7 @@ impl Engine {
             track_prefs: Arc::new(Mutex::new(track_prefs)),
             downloads: Arc::new(Mutex::new(Downloads::default())),
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
+            picture_shown: Arc::new(AtomicBool::new(false)),
             events,
             ctx,
         };
@@ -441,8 +462,43 @@ impl Engine {
     /// Send an event and wake the UI. A closed channel means the window is
     /// gone, which is not an error worth propagating anywhere.
     pub(crate) fn emit(&self, event: Event) {
+        let ticking = matches!(
+            event,
+            Event::Player {
+                event: pstr_player::PlayerEvent::Position(_),
+                ..
+            }
+        );
         if self.events.send(event).is_ok() {
+            if ticking {
+                self.wake();
+            } else {
+                self.ctx.request_repaint();
+            }
+        }
+    }
+
+    /// Say whether the player page is the one on screen.
+    pub fn set_picture_shown(&self, shown: bool) {
+        self.picture_shown.store(shown, Ordering::Relaxed);
+    }
+
+    /// Ask for a frame because playback moved on.
+    ///
+    /// mpv reports the position and offers a new picture once per video frame.
+    /// On the player page that is exactly the rate to draw at. Anywhere else
+    /// the film is a line of text and a bar in the transport, and redrawing a
+    /// whole library page at the film's frame rate to move them is most of the
+    /// app's CPU while something plays in the background. Four times a second
+    /// keeps the clock honest.
+    pub fn wake(&self) {
+        /// How often the transport bar moves while the picture is hidden.
+        const BACKGROUND_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+        if self.picture_shown.load(Ordering::Relaxed) {
             self.ctx.request_repaint();
+        } else {
+            self.ctx.request_repaint_after(BACKGROUND_TICK);
         }
     }
 
@@ -468,9 +524,9 @@ impl Engine {
         self.runtime.spawn(async move {
             let share = match engine.store.add(&name, &url, password.as_deref()) {
                 Ok(share) => share,
-                Err(error) => return engine.fail("add that share", error),
+                Err(error) => return engine.emit(Event::ShareRejected(error.to_string())),
             };
-            engine.emit(Event::Status(format!("added {}", share.name)));
+            engine.emit(Event::ShareAdded(share.name.clone()));
             engine.load_shares();
             engine.connect_and_crawl(Some(share.id)).await;
         });
@@ -677,6 +733,7 @@ impl Engine {
                                 state: DownloadState::Completed,
                                 downloaded: expected,
                                 total: expected,
+                                rate: 0.0,
                             });
                         }
                     } else {
@@ -726,7 +783,30 @@ impl Engine {
 
         for share_id in targets {
             let started = std::time::Instant::now();
-            let nodes = match library.crawl(&share_id).await {
+            let name = self
+                .store
+                .list()
+                .ok()
+                .and_then(|shares| shares.into_iter().find(|share| share.id == share_id))
+                .map_or_else(|| share_id.clone(), |share| share.name);
+            self.emit(Event::CrawlProgress {
+                share: name.clone(),
+                found: 0,
+            });
+            // At most a few times a second: a wide level comes back as a burst
+            // of listings, and a frame per listing is a frame per folder.
+            let last = parking_lot::Mutex::new(std::time::Instant::now());
+            let report = |found: usize| {
+                let mut last = last.lock();
+                if last.elapsed() >= std::time::Duration::from_millis(250) {
+                    *last = std::time::Instant::now();
+                    self.emit(Event::CrawlProgress {
+                        share: name.clone(),
+                        found,
+                    });
+                }
+            };
+            let nodes = match library.crawl_reporting(&share_id, report).await {
                 Ok(nodes) => nodes,
                 Err(error) => {
                     self.fail(&format!("crawl {share_id}"), error);
@@ -903,11 +983,49 @@ impl Engine {
                 Ok(stream) if stream.size() == 0 => {
                     engine.emit(Event::Error(format!("{} has no content", target.name)));
                 }
-                Ok(stream) => engine.emit(Event::PlaybackReady {
-                    target: Box::new(target),
-                    stream,
-                }),
+                Ok(stream) => {
+                    // Before mpv is even built: building it takes the UI thread
+                    // a moment, and the network can spend that moment on the
+                    // two reads every file opens with.
+                    stream.warm_edges();
+                    engine.emit(Event::PlaybackReady {
+                        target: Box::new(target),
+                        stream,
+                    })
+                }
                 Err(error) => engine.fail(&format!("open {}", target.name), error),
+            }
+        });
+    }
+
+    /// Fetch the blocks a file opens with into the cache, without playing it.
+    ///
+    /// For the episode after the one playing, so that autoplay — or a click on
+    /// "Play now" — starts from the cache rather than from two round trips. A
+    /// local copy needs none of this, and a failure here costs nothing but the
+    /// head start, so both are quietly skipped.
+    pub fn warm(&self, target: &PlaybackTarget) {
+        let engine = self.clone();
+        let share_id = target.share_id.clone();
+        let link_id = target.link_id.clone();
+        let uid = node_uid(&target.volume_id, &target.link_id);
+        self.runtime.spawn(async move {
+            let offline = engine
+                .catalog
+                .lock()
+                .offline_file(&share_id, &link_id)
+                .ok()
+                .flatten()
+                .is_some();
+            if offline {
+                return;
+            }
+            let Some(source) = engine.opened().map(|(_, source)| source) else {
+                return;
+            };
+            match source.open(&share_id, &uid).await {
+                Ok(stream) => stream.warm_edges(),
+                Err(error) => tracing::debug!(%error, "warming the next episode failed"),
             }
         });
     }
@@ -946,6 +1064,7 @@ impl Engine {
                     state: DownloadState::Queued,
                     downloaded: previous.as_ref().map_or(0, |item| item.downloaded),
                     total: previous.as_ref().map_or(0, |item| item.total),
+                    rate: 0.0,
                 },
             );
         }
@@ -1191,6 +1310,7 @@ impl Engine {
                 state: DownloadState::Cancelled,
                 downloaded,
                 total,
+                rate: 0.0,
             });
         }
         let mut downloads = self.downloads.lock();
@@ -1229,7 +1349,7 @@ impl Engine {
             anyhow::bail!("share is not connected");
         };
         let stream = source
-            .open(
+            .open_for_copy(
                 &target.share_id,
                 &node_uid(&target.volume_id, &target.link_id),
             )
@@ -1298,14 +1418,27 @@ impl Engine {
         output.seek(std::io::SeekFrom::Start(offset)).await?;
         self.update_download(&key, |item| item.downloaded = offset);
 
+        use futures::TryStreamExt as _;
+        let mut fetches = None;
         let mut last_snapshot = std::time::Instant::now();
+        let mut snapshot_bytes = offset;
         while block_index < block_sizes.len() {
+            // Dropped before a pause rather than held across it: a fetch left
+            // half-done for as long as the viewer stays paused comes back as a
+            // timed-out request, and a timed-out request fails the download.
+            if matches!(*command.borrow(), DownloadCommand::Pause) {
+                fetches = None;
+            }
             if !wait_until_runnable(&mut command).await {
                 output.sync_all().await?;
                 return Ok(DownloadEnd::Cancelled);
             }
             let size = block_sizes[block_index];
-            let bytes = stream.read_range(offset, size).await?;
+            let pending =
+                fetches.get_or_insert_with(|| fetch_in_order(&stream, &block_sizes, block_index));
+            let Some(bytes) = pending.try_next().await? else {
+                anyhow::bail!("block {block_index} never arrived");
+            };
             if bytes.len() as u64 != size {
                 anyhow::bail!(
                     "short block {block_index}: received {}, expected {size}",
@@ -1322,11 +1455,21 @@ impl Engine {
             if last_snapshot.elapsed() >= std::time::Duration::from_millis(100)
                 || block_index == block_sizes.len()
             {
+                let seconds = last_snapshot.elapsed().as_secs_f64();
+                let instant = (offset - snapshot_bytes) as f64 / seconds.max(f64::EPSILON);
                 self.update_download(&key, |item| {
                     item.state = DownloadState::Running;
                     item.downloaded = offset;
+                    // Smoothed, or the time left jumps about with every block
+                    // that took a little longer than the last.
+                    item.rate = if item.rate > 0.0 {
+                        0.8 * item.rate + 0.2 * instant
+                    } else {
+                        instant
+                    };
                 });
                 last_snapshot = std::time::Instant::now();
+                snapshot_bytes = offset;
             }
         }
         output.sync_all().await?;
@@ -1891,6 +2034,35 @@ fn resume_position(existing: u64, block_sizes: &[u64]) -> (usize, u64) {
     (block_sizes.len(), offset)
 }
 
+/// A file's blocks from `first` on, fetched several at a time and yielded in
+/// file order — which is what the resume marker's "the length is the
+/// boundary" rule needs. One at a time, a download runs at one block per round
+/// trip whatever the link can carry.
+fn fetch_in_order(
+    stream: &VideoStream,
+    block_sizes: &[u64],
+    first: usize,
+) -> futures::stream::BoxStream<'static, pstr_stream::Result<Vec<u8>>> {
+    use futures::StreamExt as _;
+    let start: u64 = block_sizes[..first].iter().sum();
+    let ranges: Vec<(u64, u64)> = block_sizes[first..]
+        .iter()
+        .scan(start, |offset, size| {
+            let range = (*offset, *size);
+            *offset += size;
+            Some(range)
+        })
+        .collect();
+    let stream = stream.clone();
+    futures::stream::iter(ranges)
+        .map(move |(offset, size)| {
+            let stream = stream.clone();
+            async move { stream.read_range(offset, size).await }
+        })
+        .buffered(DOWNLOAD_BLOCKS_IN_FLIGHT)
+        .boxed()
+}
+
 async fn wait_until_runnable(command: &mut tokio::sync::watch::Receiver<DownloadCommand>) -> bool {
     loop {
         let current = *command.borrow_and_update();
@@ -2008,11 +2180,15 @@ impl ImageCache {
     ///
     /// `None` while a fetch is in flight, and forever for a picture that turned
     /// out not to exist — the negative answer is remembered deliberately.
-    pub fn texture(&mut self, key: String, fetch: impl FnOnce()) -> Option<egui::TextureHandle> {
-        if let Some(texture) = self.textures.get(&key) {
+    ///
+    /// Borrows the key: this is asked once per tile per frame, and a hit — the
+    /// usual answer — should not cost an allocation.
+    pub fn texture(&mut self, key: &str, fetch: impl FnOnce()) -> Option<egui::TextureHandle> {
+        if let Some(texture) = self.textures.get(key) {
             return Some(texture.clone());
         }
-        if !self.missing.contains(&key) && self.requested.insert(key) {
+        if !self.missing.contains(key) && !self.requested.contains(key) {
+            self.requested.insert(key.to_owned());
             fetch();
         }
         None
@@ -2025,6 +2201,13 @@ impl ImageCache {
 
     pub fn mark_missing(&mut self, key: String) {
         self.missing.insert(key);
+    }
+
+    /// Forget one picture, so the next ask fetches it again.
+    pub fn forget(&mut self, key: &str) {
+        self.textures.remove(key);
+        self.requested.remove(key);
+        self.missing.remove(key);
     }
 
     /// Forget everything. Used when the catalog is replaced, so a recrawl that

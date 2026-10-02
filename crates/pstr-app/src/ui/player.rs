@@ -123,6 +123,12 @@ pub struct UpNextCard {
 }
 
 impl Overlay {
+    /// How much of the bottom of the window the controls take, the last time
+    /// they were drawn — so things floating over the picture can keep clear.
+    pub fn covered(&self) -> f32 {
+        self.chrome_height
+    }
+
     /// Fold this frame's pointer into the overlay's timer.
     pub fn observe(&mut self, ctx: &egui::Context) {
         let (now, pointer) = ctx.input(|input| (input.time, input.pointer.latest_pos()));
@@ -208,6 +214,11 @@ pub fn show(
         actions.push(Action::Player(Command::TogglePause));
     }
     if response.double_clicked() {
+        // The first half of a double click already paused, and a viewer who
+        // double-clicked asked for fullscreen, not for a pause — so the second
+        // half takes the pause back. Waiting out the double-click delay before
+        // pausing would make every single click feel late instead.
+        actions.push(Action::Player(Command::TogglePause));
         actions.push(Action::ToggleFullscreen);
     }
 
@@ -226,16 +237,31 @@ pub fn show(
         None => skip(ui, playback, rect, float_above, actions),
     }
 
-    if visible {
-        overlay.chrome_height = chrome(
-            ui,
-            playback,
-            neighbours,
-            rect,
-            overlay.chrome_height,
-            actions,
-        );
-    } else {
+    // Last frame's height, like everything else that has to clear the controls.
+    playback.lift_subtitles(
+        if visible { overlay.chrome_height } else { 0.0 },
+        rect.height(),
+    );
+
+    // Faded rather than switched, both ways: controls that blink out under a
+    // reading eye are more distracting than the ones that were there.
+    let fade = ctx.animate_bool_with_time(ui.id().with("chrome"), visible, 0.18);
+    if fade > 0.0 {
+        overlay.chrome_height = ui
+            .scope(|ui| {
+                ui.multiply_opacity(fade);
+                chrome(
+                    ui,
+                    playback,
+                    neighbours,
+                    rect,
+                    overlay.chrome_height,
+                    actions,
+                )
+            })
+            .inner;
+    }
+    if !visible {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         // The controls have to disappear on their own, and nothing else is
         // going to cause a frame while a film plays without the mouse moving.
@@ -610,28 +636,14 @@ fn chrome(
 }
 
 /// The gradient behind the title strip, fading downwards out of the top edge.
-///
-/// Drawn as a few bands rather than a real gradient — egui has no mesh gradient
-/// primitive, and at this size the banding is invisible.
 fn scrim_top(ui: &egui::Ui, rect: Rect) {
-    const BANDS: usize = 10;
-    let painter = ui.painter();
-    let band = rect.height() / BANDS as f32;
-    for index in 0..BANDS {
-        let fraction = 1.0 - index as f32 / (BANDS - 1) as f32;
-        let strip = Rect::from_min_size(
-            egui::pos2(rect.left(), rect.top() + band * index as f32),
-            Vec2::new(rect.width(), band + 1.0),
-        );
-        painter.rect_filled(
-            strip,
-            CornerRadius::ZERO,
-            // Squared, so the fade is dark where the text is and gone well
-            // before the middle of the picture — a linear ramp over a strip
-            // this tall greys the whole top third of the frame.
-            Color32::from_black_alpha((fraction * fraction * 225.0) as u8),
-        );
-    }
+    // Squared, so the fade is dark where the text is and gone well before the
+    // middle of the picture — a linear ramp over a strip this tall greys the
+    // whole top third of the frame.
+    fade(ui.painter(), rect, |t| {
+        let fraction = 1.0 - t;
+        fraction * fraction * 225.0
+    });
 }
 
 /// The wash behind the controls: flat over the whole strip, fading in above it.
@@ -642,27 +654,81 @@ fn scrim_top(ui: &egui::Ui, rect: Rect) {
 /// strip itself is one flat wash, and the ramp happens in the empty picture
 /// above it, where there is nothing to obscure.
 fn scrim_bottom(ui: &egui::Ui, strip: Rect) {
-    const BANDS: usize = 12;
     let painter = ui.painter();
     painter.rect_filled(
         strip,
         CornerRadius::ZERO,
         Color32::from_black_alpha(SCRIM_ALPHA as u8),
     );
+    let above = Rect::from_min_max(
+        egui::pos2(strip.left(), strip.top() - SCRIM_FADE),
+        egui::pos2(strip.right(), strip.top()),
+    );
+    // Squared again: the wash should meet the strip at full strength and be
+    // gone within a finger's width of picture above it.
+    fade(painter, above, |t| t * t * SCRIM_ALPHA);
+}
 
-    let band = SCRIM_FADE / BANDS as f32;
-    for index in 0..BANDS {
-        let fraction = (index + 1) as f32 / BANDS as f32;
-        let rect = Rect::from_min_size(
-            egui::pos2(strip.left(), strip.top() - SCRIM_FADE + band * index as f32),
-            Vec2::new(strip.width(), band + 1.0),
-        );
-        painter.rect_filled(
-            rect,
-            CornerRadius::ZERO,
-            // Squared again: the wash should meet the strip at full strength
-            // and be gone within a finger's width of picture above it.
-            Color32::from_black_alpha((fraction * fraction * SCRIM_ALPHA) as u8),
-        );
+/// Black over `rect`, at the alpha `curve` gives for each fraction of the way
+/// down it.
+///
+/// One mesh with a colour per row of vertices, which the GPU interpolates
+/// between. It replaced a stack of flat bands, and the bands were what showed:
+/// each overlapped the next by a pixel so no gap could open between them, and
+/// every overlap was a line of double darkness across the picture.
+fn fade(painter: &egui::Painter, rect: Rect, curve: impl Fn(f32) -> f32) {
+    /// Enough rows that the curve between them reads as a curve.
+    const ROWS: u32 = 16;
+    let mut mesh = egui::Mesh::default();
+    for row in 0..=ROWS {
+        let t = row as f32 / ROWS as f32;
+        let y = egui::lerp(rect.top()..=rect.bottom(), t);
+        let colour = Color32::from_black_alpha(curve(t).clamp(0.0, 255.0) as u8);
+        mesh.colored_vertex(egui::pos2(rect.left(), y), colour);
+        mesh.colored_vertex(egui::pos2(rect.right(), y), colour);
+        if row > 0 {
+            let base = (row - 1) * 2;
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base + 1, base + 3, base + 2);
+        }
     }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// What a key just did, in a pill near the top of the picture, for a moment.
+///
+/// Returns whether it is still showing.
+pub fn osd(ctx: &egui::Context, text: &str, at: f64) -> bool {
+    /// How long it stays, and how much of that is fading out.
+    const SECONDS: f64 = 0.9;
+    const FADE: f64 = 0.25;
+
+    let age = ctx.input(|input| input.time) - at;
+    if age >= SECONDS {
+        return false;
+    }
+    let opacity = ((SECONDS - age) / FADE).clamp(0.0, 1.0) as f32;
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("osd"),
+    ));
+    let galley = painter.layout_no_wrap(text.to_owned(), theme::Role::Title.font(), Color32::WHITE);
+    let size = galley.size() + Vec2::new(36.0, 18.0);
+    let screen = ctx.content_rect();
+    let frame = Rect::from_center_size(
+        egui::pos2(screen.center().x, screen.top() + TITLE_HEIGHT + 40.0),
+        size,
+    );
+    painter.rect_filled(
+        frame,
+        CornerRadius::same((size.y / 2.0) as u8),
+        Color32::from_black_alpha((190.0 * opacity) as u8),
+    );
+    painter.galley_with_override_text_color(
+        frame.min + Vec2::new(18.0, 9.0),
+        galley,
+        Color32::WHITE.gamma_multiply(opacity),
+    );
+    ctx.request_repaint();
+    true
 }

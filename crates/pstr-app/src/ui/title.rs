@@ -30,10 +30,10 @@ pub fn show(
         return;
     };
 
-    if ui.button("Library").clicked() {
+    if back_link(ui).clicked() {
         actions.push(Action::Goto(Page::Library));
     }
-    ui.add_space(10.0);
+    ui.add_space(6.0);
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -41,52 +41,140 @@ pub fn show(
             header(ui, art, title, &offline, actions);
             ui.add_space(18.0);
 
-            for (index, season) in title.seasons.iter().enumerate() {
-                let open = index == 0 || title.seasons.len() == 1;
-                egui::CollapsingHeader::new(
-                    theme::Role::Subhead
-                        .rich(format!(
-                            "{}  ·  {}",
-                            season.label(),
-                            ui::library::plural(season.episodes.len(), "episode")
-                        ))
-                        .strong(),
-                )
-                .id_salt(("season", index))
-                .default_open(open)
-                .show(ui, |ui| {
-                    let season_keys: Vec<_> = season.episodes.iter().map(key_of).collect();
-                    let all_offline = season_keys.iter().all(|key| offline.files.contains(key));
-                    if all_offline {
-                        if ui
-                            .button("Delete season")
-                            .on_hover_text("Delete the offline copies; keep the online source")
-                            .clicked()
-                        {
-                            for key in season_keys {
-                                actions.push(Action::RemoveDownload(key, false));
-                            }
-                        }
-                    } else if ui
-                        .button("Download season")
-                        .on_hover_text("Download every episode in this season")
-                        .clicked()
-                    {
-                        actions.push(Action::MakeOffline(
-                            season
-                                .episodes
-                                .iter()
-                                .map(|episode| PlaybackTarget::new(title, episode))
-                                .collect(),
-                        ));
+            // One season at a time, picked from a row of pills, rather than
+            // every season stacked as a collapsing header: a four-season show
+            // was a page of headers to scroll past to reach the one being
+            // watched. The one opened first is the one with the next episode.
+            let picked_id = ui.id().with(("season", &title.key));
+            let default = title
+                .next_up()
+                .and_then(|next| {
+                    title.seasons.iter().position(|season| {
+                        season
+                            .episodes
+                            .iter()
+                            .any(|episode| episode.node.link_id == next.node.link_id)
+                    })
+                })
+                .unwrap_or(0);
+            let mut picked = ui
+                .data(|data| data.get_temp::<usize>(picked_id))
+                .unwrap_or(default)
+                .min(title.seasons.len().saturating_sub(1));
+
+            let Some(season) = title.seasons.get(picked) else {
+                return;
+            };
+            ui.horizontal(|ui| {
+                if title.seasons.len() > 1 {
+                    let labels: Vec<String> =
+                        title.seasons.iter().map(|season| season.label()).collect();
+                    let choices: Vec<(usize, &str)> = labels
+                        .iter()
+                        .enumerate()
+                        .map(|(index, label)| (index, label.as_str()))
+                        .collect();
+                    if let Some(index) = ui::widgets::segmented(ui, picked, &choices) {
+                        picked = index;
+                        ui.data_mut(|data| data.insert_temp(picked_id, index));
                     }
-                    for episode in &season.episodes {
-                        episode_row(ui, art, title, season, episode, &offline, actions);
-                    }
+                    ui.add_space(10.0);
+                }
+                ui.label(ui::muted(ui::library::plural(
+                    season.episodes.len(),
+                    "episode",
+                )));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    season_download(ui, title, season, &offline, actions);
                 });
-                ui.add_space(6.0);
+            });
+            ui.add_space(10.0);
+
+            let Some(season) = title.seasons.get(picked) else {
+                return;
+            };
+            for episode in &season.episodes {
+                episode_row(ui, art, title, season, episode, &offline, actions);
             }
+            ui.add_space(12.0);
         });
+}
+
+/// A title's poster, at the poster's own shape, with how far into it the
+/// viewer is along its foot.
+fn poster(ui: &mut egui::Ui, texture: &egui::TextureHandle, progress: Option<f64>) {
+    let size = egui::vec2(180.0, 270.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let radius = egui::CornerRadius::same(10);
+    ui.painter()
+        .add(theme::tile_shadow(1.0).as_shape(rect, radius));
+    ui.painter().add(
+        egui::epaint::RectShape::filled(rect, radius, egui::Color32::WHITE)
+            .with_texture(texture.id(), ui::cover_uv(texture.size_vec2(), size)),
+    );
+    if let Some(progress) = progress {
+        let track = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 4.0),
+            rect.right_bottom(),
+        );
+        let painter = ui.painter().with_clip_rect(track);
+        painter.rect_filled(rect, radius, egui::Color32::from_black_alpha(150));
+        let mut played = rect;
+        played.set_width(rect.width() * progress.clamp(0.0, 1.0) as f32);
+        theme::accent_fill(&painter, played, radius, 0.0);
+    }
+}
+
+/// "← Library", as a link rather than a button: it is navigation, and a
+/// filled button beside the page's real actions competed with them.
+fn back_link(ui: &mut egui::Ui) -> egui::Response {
+    let text = theme::Role::Label.rich("←  Library");
+    let response = ui.add(egui::Label::new(text.color(theme::muted())).sense(egui::Sense::click()));
+    if response.hovered() {
+        ui.painter().hline(
+            response.rect.x_range(),
+            response.rect.bottom(),
+            egui::Stroke::new(1.0, theme::muted()),
+        );
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Back (Esc, Alt ←)")
+}
+
+/// Download, or delete, a whole season.
+fn season_download(
+    ui: &mut egui::Ui,
+    title: &Title,
+    season: &Season,
+    offline: &OfflineView<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let season_keys: Vec<_> = season.episodes.iter().map(key_of).collect();
+    let all_offline = season_keys.iter().all(|key| offline.files.contains(key));
+    if all_offline {
+        if ui
+            .button("Delete season")
+            .on_hover_text("Delete the offline copies; keep the online source")
+            .clicked()
+        {
+            for key in season_keys {
+                actions.push(Action::RemoveDownload(key, false));
+            }
+        }
+    } else if ui
+        .button("Download season")
+        .on_hover_text("Download every episode in this season")
+        .clicked()
+    {
+        actions.push(Action::MakeOffline(
+            season
+                .episodes
+                .iter()
+                .map(|episode| PlaybackTarget::new(title, episode))
+                .collect(),
+        ));
+    }
 }
 
 /// The still, the name and the one button that matters.
@@ -115,20 +203,32 @@ fn header(
 
     ui.add_space(6.0);
     ui.horizontal_top(|ui| {
-        ui::card(
-            ui,
-            Card {
-                art: picture,
-                name: &title.name,
-                subtitle: String::new(),
-                progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
-                badge: None,
-                width: theme::CARD_WIDTH,
-            },
-        );
+        match &picture {
+            // A poster is drawn as a poster. Fitted into the 16:9 tile the grid
+            // uses, it was a narrow strip of picture between two bars.
+            Some((texture, pstr_core::metadata::ArtShape::Portrait)) => {
+                poster(ui, texture, title.resume().and_then(|e| e.progress()));
+            }
+            _ => {
+                ui::card(
+                    ui,
+                    Card {
+                        art: picture,
+                        name: &title.name,
+                        subtitle: String::new(),
+                        progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
+                        badge: None,
+                        width: theme::CARD_WIDTH,
+                    },
+                );
+            }
+        }
 
-        ui.add_space(18.0);
+        ui.add_space(22.0);
         ui.vertical(|ui| {
+            // Text in a column a person can read, with the picture to the
+            // right of it rather than under it.
+            ui.set_max_width(ui.available_width().min(820.0));
             ui.label(theme::Role::Display.rich(&title.name).strong());
             // The provider's name for it, when it is not the one the files use.
             // Worth showing rather than replacing the filename's: a viewer
@@ -149,9 +249,17 @@ fn header(
             ui.horizontal(|ui| {
                 if let Some(episode) = title.next_up() {
                     let resuming = episode.resume_at().is_some();
+                    // Where it resumes, in the button that resumes it. As a
+                    // label of its own it ended up three controls further
+                    // along, after the download buttons, reading as a fact
+                    // about those.
+                    let at = episode
+                        .resume_at()
+                        .map(|at| format!("  ·  {}", ui::format_time(at)))
+                        .unwrap_or_default();
                     let label = match (resuming, episode.numbering()) {
-                        (true, Some(numbering)) => format!("Resume {numbering}"),
-                        (true, None) => "Resume".to_string(),
+                        (true, Some(numbering)) => format!("Resume {numbering}{at}"),
+                        (true, None) => format!("Resume{at}"),
                         (false, Some(numbering)) if title.kind == TitleKind::Series => {
                             format!("Play {numbering}")
                         }
@@ -159,6 +267,19 @@ fn header(
                     };
                     if ui::accent_button(ui, &label).clicked() {
                         actions.push(Action::Play(PlaybackTarget::new(title, episode)));
+                    }
+                    // Beside the button it is the alternative to.
+                    if resuming
+                        && ui
+                            .button("Start over")
+                            .on_hover_text("Play from the beginning")
+                            .clicked()
+                    {
+                        actions.push(Action::Play(PlaybackTarget::from_node(
+                            title,
+                            &episode.node,
+                            None,
+                        )));
                     }
                     let title_keys: Vec<_> = title.episodes().map(key_of).collect();
                     let all_offline = title_keys.iter().all(|key| offline.files.contains(key));
@@ -201,20 +322,6 @@ fn header(
                         ui.label(ui::muted(format!("{active} downloading")));
                     } else if all_offline {
                         ui.label(ui::muted("Available offline"));
-                    }
-                    if resuming && let Some(at) = episode.resume_at() {
-                        ui.label(ui::muted(format!("at {}", ui::format_time(at))));
-                        if ui
-                            .button("Start over")
-                            .on_hover_text("Play from the beginning")
-                            .clicked()
-                        {
-                            actions.push(Action::Play(PlaybackTarget::from_node(
-                                title,
-                                &episode.node,
-                                None,
-                            )));
-                        }
                     }
                 }
 
@@ -299,7 +406,10 @@ fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::S
         egui::epaint::RectShape::filled(
             rect,
             egui::CornerRadius::ZERO,
-            theme::background().gamma_multiply(if ramps { 0.90 } else { 0.94 }),
+            // Lighter with the ramps on: the horizontal one below is solid
+            // where the text is, so this coat only has to calm the picture's
+            // right side, not make it disappear.
+            theme::background().gamma_multiply(if ramps { 0.72 } else { 0.94 }),
         )
         .into(),
     );
@@ -340,11 +450,50 @@ fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::S
 /// What the provider had to say. Only ever drawn under a match.
 fn description(ui: &mut egui::Ui, found: &TitleMetadata) {
     if !found.genres.is_empty() {
-        ui.label(ui::muted(found.genres.join(" · ")));
-        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for genre in &found.genres {
+                ui::widgets::chip(ui, genre);
+            }
+        });
+        ui.add_space(8.0);
     }
     if let Some(overview) = &found.overview {
-        ui.add(egui::Label::new(theme::Role::Label.rich(overview).color(theme::text())).wrap());
+        // Four lines, then "More". A provider's synopsis runs to three
+        // paragraphs on a long show, and all of them pushed the episodes —
+        // what the page is for — below the fold.
+        const LINES: usize = 4;
+        let id = ui.id().with(("overview", &found.remote_id));
+        let open = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+        let mut job = egui::text::LayoutJob::simple(
+            overview.clone(),
+            theme::Role::Label.font(),
+            theme::text(),
+            ui.available_width(),
+        );
+        if !open {
+            job.wrap.max_rows = LINES;
+            job.wrap.overflow_character = Some('…');
+        }
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let clipped = galley.elided;
+        ui.label(galley);
+        if clipped || open {
+            let toggle = ui.add(
+                egui::Label::new(
+                    theme::Role::Caption
+                        .rich(if open { "Less" } else { "More" })
+                        .color(theme::accent()),
+                )
+                .sense(egui::Sense::click()),
+            );
+            if toggle
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                ui.data_mut(|data| data.insert_temp(id, !open));
+            }
+        }
     }
     if let Some(url) = &found.url {
         ui.add_space(8.0);
@@ -398,7 +547,11 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
     parts.join("  ·  ")
 }
 
-/// One line per file: click anywhere on it to play.
+/// How big an episode's still is drawn.
+const STILL: egui::Vec2 = egui::vec2(160.0, 90.0);
+
+/// One row per file: its still, its name and what it is about, and the two
+/// things that can be done to it besides playing it.
 fn episode_row(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
@@ -417,158 +570,292 @@ fn episode_row(
         )
     });
     let watched = episode.is_watched();
-    egui::Frame::new()
-        .fill(if watched {
-            theme::background()
-        } else {
-            theme::card()
-        })
-        .corner_radius(egui::CornerRadius::same(6))
-        .inner_margin(egui::Margin::symmetric(10, 8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                // An explicit target rather than a clickable row: the row also
-                // carries a checkbox, and a click that means "seen" must never
-                // be one that starts a 1.4 GiB stream instead.
-                if ui
-                    .add(egui::Button::new(theme::Role::Label.rich("▶")).fill(theme::card_hover()))
-                    .on_hover_text("Play")
-                    .clicked()
-                {
-                    actions.push(Action::Play(PlaybackTarget::new(title, episode)));
-                }
-                let key = key_of(episode);
-                let current = offline.downloads.iter().find(|item| item.key == key);
-                if offline.files.contains(&key) {
-                    if ui
-                        .small_button("Delete")
-                        .on_hover_text("Delete the offline copy; keep the online source")
-                        .clicked()
-                    {
-                        actions.push(Action::RemoveDownload(key.clone(), false));
-                    }
-                    ui.label(ui::muted("✓ Offline"));
-                } else if let Some(item) = current {
-                    match item.state {
-                        DownloadState::Running | DownloadState::Queued => {
-                            if ui.small_button("Pause").clicked() {
-                                actions.push(Action::PauseDownload(key.clone()));
-                            }
-                            ui.label(ui::muted(format!("↓ {:.0}%", item.percent() * 100.0)));
-                        }
-                        DownloadState::Paused => {
-                            if ui.small_button("Resume").clicked() {
-                                actions.push(Action::ResumeDownload(key.clone()));
-                            }
-                            ui.label(ui::muted("Paused · partial kept"));
-                        }
-                        DownloadState::Cancelled | DownloadState::Failed(_) => {
-                            if ui.small_button("Resume").clicked() {
-                                actions.push(Action::ResumeDownload(key.clone()));
-                            }
-                            ui.label(ui::muted("Partial"));
-                        }
-                        DownloadState::Completed => {
-                            ui.label(ui::muted("✓ Offline"));
-                        }
-                    }
-                } else if ui
-                    .small_button("Download")
-                    .on_hover_text("Make available offline")
-                    .clicked()
-                {
-                    actions.push(Action::MakeOffline(vec![PlaybackTarget::new(
-                        title, episode,
-                    )]));
-                }
+    let row_id = ui.id().with(("episode", &episode.node.link_id));
 
-                let numbering = episode
-                    .numbering()
-                    .or_else(|| season.number.map(|number| format!("S{number:02}")))
-                    .unwrap_or_default();
-                ui.add_sized(
-                    [66.0, 18.0],
-                    egui::Label::new(
-                        egui::RichText::new(numbering)
-                            .monospace()
-                            .color(theme::muted()),
-                    ),
-                );
+    let frame = egui::Frame::new()
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::same(8));
+    let mut prepared = frame.begin(ui);
+    {
+        let ui = &mut prepared.content_ui;
+        ui.set_width(ui.available_width());
+        ui.horizontal_top(|ui| {
+            still(ui, art, title, episode, watched, actions);
+            ui.add_space(6.0);
+
+            let controls = 96.0;
+            let text_width = (ui.available_width() - controls).max(120.0);
+            ui.vertical(|ui| {
+                ui.set_width(text_width);
+                ui.spacing_mut().item_spacing.y = 3.0;
 
                 // The provider's name for the episode, when there is one:
                 // "The Immortal Legion" reads as an episode, and
                 // "[Reaktor] … E57 v2 [1080p][x265].mkv" reads as a filename.
+                let numbering = episode
+                    .numbering()
+                    .or_else(|| season.number.map(|number| format!("S{number:02}")))
+                    .unwrap_or_default();
                 let name = found
                     .as_ref()
                     .and_then(|(name, _, _)| name.clone())
                     .unwrap_or_else(|| episode.detail().to_string());
-                let label = egui::RichText::new(name).color(if watched {
-                    theme::muted()
-                } else {
-                    theme::text()
-                });
-                let hover = match &found {
-                    // The synopsis, where the provider has one — AniList does
-                    // not, and the filename is worth showing either way.
-                    Some((_, Some(overview), _)) => {
-                        format!("{}\n\n{overview}", episode.node.name)
-                    }
-                    _ => episode.node.name.clone(),
-                };
-                ui.add(egui::Label::new(label).truncate())
-                    .on_hover_text(hover);
-
-                if let Some((_, _, Some(air_date))) = &found {
-                    ui.label(ui::muted(air_date.clone()));
+                let mut job = egui::text::LayoutJob::default();
+                if !numbering.is_empty() {
+                    job.append(
+                        &format!("{numbering}   "),
+                        0.0,
+                        egui::TextFormat::simple(egui::FontId::monospace(13.0), theme::muted()),
+                    );
                 }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut checked = watched;
-                    if ui
-                        .checkbox(&mut checked, "")
-                        .on_hover_text(if watched {
-                            "Mark unwatched"
+                job.append(
+                    &name,
+                    0.0,
+                    egui::TextFormat::simple(
+                        theme::Role::Body.font(),
+                        if watched {
+                            theme::muted()
                         } else {
-                            "Mark watched"
-                        })
-                        .changed()
-                    {
-                        actions.push(Action::SetWatched {
-                            share_id: episode.node.share_id.clone(),
-                            link_id: episode.node.link_id.clone(),
-                            watched: checked,
-                            duration: episode.watch.and_then(|watch| watch.duration_secs),
-                        });
-                    }
+                            theme::text()
+                        },
+                    ),
+                );
+                job.wrap.max_rows = 1;
+                job.wrap.overflow_character = Some('…');
+                ui.add(egui::Label::new(job).truncate())
+                    .on_hover_text(&episode.node.name);
 
-                    match episode.node.size {
-                        // A file the share says is empty is one that will not
-                        // play — an upload that never finished, usually. Worth
-                        // saying so on the row rather than only when a click on
-                        // it comes back with "has no content".
-                        Some(0) => {
-                            ui.label(theme::Role::Caption.rich("empty").color(theme::danger()))
-                            .on_hover_text(
-                                "The share reports no content for this file; it cannot be played.",
-                            );
-                        }
-                        Some(size) => {
-                            ui.label(ui::muted(ui::format_size(size)));
-                        }
-                        None => {}
-                    }
-                    if let Some(at) = episode.resume_at() {
-                        ui.label(
-                            theme::Role::Caption
-                                .rich(format!("resume {}", ui::format_time(at)))
-                                .color(theme::accent()),
-                        );
-                    }
-                });
+                ui.label(ui::muted(details(
+                    episode,
+                    found.as_ref().and_then(|f| f.2.as_deref()),
+                )));
+
+                if let Some((_, Some(overview), _)) = &found {
+                    let mut job = egui::text::LayoutJob::simple(
+                        overview.clone(),
+                        theme::Role::Caption.font(),
+                        theme::muted(),
+                        text_width,
+                    );
+                    job.wrap.max_rows = 2;
+                    job.wrap.overflow_character = Some('…');
+                    ui.add(egui::Label::new(job)).on_hover_text(overview);
+                }
+            });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.set_min_height(STILL.y);
+                if ui::widgets::watched_mark(ui, watched)
+                    .on_hover_text(if watched {
+                        "Mark unwatched"
+                    } else {
+                        "Mark watched"
+                    })
+                    .clicked()
+                {
+                    actions.push(Action::SetWatched {
+                        share_id: episode.node.share_id.clone(),
+                        link_id: episode.node.link_id.clone(),
+                        watched: !watched,
+                        duration: episode.watch.and_then(|watch| watch.duration_secs),
+                    });
+                }
+                ui.add_space(6.0);
+                download(ui, title, episode, offline, actions);
             });
         });
-    ui.add_space(4.0);
+    }
+    // The row lights up under the pointer, so it is clear which file the
+    // buttons on the right belong to in a list of thirty.
+    let response = prepared.allocate_space(ui);
+    let lit = ui.ctx().animate_bool_with_time(
+        row_id,
+        response.hovered() || response.contains_pointer(),
+        0.10,
+    );
+    prepared.frame.fill = theme::card().gamma_multiply(0.35 + 0.65 * lit);
+    prepared.paint(ui);
+    ui.add_space(2.0);
+}
+
+/// The grey line under an episode's name: when it aired, how big it is, and
+/// where it would resume.
+fn details(episode: &Episode, air_date: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    if let Some(at) = episode.resume_at() {
+        let left = episode
+            .watch
+            .and_then(|watch| watch.duration_secs)
+            .map(|duration| format!(" · {} left", ui::format_time(duration - at)))
+            .unwrap_or_default();
+        parts.push(format!("Resume at {}{left}", ui::format_time(at)));
+    } else if episode.is_watched() {
+        parts.push("Watched".into());
+    }
+    if let Some(date) = air_date {
+        parts.push(date.to_owned());
+    }
+    match episode.node.size {
+        // A file the share says is empty is one that will not play — an upload
+        // that never finished, usually. Worth saying on the row rather than
+        // only when a click on it comes back with "has no content".
+        Some(0) => parts.push("empty — this file cannot be played".into()),
+        Some(size) => parts.push(ui::format_size(size)),
+        None => {}
+    }
+    parts.join("  ·  ")
+}
+
+/// The still, which is also the play button.
+///
+/// An explicit target rather than a clickable row: the row also carries the
+/// watched mark and the download button, and a click that meant either of
+/// those must never be one that starts a 1.4 GiB stream instead.
+fn still(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    title: &Title,
+    episode: &Episode,
+    watched: bool,
+    actions: &mut Vec<Action>,
+) {
+    let (rect, response) = ui.allocate_exact_size(STILL, egui::Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let radius = egui::CornerRadius::same(8);
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, theme::card_hover());
+    // Asked for only once the row is on screen: a season of twenty-five is
+    // twenty-five requests, and most of them are never scrolled to.
+    if let Some(texture) = art.still(&title.key, episode) {
+        let tint = if watched {
+            egui::Color32::from_gray(150)
+        } else {
+            egui::Color32::WHITE
+        };
+        painter.add(
+            egui::epaint::RectShape::filled(rect, radius, tint)
+                .with_texture(texture.id(), ui::cover_uv(texture.size_vec2(), rect.size())),
+        );
+    }
+
+    let hover = ui
+        .ctx()
+        .animate_bool_with_time(response.id, response.hovered(), 0.12);
+    if hover > 0.0 {
+        painter.rect_filled(
+            rect,
+            radius,
+            egui::Color32::from_black_alpha((90.0 * hover) as u8),
+        );
+    }
+    // A play mark, always faintly there and full under the pointer.
+    let centre = rect.center();
+    painter.circle_filled(
+        centre,
+        18.0,
+        egui::Color32::from_black_alpha((110.0 + 80.0 * hover) as u8),
+    );
+    let ink = egui::Color32::WHITE.gamma_multiply(0.75 + 0.25 * hover);
+    let r = 7.0;
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            centre + egui::vec2(-r * 0.6, -r),
+            centre + egui::vec2(r, 0.0),
+            centre + egui::vec2(-r * 0.6, r),
+        ],
+        ink,
+        egui::Stroke::NONE,
+    ));
+
+    if let Some(progress) = episode.progress() {
+        let track = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 4.0),
+            rect.right_bottom(),
+        );
+        let painter = painter.with_clip_rect(track);
+        painter.rect_filled(rect, radius, egui::Color32::from_black_alpha(150));
+        let mut played = rect;
+        played.set_width(rect.width() * progress.clamp(0.0, 1.0) as f32);
+        theme::accent_fill(&painter, played, radius, 0.0);
+    }
+
+    if response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(if episode.resume_at().is_some() {
+            "Resume"
+        } else {
+            "Play"
+        })
+        .clicked()
+    {
+        actions.push(Action::Play(PlaybackTarget::new(title, episode)));
+    }
+}
+
+/// One button that is the file's whole offline story: download it, see it
+/// coming, pause it, or delete the copy.
+fn download(
+    ui: &mut egui::Ui,
+    title: &Title,
+    episode: &Episode,
+    offline: &OfflineView<'_>,
+    actions: &mut Vec<Action>,
+) {
+    use ui::widgets::{DownloadGlyph, download_button};
+
+    let key = key_of(episode);
+    let current = offline.downloads.iter().find(|item| item.key == key);
+    if offline.files.contains(&key) {
+        if download_button(ui, DownloadGlyph::Done)
+            .on_hover_text("Available offline. Click to delete the copy; the share keeps the file.")
+            .clicked()
+        {
+            actions.push(Action::RemoveDownload(key, false));
+        }
+        return;
+    }
+    match current.map(|item| (&item.state, item.percent())) {
+        Some((DownloadState::Running | DownloadState::Queued, fraction)) => {
+            if download_button(ui, DownloadGlyph::Progress(fraction))
+                .on_hover_text(format!(
+                    "Downloading, {:.0}%. Click to pause.",
+                    fraction * 100.0
+                ))
+                .clicked()
+            {
+                actions.push(Action::PauseDownload(key));
+            }
+        }
+        Some((
+            DownloadState::Paused | DownloadState::Cancelled | DownloadState::Failed(_),
+            fraction,
+        )) => {
+            if download_button(ui, DownloadGlyph::Paused(fraction))
+                .on_hover_text(format!(
+                    "Stopped at {:.0}%. Click to carry on.",
+                    fraction * 100.0
+                ))
+                .clicked()
+            {
+                actions.push(Action::ResumeDownload(key));
+            }
+        }
+        Some((DownloadState::Completed, _)) => {
+            download_button(ui, DownloadGlyph::Done).on_hover_text("Available offline");
+        }
+        None => {
+            if download_button(ui, DownloadGlyph::Download)
+                .on_hover_text("Download, to play without a connection")
+                .clicked()
+            {
+                actions.push(Action::MakeOffline(vec![PlaybackTarget::new(
+                    title, episode,
+                )]));
+            }
+        }
+    }
 }
 
 fn key_of(episode: &Episode) -> DownloadKey {

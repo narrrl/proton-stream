@@ -146,6 +146,103 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B60 — a failed "Add and crawl" left the crawl spinner running forever
+
+**Symptom.** Pasting a link without its `#` fragment, or one already added,
+and pressing *Add and crawl* cleared the form and put "crawling" in the top
+bar, where it stayed until the app was restarted. The Refresh button never
+came back. The only sign of the real problem was a status line that had
+already faded.
+
+**Cause.** `Action::AddShare` set `crawling` and cleared the form before the
+engine had answered. `Engine::add_share` reported a refused link through
+`fail`, which sends a plain `Error`, so nothing ever sent `CrawlFinished` for
+a crawl that never started.
+
+**Fix.** The engine answers with `ShareAdded` or `ShareRejected`, and the
+form keeps its contents until one of them arrives. A rejection clears
+`crawling` and shows its reason inside the form. The link is also checked
+while it is typed, using `pstr_core::shares::share_token`, the same check
+`ShareStore::add` runs first, so most refusals never reach the engine.
+
+**Verified.** `ui::shares::tests`: `a_link_without_its_key_is_refused_while_typing`
+and `a_share_already_added_is_refused_while_typing`.
+
+### B59 — every poster fell back to initials after each match run
+
+**Symptom.** After *Match the library*, and after picking or forgetting a
+match by hand, every tile in the grid dropped to its initials and faded the
+same picture back in.
+
+**Cause.** `Event::Metadata` cleared the whole poster cache, because any
+title's record might have changed.
+
+**Fix.** `app::changed_art` compares each title's tile-art URL before and
+after, and only those titles are forgotten. A title whose URL did not change
+keeps its texture.
+
+**Verified.** `app::tests::a_match_run_that_changes_nothing_keeps_every_poster`
+and `only_titles_whose_art_moved_lose_their_poster`.
+
+### B58 — "Nothing in the library yet" flashed at every launch
+
+**Symptom.** For the fraction of a second it took to read the catalog, the
+library page showed the empty-library message and its *Add a share* button,
+including for a library with hundreds of titles.
+
+**Cause.** `App::library` starts as `Library::default()`, which is empty, and
+the page could not tell "not read yet" from "nothing in it".
+
+**Fix.** `App::loaded` is set by the first `LibraryLoaded`. Until then the
+page draws two rows of blank tiles in the shape of the grid.
+
+### B57 — subtitles drawn under the player's controls
+
+**Symptom.** While the controls were up, the bottom subtitle line sat
+behind the seek bar and the time labels and could not be read. The controls
+are up whenever the mouse moves, which is when someone is watching.
+
+**Cause.** mpv positions subtitles against the whole window. Nothing told it
+that the bottom strip of the window was covered.
+
+**Fix.** `Playback::lift_subtitles` sets mpv's `sub-pos` from the measured
+height of the controls while they are visible, and back to 100 when they
+hide. It sends a command only when the value changes. `sub-pos` rather than a
+margin, because it also moves ASS subtitles.
+
+### B56 — horizontal lines across the player's scrims
+
+**Symptom.** Thin dark lines ran across the picture in the fade under the
+title strip and the fade above the controls.
+
+**Cause.** Each scrim was a stack of flat bands, each one pixel taller than
+its step so no gap could open between them. Every overlap was a line drawn
+at twice the alpha.
+
+**Fix.** `ui::player::fade` draws one mesh with a colour per row of vertices,
+and the GPU interpolates between them. There are no overlaps left to show.
+
+### B55 — every newly fetched block waited for its own fsync before playback
+
+**Symptom.** Not visible as a bug. Every block the player had to wait for
+from the network, which means the first frame and the block after every
+seek, also waited for a 4 MiB write to the block cache, an fsync of it, and an
+fsync of its sidecar.
+
+**Cause.** `block_at` awaited `DiskCache::put` before returning the block, and
+`write_entry` synced both files.
+
+**Fix.** The put runs in a spawned task behind the read. The sidecar is no
+longer synced: the ordering the module note describes depends only on the
+block's sync, and a sidecar lost in a crash only turns a valid entry into a
+miss. Downloads now open their streams with `StreamSource::open_for_copy`,
+which reads the disk cache but never writes to it. A download no longer
+pushes the episode just watched out of the cache to store bytes that are about
+to be on disk anyway.
+
+**Verified.** `stream::tests::a_fetched_block_reaches_the_disk_cache_without_the_read_waiting_for_it`
+and `a_copying_stream_reads_the_disk_cache_but_never_adds_to_it`.
+
 ### B54 — a window on another workspace was declared "not responding"
 
 **Symptom.** On Hyprland, switching to another workspace while `proton-stream`

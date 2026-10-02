@@ -258,9 +258,8 @@ fn poster(art: &mut Art<'_>, found: &TitleMetadata) -> Option<egui::TextureHandl
         .or_else(|| found.backdrop_url.clone())?;
     let key = format!("option:{}:{}", found.provider.as_str(), found.remote_id);
     let engine = art.engine;
-    let requested = key.clone();
     art.posters
-        .texture(key, || engine.request_poster(requested, url))
+        .texture(&key, || engine.request_poster(key.clone(), url))
 }
 
 /// `Film · 2017 · 26 episodes · ★ 8.2`, with whatever the provider left out

@@ -92,7 +92,12 @@ impl Harness {
             .context("eframe was built without a glow context")?;
         // SAFETY: `CreationContext` is handed to us on the UI thread with the
         // context current, which is the same guarantee `App::ui` gives.
-        let video = unsafe { VideoSurface::new(Arc::clone(&player), gl, cc.egui_ctx.clone()) }?;
+        let video = unsafe {
+            VideoSurface::new(Arc::clone(&player), gl, {
+                let ctx = cc.egui_ctx.clone();
+                move || ctx.request_repaint()
+            })
+        }?;
 
         Ok(Self {
             player,

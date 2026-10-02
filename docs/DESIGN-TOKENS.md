@@ -101,6 +101,24 @@ for a press, 0.10–0.12 s for a hover, 0.16 s for the tab pill's travel and 0.2
 for artwork arriving. Compose's defaults are close enough that nothing here
 overrides them.
 
+## Desktop widgets
+
+`pstr-app/src/ui/widgets.rs` holds the hand-painted controls. Use them instead
+of egui's own in new code:
+
+- `toggle`: an on/off switch. It replaces `ui.checkbox`, whose unchecked box
+  is filled with the card colour and so disappears on a card.
+- `settings_group` / `settings_row`: one card per subject, with the name and
+  description on the left and the control on the right (the libadwaita
+  preferences pattern `proton-drive-linux` uses).
+- `segmented`: pills on a shared track, for picking one of a few values
+  (library filter, season).
+- `chip`: a small rounded fact, such as a genre.
+- `watched_mark`, `download_button`: the round icon buttons on an episode row.
+
+Messages go through `ui::toast::Toasts` (via `App::note`), not a status line.
+Destructive actions ask through `ui::confirm`.
+
 ## Adding a token
 
 Name it in the owning client first, restate it on the other side, and extend the

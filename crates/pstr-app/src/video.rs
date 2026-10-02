@@ -67,8 +67,10 @@ pub struct VideoSurface {
 impl VideoSurface {
     /// Attach a renderer to `player` on the current OpenGL context.
     ///
-    /// `ctx` is woken whenever mpv has a new frame; without that the picture
-    /// would only advance when the viewer moved the mouse.
+    /// `wake` is called whenever mpv has a new frame, and should ask the window
+    /// for one. Without it the picture would only advance when the viewer moved
+    /// the mouse. The app's goes through [`crate::engine::Engine::wake`], which
+    /// knows whether the picture is on screen to be drawn at all.
     ///
     /// # Safety
     ///
@@ -78,11 +80,11 @@ impl VideoSurface {
     pub unsafe fn new(
         player: Arc<Player>,
         gl: Arc<glow::Context>,
-        ctx: egui::Context,
+        wake: impl Fn() + Send + Sync + 'static,
     ) -> pstr_player::Result<Self> {
         // SAFETY: forwarded from this function's own contract.
         let mut renderer = unsafe { VideoRenderer::new(player)? };
-        renderer.on_update(move || ctx.request_repaint());
+        renderer.on_update(wake);
 
         Ok(Self {
             gl,

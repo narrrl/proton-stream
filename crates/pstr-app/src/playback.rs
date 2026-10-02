@@ -134,6 +134,11 @@ pub enum Command {
     /// every file it loads afterwards, so picking Japanese audio for one
     /// episode picks it for the next one too.
     SelectTrack(TrackKind, Option<i64>),
+    /// Move subtitles, as a percentage of the window's height. See
+    /// [`Playback::lift_subtitles`].
+    SetSubtitlePosition(f64),
+    /// 1.0 is normal speed.
+    SetSpeed(f64),
     Stop,
 }
 
@@ -162,6 +167,11 @@ pub struct Playback {
     /// 0–100, as mpv has it.
     pub volume: f64,
     pub muted: bool,
+    /// Playback speed, 1.0 being normal.
+    pub speed: f64,
+    /// Where subtitles were last put, so they are only moved when that changes
+    /// rather than once a frame.
+    subtitle_position: f64,
     /// What the file contains. Empty until mpv has demuxed it.
     pub tracks: Vec<Track>,
     /// The file's chapters, in order. Empty for a file muxed without them.
@@ -196,10 +206,9 @@ impl Playback {
         target: PlaybackTarget,
         stream: VideoStream,
         gl: Option<&Arc<glow::Context>>,
-        ctx: &egui::Context,
     ) -> Result<Self, String> {
         let prefs = engine.playback_prefs();
-        let (player, video) = build_player(engine, &target, &prefs, gl, ctx)?;
+        let (player, video) = build_player(engine, &target, &prefs, gl)?;
 
         let (commands, orders) = channel::<Command>();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -234,6 +243,8 @@ impl Playback {
             paused: false,
             volume: prefs.volume,
             muted: prefs.muted,
+            subtitle_position: 100.0,
+            speed: prefs.speed,
             tracks: Vec::new(),
             chapters: Vec::new(),
             roles: Vec::new(),
@@ -244,6 +255,24 @@ impl Playback {
             seeking: false,
             target,
         })
+    }
+
+    /// Keep subtitles clear of `covered` points at the bottom of a picture
+    /// `height` points tall — the controls, while they are up.
+    ///
+    /// Without it the line being read sits under the seek bar for as long as
+    /// the mouse is moving, which is exactly when someone is looking at the
+    /// screen.
+    pub fn lift_subtitles(&mut self, covered: f32, height: f32) {
+        let position = if covered > 0.0 && height > 0.0 {
+            (100.0 * (1.0 - f64::from(covered / height))).round()
+        } else {
+            100.0
+        };
+        if position != self.subtitle_position {
+            self.subtitle_position = position;
+            self.send(Command::SetSubtitlePosition(position));
+        }
     }
 
     /// Whether the picture is drawn in this window rather than mpv's own.
@@ -365,7 +394,6 @@ fn build_player(
     target: &PlaybackTarget,
     prefs: &PlaybackPrefs,
     gl: Option<&Arc<glow::Context>>,
-    ctx: &egui::Context,
 ) -> Result<(Arc<Player>, Option<VideoSurface>), String> {
     let title = format!("proton-stream — {}", target.name);
 
@@ -386,8 +414,12 @@ fn build_player(
                 // SAFETY: called from `App::ui`, where eframe has made this
                 // context current, and the surface is dropped from the same
                 // place — see `video.rs`.
-                match unsafe { VideoSurface::new(Arc::clone(&player), Arc::clone(gl), ctx.clone()) }
-                {
+                match unsafe {
+                    VideoSurface::new(Arc::clone(&player), Arc::clone(gl), {
+                        let engine = engine.clone();
+                        move || engine.wake()
+                    })
+                } {
                     Ok(video) => return Ok((player, Some(video))),
                     Err(error) => {
                         tracing::warn!("embed the video: {error}; falling back to a window");
@@ -428,6 +460,9 @@ fn from_prefs(
             .and_then(|p| p.subtitle_language.clone())
             .or_else(|| prefs.subtitle_language.clone()),
         subtitles: show.map(|p| p.subtitles).unwrap_or(prefs.subtitles),
+        // Carried from file to file, like the volume: somebody who watches at
+        // 1.25 watches the next episode at 1.25 too.
+        options: vec![("speed".into(), format!("{:.2}", prefs.speed))],
         ..PlayerConfig::default()
     }
 }
@@ -569,6 +604,8 @@ fn apply_command(
         Command::SeekTo(seconds) => player.seek_to(seconds),
         Command::SetVolume(volume) => player.set_volume(volume),
         Command::SetMuted(muted) => player.set_muted(muted),
+        Command::SetSubtitlePosition(percent) => player.set_subtitle_position(percent),
+        Command::SetSpeed(speed) => player.set_speed(speed),
         Command::SelectTrack(kind, track) => select_track(engine, id, player, kind, track),
         Command::Stop => {
             let _ = player.quit();

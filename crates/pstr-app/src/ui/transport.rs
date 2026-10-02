@@ -94,6 +94,8 @@ pub fn full(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             track_menus(ui, playback, actions);
             ui.add_space(8.0);
+            speed_menu(ui, playback, actions);
+            ui.add_space(8.0);
             chapter_menu(ui, playback, actions);
             ui.add_space(8.0);
             volume(ui, playback, actions);
@@ -429,6 +431,32 @@ fn track_options(ui: &mut egui::Ui, tracks: &[&Track], kind: TrackKind, actions:
     }
 }
 
+/// How fast it plays. Says so on the button only when it is not normal speed,
+/// because that is the one case worth noticing at a glance.
+fn speed_menu(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
+    let label = if (playback.speed - 1.0).abs() < 1e-6 {
+        "Speed".to_owned()
+    } else {
+        format!("Speed · {}", ui::format_speed(playback.speed))
+    };
+    ui.menu_button(label, |ui| {
+        for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
+            if ui
+                .selectable_label(
+                    (playback.speed - speed).abs() < 1e-6,
+                    ui::format_speed(speed),
+                )
+                .clicked()
+            {
+                actions.push(Action::SetSpeed(speed));
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Playback speed ([ and ])");
+}
+
 /// Jump to a chapter. Only drawn for a file that has more than one, which for
 /// most releases means anime and not much else.
 fn chapter_menu(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
@@ -470,66 +498,87 @@ fn seek_bar(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>, t
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, SEEK_HIT_HEIGHT), Sense::click_and_drag());
 
-    let hovered = response.hovered() || response.dragged();
-    let track = Rect::from_center_size(
-        rect.center(),
-        Vec2::new(width, if hovered { thickness + 2.0 } else { thickness }),
-    );
+    let active = response.hovered() || response.dragged();
+    // Grows rather than jumps when the pointer arrives.
+    let grow = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("grow"), active, 0.12);
+    let track = Rect::from_center_size(rect.center(), Vec2::new(width, thickness + 3.0 * grow));
+    let radius = CornerRadius::same(3);
     let painter = ui.painter();
-    painter.rect_filled(track, CornerRadius::same(3), Color32::from_gray(52));
+    // From the palette rather than a fixed grey: the same bar sits on the
+    // video's dark scrim and on a light theme's transport strip.
+    painter.rect_filled(track, radius, theme::muted().gamma_multiply(0.35));
 
-    if let Some(progress) = playback.progress() {
+    let duration = playback.duration.filter(|duration| *duration > 0.0);
+    let pointer = response
+        .interact_pointer_pos()
+        .or_else(|| response.hover_pos())
+        .map(|position| ((position.x - track.left()) / track.width()).clamp(0.0, 1.0));
+
+    // Where the pointer would land, lighter than what has been played: the bar
+    // shows the jump before it is made.
+    if let (Some(fraction), true) = (pointer, active) {
+        let mut ghost = track;
+        ghost.set_width(track.width() * fraction);
+        painter.rect_filled(ghost, radius, theme::muted().gamma_multiply(0.45));
+    }
+
+    // While dragging, the knob follows the pointer even though the seek waits
+    // for the release — see below. A knob that stays put under a moving hand
+    // reads as a bar that is not listening.
+    let shown = match (response.dragged(), pointer) {
+        (true, Some(fraction)) => Some(fraction),
+        _ => playback.progress(),
+    };
+    if let Some(progress) = shown {
         let mut played = track;
         played.set_width(track.width() * progress);
         // The gradient is sized to the *played* part, not to the whole bar, so
         // the far end of it arrives at the playhead rather than at the end of
         // the file. A bar that only ever shows the first fifth of its own ramp
         // does not read as a gradient at all.
-        theme::accent_fill(painter, played, CornerRadius::same(3), 0.0);
+        theme::accent_fill(painter, played, radius, 0.0);
         painter.circle_filled(
             egui::pos2(played.right(), track.center().y),
-            if hovered { 8.0 } else { 6.0 },
+            5.0 + 3.0 * grow,
             Color32::WHITE,
         );
     }
 
     // Seeking needs a duration: without one there is nothing for a fraction of
     // the bar to mean. Before `FileLoaded` mpv has no timeline anyway.
-    let Some(duration) = playback.duration.filter(|duration| *duration > 0.0) else {
+    let Some(duration) = duration else {
         return;
     };
 
-    // Chapter marks, over the bar rather than under it: an opening is two
-    // minutes of a twenty-four minute file, and the point of the mark is to be
-    // able to aim just past it.
+    // Chapter marks, cut into the bar rather than drawn on it: an opening is
+    // two minutes of a twenty-four minute file, and the point of the mark is to
+    // be able to aim just past it.
     for chapter in playback.chapters.iter().skip(1) {
         let fraction = (chapter.start / duration).clamp(0.0, 1.0) as f32;
         let x = track.left() + track.width() * fraction;
         painter.rect_filled(
             Rect::from_min_size(
-                egui::pos2(x - 1.0, track.top() - 1.0),
-                Vec2::new(2.0, track.height() + 2.0),
+                egui::pos2(x - 1.5, track.top() - 1.0),
+                Vec2::new(3.0, track.height() + 2.0),
             ),
             CornerRadius::ZERO,
-            Color32::from_black_alpha(180),
+            Color32::from_black_alpha(200),
         );
     }
 
     // On release, not on every frame of the drag: each seek cancels outstanding
     // read-ahead and refetches, so a dragged bar that seeks continuously spends
     // the whole drag throwing away blocks it just paid for.
-    if let Some(position) = response.interact_pointer_pos()
+    if let Some(fraction) = pointer
         && (response.clicked() || response.drag_stopped())
     {
-        let fraction = ((position.x - track.left()) / track.width()).clamp(0.0, 1.0);
         actions.push(Action::Player(Command::SeekTo(fraction as f64 * duration)));
     }
 
-    if response.hovered()
-        && let Some(position) = response.hover_pos()
-    {
-        let fraction = ((position.x - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
-        let at = fraction * duration;
+    if let (Some(fraction), true) = (pointer, active) {
+        let at = f64::from(fraction) * duration;
         // The chapter under the pointer, when there is one: "42:10 · OP" tells
         // a viewer what they are about to land in, which is the whole reason to
         // aim at a particular part of the bar.
@@ -541,6 +590,25 @@ fn seek_bar(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>, t
             ),
             None => ui::format_time(at),
         };
-        response.clone().on_hover_text_at_pointer(hint);
+        bubble(
+            ui,
+            egui::pos2(track.left() + track.width() * fraction, track.top() - 10.0),
+            &hint,
+        );
     }
+}
+
+/// A small label floating above a point, kept inside the window.
+fn bubble(ui: &egui::Ui, anchor: egui::Pos2, text: &str) {
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("seek-bubble"),
+    ));
+    let galley = painter.layout_no_wrap(text.to_owned(), theme::Role::Label.font(), Color32::WHITE);
+    let size = galley.size() + Vec2::new(16.0, 8.0);
+    let screen = ui.ctx().content_rect();
+    let left = (anchor.x - size.x / 2.0).clamp(screen.left() + 4.0, screen.right() - size.x - 4.0);
+    let frame = Rect::from_min_size(egui::pos2(left, anchor.y - size.y), size);
+    painter.rect_filled(frame, CornerRadius::same(6), Color32::from_black_alpha(215));
+    painter.galley(frame.min + Vec2::new(8.0, 4.0), galley, Color32::WHITE);
 }

@@ -358,6 +358,36 @@ fn fill(painter: &egui::Painter, rect: Rect, corner_radius: CornerRadius, palett
     painter.add(textured(rect, corner_radius, &texture));
 }
 
+/// A rounded rectangle running from one colour to another, at `opacity`.
+///
+/// For colours that are not the palette's — a title's own, on a tile with no
+/// picture. Drawn flat when the viewer has ramps off, like every other ramp.
+pub fn ramp_fill(
+    painter: &egui::Painter,
+    rect: Rect,
+    corner_radius: CornerRadius,
+    (from, to): (Color32, Color32),
+    direction: Direction,
+    opacity: f32,
+) {
+    let tint = Color32::WHITE.gamma_multiply(opacity);
+    if !ramps_on() {
+        painter.rect_filled(
+            rect,
+            corner_radius,
+            mix(from, to, 0.5).gamma_multiply(opacity),
+        );
+        return;
+    }
+    let texture = ramp(painter.ctx(), from, to, direction);
+    painter.add(
+        egui::epaint::RectShape::filled(rect, corner_radius, tint).with_texture(
+            texture.id(),
+            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        ),
+    );
+}
+
 /// A ramp from `color` to nothing, for laying artwork into the page.
 ///
 /// The other ramps here run between two opaque colours; this one runs down its

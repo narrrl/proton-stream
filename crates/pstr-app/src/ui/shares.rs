@@ -7,29 +7,43 @@
 //! typed.
 
 use pstr_core::Share;
+use pstr_core::library::Library;
 
 use crate::app::{Action, ShareForm};
 use crate::theme;
 use crate::ui;
 
-pub fn show(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: &mut Vec<Action>) {
+pub fn show(
+    ui: &mut egui::Ui,
+    shares: &[Share],
+    library: &Library,
+    form: &mut ShareForm,
+    actions: &mut Vec<Action>,
+) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui::section(ui, "Shares");
             if shares.is_empty() {
-                ui.label(ui::muted("No shares yet."));
+                ui.label(ui::muted(
+                    "No shares yet. Add one below and its contents become your library.",
+                ));
             }
             for share in shares {
-                share_row(ui, share, actions);
+                let titles = library
+                    .titles
+                    .iter()
+                    .filter(|title| title.share_ids.contains(&share.id))
+                    .count();
+                share_row(ui, share, titles, actions);
             }
 
             ui.add_space(22.0);
-            add_form(ui, form, actions);
+            add_form(ui, shares, form, actions);
         });
 }
 
-fn share_row(ui: &mut egui::Ui, share: &Share, actions: &mut Vec<Action>) {
+fn share_row(ui: &mut egui::Ui, share: &Share, titles: usize, actions: &mut Vec<Action>) {
     egui::Frame::new()
         .fill(theme::card())
         .corner_radius(egui::CornerRadius::same(8))
@@ -39,12 +53,13 @@ fn share_row(ui: &mut egui::Ui, share: &Share, actions: &mut Vec<Action>) {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(&share.name).strong());
-                    let detail = if share.has_custom_password {
-                        format!("{}  ·  custom password", share.id)
-                    } else {
-                        share.id.clone()
-                    };
-                    ui.label(ui::muted(detail));
+                    // What is in it, rather than what it is called inside the
+                    // app. The id is still a hover away for a bug report.
+                    let mut detail = ui::library::plural(titles, "title");
+                    if share.has_custom_password {
+                        detail.push_str("  ·  password protected");
+                    }
+                    ui.label(ui::muted(detail)).on_hover_text(&share.id);
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -64,7 +79,7 @@ fn share_row(ui: &mut egui::Ui, share: &Share, actions: &mut Vec<Action>) {
     ui.add_space(6.0);
 }
 
-fn add_form(ui: &mut egui::Ui, form: &mut ShareForm, actions: &mut Vec<Action>) {
+fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: &mut Vec<Action>) {
     ui::section(ui, "Add a share");
     ui.label(ui::muted(
         "Paste the whole link, including everything after the # — that part is the key that \
@@ -88,15 +103,40 @@ fn add_form(ui: &mut egui::Ui, form: &mut ShareForm, actions: &mut Vec<Action>) 
             ui.add_space(8.0);
 
             ui.label(ui::muted("Link"));
-            ui.add(
-                egui::TextEdit::singleline(&mut form.url)
-                    .password(true)
-                    .hint_text("https://drive.proton.me/urls/…#…")
-                    .desired_width(f32::INFINITY),
-            );
+            ui.horizontal(|ui| {
+                let paste = 60.0;
+                let field = egui::Id::new("share-link");
+                ui.add(
+                    egui::TextEdit::singleline(&mut form.url)
+                        .id(field)
+                        .password(true)
+                        .hint_text("https://drive.proton.me/urls/…#…")
+                        .desired_width(ui.available_width() - paste),
+                );
+                // The link is masked, so pasting is the only sensible way in —
+                // and a button says that more plainly than the field does.
+                if ui
+                    .add_sized(
+                        [paste - 8.0, ui.spacing().interact_size.y],
+                        egui::Button::new("Paste"),
+                    )
+                    .clicked()
+                {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    // The paste lands in whatever has focus, so give it some.
+                    ui.memory_mut(|memory| memory.request_focus(field));
+                }
+            });
+            // Said while typing, not after a refused submit: everything this
+            // checks is knowable from the text alone.
+            let problem = link_problem(&form.url, shares);
+            if let Some(problem) = &problem {
+                ui.label(theme::Role::Caption.rich(problem).color(theme::danger()));
+            }
             ui.add_space(8.0);
 
-            ui.checkbox(&mut form.has_password, "The link asks for a password");
+            ui::widgets::toggle(ui, &mut form.has_password, "The link asks for a password");
             if form.has_password {
                 ui.add_space(6.0);
                 ui.add(
@@ -110,8 +150,14 @@ fn add_form(ui: &mut egui::Ui, form: &mut ShareForm, actions: &mut Vec<Action>) 
             ui.add_space(12.0);
             let ready = !form.name.trim().is_empty()
                 && !form.url.trim().is_empty()
-                && (!form.has_password || !form.password.is_empty());
+                && problem.is_none()
+                && (!form.has_password || !form.password.is_empty())
+                && !form.sending;
 
+            if let Some(error) = &form.error {
+                ui.label(theme::Role::Caption.rich(error).color(theme::danger()));
+                ui.add_space(6.0);
+            }
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled_ui(ready, |ui| ui::accent_button(ui, "Add and crawl"))
@@ -127,9 +173,70 @@ fn add_form(ui: &mut egui::Ui, form: &mut ShareForm, actions: &mut Vec<Action>) 
                             .filter(|password| !password.is_empty()),
                     });
                 }
-                if !ready {
+                if form.sending {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(ui::muted("adding…"));
+                } else if form.name.trim().is_empty() || form.url.trim().is_empty() {
                     ui.label(ui::muted("A name and a link are needed."));
                 }
             });
         });
+}
+
+/// What is wrong with a link as typed, if anything.
+///
+/// Nothing for an empty box — that is "not done yet", which the button already
+/// says.
+fn link_problem(url: &str, shares: &[Share]) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    match pstr_core::shares::share_token(url) {
+        Ok(token) if shares.iter().any(|share| share.token == token) => {
+            Some("That share is already added.".into())
+        }
+        Ok(_) => None,
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn share(token: &str) -> Share {
+        Share {
+            id: format!("share-{token}"),
+            name: "anime".into(),
+            token: token.into(),
+            has_custom_password: false,
+        }
+    }
+
+    #[test]
+    fn an_empty_link_is_not_yet_a_problem() {
+        assert_eq!(link_problem("  ", &[]), None);
+    }
+
+    #[test]
+    fn a_link_without_its_key_is_refused_while_typing() {
+        assert!(link_problem("https://drive.proton.me/urls/ABC123", &[]).is_some());
+        assert!(link_problem("https://example.com/", &[]).is_some());
+        assert_eq!(
+            link_problem("https://drive.proton.me/urls/ABC123#key", &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_share_already_added_is_refused_while_typing() {
+        assert!(
+            link_problem(
+                "https://drive.proton.me/urls/ABC123#key",
+                &[share("ABC123")]
+            )
+            .is_some()
+        );
+    }
 }

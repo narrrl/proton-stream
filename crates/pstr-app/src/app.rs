@@ -22,9 +22,6 @@ use crate::playback::{Playback, PlaybackTarget};
 use crate::ui::player::UpNextCard;
 use crate::{theme, ui};
 
-/// How long a status line stays up before it fades on its own.
-const STATUS_SECONDS: f64 = 6.0;
-
 /// A frame slower than this is not a slow frame, it is a hang.
 ///
 /// The UI thread has only a handful of blocking calls in it — building an mpv
@@ -111,7 +108,9 @@ pub enum Action {
         url: String,
         password: Option<String>,
     },
+    /// Ask whether to forget a share. [`Action::ForgetShare`] does it.
     RemoveShare(String),
+    ForgetShare(String),
     /// Flip an episode between seen and unseen by hand.
     SetWatched {
         share_id: String,
@@ -156,6 +155,10 @@ pub enum Action {
     PlayAdjacent(Adjacent),
     /// Start or stop the next episode playing on its own at the end of one.
     SetAutoplay(bool),
+    /// Play faster or slower, and keep doing so for the next file.
+    SetSpeed(f64),
+    /// Seek past openings and credits without being asked.
+    SetAutoSkip(bool),
     /// Repaint the window in a different palette.
     SetAppearance(Appearance),
     /// In or out of fullscreen, from the player page.
@@ -165,6 +168,14 @@ pub enum Action {
     LeavePlayer,
     /// Call off the end-of-episode countdown and let this file play out.
     WatchToEnd,
+    /// Put the caret in the search box, from anywhere in the library.
+    FocusSearch,
+    /// Show a different slice of the library, or in a different order.
+    SetShelf(Filter, Sort),
+    /// Open or close the list of keyboard shortcuts.
+    ToggleShortcuts,
+    /// One page back: a title to the library, the library to nowhere.
+    Back,
 }
 
 /// The end-of-episode countdown.
@@ -195,13 +206,6 @@ pub struct UpNext {
 pub enum Adjacent {
     Previous,
     Next,
-}
-
-/// A line at the bottom of the window, for a few seconds.
-pub struct Status {
-    pub text: String,
-    pub error: bool,
-    pub at: f64,
 }
 
 /// Picking a title's entry by hand.
@@ -250,6 +254,108 @@ impl Matcher {
     }
 }
 
+/// What the library page lists, worked out once per change rather than once a
+/// frame.
+///
+/// A search lowercases every filename in the library, and the shelf sorts
+/// every title by when it was last played. Neither is slow once; both were
+/// being done on every frame, and while a film plays under the transport bar
+/// that is the film's frame rate.
+#[derive(Default)]
+pub struct LibraryView {
+    /// The query `matches` answers, as typed.
+    query: String,
+    /// Which titles the grid shows, and in what order.
+    pub filter: Filter,
+    pub sort: Sort,
+    /// The filter and order `matches` was built with.
+    built_with: (Filter, Sort),
+    /// Indices into [`Library::titles`].
+    pub matches: Vec<usize>,
+    /// The "Continue watching" shelf, most recent first, as indices.
+    pub resumable: Vec<usize>,
+    /// The library changed under the lists.
+    stale: bool,
+}
+
+/// Which titles the grid shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Filter {
+    #[default]
+    All,
+    Series,
+    Films,
+    /// Started and not finished.
+    Watching,
+    /// Not started.
+    Unwatched,
+}
+
+impl Filter {
+    fn admits(self, title: &pstr_core::library::Title) -> bool {
+        use pstr_core::library::TitleKind;
+        let watched = title.watched_count();
+        match self {
+            Self::All => true,
+            Self::Series => title.kind == TitleKind::Series,
+            Self::Films => title.kind == TitleKind::Film,
+            Self::Watching => {
+                title.resume().is_some() || (watched > 0 && watched < title.episode_count())
+            }
+            Self::Unwatched => watched == 0 && title.resume().is_none(),
+        }
+    }
+}
+
+/// What order the grid is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sort {
+    /// The library's own order: by name, ignoring a leading article.
+    #[default]
+    Name,
+    /// Most recently played first.
+    Recent,
+    /// Newest first, undated last.
+    Year,
+}
+
+impl LibraryView {
+    fn refresh(&mut self, library: &Library, query: &str) {
+        if !self.stale && self.query == query && self.built_with == (self.filter, self.sort) {
+            return;
+        }
+        let index_of = |title: &pstr_core::library::Title| {
+            library
+                .titles
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, title))
+        };
+        let mut matches: Vec<&pstr_core::library::Title> = library
+            .search(query)
+            .into_iter()
+            .filter(|title| self.filter.admits(title))
+            .collect();
+        match self.sort {
+            Sort::Name => {}
+            // Stable, so titles never played keep their alphabetical order
+            // after the ones that have been.
+            Sort::Recent => matches.sort_by_key(|title| std::cmp::Reverse(title.last_played())),
+            Sort::Year => matches.sort_by_key(|title| std::cmp::Reverse(title.year.unwrap_or(0))),
+        }
+        self.matches = matches.into_iter().filter_map(index_of).collect();
+        self.built_with = (self.filter, self.sort);
+        if self.stale {
+            self.resumable = library
+                .continue_watching()
+                .into_iter()
+                .filter_map(index_of)
+                .collect();
+        }
+        self.query = query.to_owned();
+        self.stale = false;
+    }
+}
+
 /// The share the viewer is typing in.
 #[derive(Default)]
 pub struct ShareForm {
@@ -257,6 +363,11 @@ pub struct ShareForm {
     pub url: String,
     pub has_password: bool,
     pub password: String,
+    /// Sent, and not answered yet. The form keeps what was typed until it is,
+    /// so a refused link can be corrected rather than pasted again.
+    pub sending: bool,
+    /// Why the last one was refused.
+    pub error: Option<String>,
 }
 
 pub struct App {
@@ -281,12 +392,28 @@ pub struct App {
     /// The hand-matching dialog, while it is open.
     pub matcher: Option<Matcher>,
     pub search: String,
+    /// Set for the frame the search box should take the caret.
+    focus_search: bool,
+    /// Whether the list of keyboard shortcuts is open.
+    pub shortcuts_open: bool,
+    /// What a key just did in the player, and when: "Volume 55%", "+30 s".
+    osd: Option<(String, f64)>,
+    pub view: LibraryView,
+    /// Whether the catalog has been read at all yet. Until it has, an empty
+    /// library means "not loaded", not "nothing in it".
+    pub loaded: bool,
     pub form: ShareForm,
     pub playback: Option<Playback>,
     /// Whether the player page's controls are showing, and why.
     pub overlay: ui::player::Overlay,
     /// The end-of-episode countdown for whatever is playing.
     pub up_next: UpNext,
+    /// The player whose next episode has already been fetched ahead, so it is
+    /// asked for once per file rather than once a frame.
+    warmed: u64,
+    /// Chapters already skipped on their own in this player, so seeking back
+    /// into an opening on purpose is not undone a frame later.
+    auto_skipped: (u64, Vec<i64>),
     /// Set while the window is fullscreen, so `F` can toggle rather than only
     /// ever entering. egui has no way to ask the platform.
     pub fullscreen: bool,
@@ -294,10 +421,15 @@ pub struct App {
     pub opening: Option<String>,
     pub connecting: bool,
     pub crawling: bool,
+    /// Which share the crawl is on, and how far it has got.
+    crawl_progress: Option<(String, usize)>,
     pub downloads: Vec<DownloadItem>,
     pub offline_files: std::collections::HashSet<DownloadKey>,
     pub confirm_partial_delete: Option<DownloadKey>,
-    pub status: Option<Status>,
+    /// A share the viewer asked to remove, waiting on their say-so.
+    pub confirm_remove_share: Option<String>,
+    /// Messages in the corner. See [`ui::toast`].
+    pub toasts: ui::toast::Toasts,
     /// The frame ceiling, where this session is pacing itself rather than
     /// letting vsync do it — see [`crate::pacing`].
     pacer: Pacer,
@@ -339,28 +471,42 @@ impl App {
             matching: false,
             matcher: None,
             search: String::new(),
+            focus_search: false,
+            shortcuts_open: false,
+            osd: None,
+            view: LibraryView::default(),
+            loaded: false,
             form: ShareForm::default(),
             playback: None,
             overlay: ui::player::Overlay::default(),
             up_next: UpNext::default(),
+            warmed: 0,
+            auto_skipped: (0, Vec::new()),
             fullscreen: false,
             opening: None,
             connecting: true,
             crawling: false,
+            crawl_progress: None,
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
-            status: None,
+            confirm_remove_share: None,
+            toasts: ui::toast::Toasts::default(),
             pacer: Pacer::new(),
         })
     }
 
+    /// Say over the picture what a control just did. Only on the player page;
+    /// anywhere else the transport bar already shows it.
+    fn flash(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+        if self.page == Page::Player {
+            self.osd = Some((text.into(), ctx.input(|input| input.time)));
+        }
+    }
+
     fn note(&mut self, ctx: &egui::Context, text: impl Into<String>, error: bool) {
-        self.status = Some(Status {
-            text: text.into(),
-            error,
-            at: ctx.input(|input| input.time),
-        });
+        let now = ctx.input(|input| input.time);
+        self.toasts.push(now, text, error);
     }
 
     /// Drain everything the background side has said since the last frame.
@@ -373,6 +519,16 @@ impl App {
         while let Ok(event) = self.events.try_recv() {
             match event {
                 Event::Shares(shares) => self.shares = shares,
+                Event::ShareAdded(name) => {
+                    self.form = ShareForm::default();
+                    self.note(ctx, format!("added {name}"), false);
+                }
+                Event::ShareRejected(error) => {
+                    // Nothing was crawled, so nothing will say it finished.
+                    self.crawling = false;
+                    self.form.sending = false;
+                    self.form.error = Some(error);
+                }
                 Event::Connected { failures } => {
                     self.connecting = false;
                     if let Some(text) = describe_failures(&failures) {
@@ -383,7 +539,11 @@ impl App {
                     self.connecting = false;
                     self.note(ctx, format!("could not open the shares: {error}"), true);
                 }
-                Event::LibraryLoaded(library) => self.library = library,
+                Event::LibraryLoaded(library) => {
+                    self.library = library;
+                    self.loaded = true;
+                    self.view.stale = true;
+                }
                 Event::Crawled {
                     share_id,
                     nodes,
@@ -397,7 +557,14 @@ impl App {
                         false,
                     );
                 }
-                Event::CrawlFinished => self.crawling = false,
+                Event::CrawlFinished => {
+                    self.crawling = false;
+                    self.crawl_progress = None;
+                }
+                Event::CrawlProgress { share, found } => {
+                    self.crawling = true;
+                    self.crawl_progress = Some((share, found));
+                }
                 Event::Thumbnail { key, image } => self.thumbs.insert(ctx, key, image),
                 Event::ThumbnailMissing { key } => self.thumbs.mark_missing(key),
                 Event::Poster { key, image } => self.posters.insert(ctx, key, image),
@@ -405,8 +572,13 @@ impl App {
                 Event::Metadata(records) => {
                     // Artwork keyed by a title whose record changed may now
                     // point somewhere else, and a title that was a miss may now
-                    // have a poster to ask for.
-                    self.posters.clear();
+                    // have a poster to ask for — so those are forgotten. Only
+                    // those: clearing the lot sent every tile in the library
+                    // back to its initials after each match run, to fade the
+                    // very same picture in again.
+                    for key in changed_art(&self.metadata, &records) {
+                        self.posters.forget(&key);
+                    }
                     self.metadata = records;
                 }
                 Event::EpisodeMetadata(episodes) => self.episodes = episodes,
@@ -470,7 +642,7 @@ impl App {
                     self.playback = None;
                     let torn_down = swap.elapsed();
                     let gl = frame.gl().cloned();
-                    let started = Playback::start(&self.engine, *target, stream, gl.as_ref(), ctx);
+                    let started = Playback::start(&self.engine, *target, stream, gl.as_ref());
                     if swap.elapsed() >= STALL {
                         tracing::warn!(
                             "swapping players held the ui thread for {} ms, {} ms of it \
@@ -646,6 +818,65 @@ impl App {
         })
     }
 
+    /// Near the end of a file, fetch the opening blocks of the next one.
+    ///
+    /// The last two minutes, or the credits if the chapters say where they
+    /// are — whichever comes first. Late enough that a viewer who stops after
+    /// one episode has not cost a download, early enough that the swap starts
+    /// from the cache.
+    fn warm_next(&mut self) {
+        /// How close to the end counts as "about to want the next one".
+        const LEAD_SECONDS: f64 = 120.0;
+
+        let Some(playback) = &self.playback else {
+            return;
+        };
+        if playback.id == self.warmed || !playback.loaded {
+            return;
+        }
+        let near_end = playback
+            .duration
+            .is_some_and(|duration| duration - playback.position < LEAD_SECONDS);
+        if !(near_end || playback.in_credits()) {
+            return;
+        }
+        self.warmed = playback.id;
+        if let Some(next) = self.adjacent(Adjacent::Next) {
+            self.engine.warm(&next);
+        }
+    }
+
+    /// Seek past an opening or credits on arrival, when the viewer asked for
+    /// that.
+    ///
+    /// Once per chapter per file. A viewer who skipped back into the opening
+    /// wants to hear it.
+    fn auto_skip(&mut self, ctx: &egui::Context) {
+        let Some(playback) = &self.playback else {
+            return;
+        };
+        if !playback.loaded || playback.paused || playback.seeking {
+            return;
+        }
+        let Some((label, end)) = playback.skippable() else {
+            return;
+        };
+        let Some(index) = playback.chapter().map(|chapter| chapter.index) else {
+            return;
+        };
+        if self.auto_skipped.0 != playback.id {
+            self.auto_skipped = (playback.id, Vec::new());
+        }
+        if self.auto_skipped.1.contains(&index) || !self.engine.playback_prefs().auto_skip {
+            return;
+        }
+        self.auto_skipped.1.push(index);
+        playback.send(crate::playback::Command::SeekTo(end));
+        // Said, because a jump nobody asked for this second reads as a glitch.
+        let what = label.trim_start_matches("Skip ").to_lowercase();
+        self.note(ctx, format!("skipped the {what}"), false);
+    }
+
     /// Start the next episode, if there is one and the viewer wants it.
     ///
     /// Called on a clean end of file only. A file that failed to load has an
@@ -777,6 +1008,24 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
             }
             Action::WatchToEnd => self.up_next.dismissed = true,
+            Action::FocusSearch => {
+                if !matches!(self.page, Page::Library | Page::Title(_)) {
+                    self.page = Page::Library;
+                }
+                self.focus_search = true;
+            }
+            Action::ToggleShortcuts => self.shortcuts_open = !self.shortcuts_open,
+            Action::SetShelf(filter, sort) => {
+                self.view.filter = filter;
+                self.view.sort = sort;
+            }
+            Action::Back => match self.page {
+                Page::Title(_) => self.page = Page::Library,
+                // Back out of a search before out of anything else: it is the
+                // last thing the viewer did.
+                Page::Library if !self.search.is_empty() => self.search.clear(),
+                _ => {}
+            },
             Action::LeavePlayer => {
                 if self.fullscreen {
                     self.fullscreen = false;
@@ -798,10 +1047,13 @@ impl App {
                 password,
             } => {
                 self.crawling = true;
+                self.form.sending = true;
+                self.form.error = None;
                 self.engine.add_share(name, url, password);
-                self.form = ShareForm::default();
             }
-            Action::RemoveShare(id) => {
+            Action::RemoveShare(id) => self.confirm_remove_share = Some(id),
+            Action::ForgetShare(id) => {
+                self.confirm_remove_share = None;
                 self.thumbs.clear();
                 self.engine.remove_share(id);
             }
@@ -826,6 +1078,16 @@ impl App {
                 self.engine.load_library();
             }
             Action::Player(command) => {
+                if let crate::playback::Command::SeekBy(seconds) = command {
+                    self.flash(
+                        ctx,
+                        if seconds < 0.0 {
+                            format!("− {:.0} s", -seconds)
+                        } else {
+                            format!("+ {seconds:.0} s")
+                        },
+                    );
+                }
                 if let Some(playback) = &self.playback {
                     playback.send(command);
                 }
@@ -841,6 +1103,27 @@ impl App {
                     false,
                 ),
             },
+            Action::SetSpeed(speed) => {
+                let mut prefs = self.engine.playback_prefs();
+                prefs.speed = speed;
+                self.engine.set_playback_prefs(prefs, true);
+                let speed = self.engine.playback_prefs().speed;
+                if let Some(playback) = &mut self.playback {
+                    playback.speed = speed;
+                    playback.send(crate::playback::Command::SetSpeed(speed));
+                }
+                let text = format!("Speed {}", ui::format_speed(speed));
+                if self.page == Page::Player {
+                    self.flash(ctx, text);
+                } else {
+                    self.note(ctx, text, false);
+                }
+            }
+            Action::SetAutoSkip(auto_skip) => {
+                let mut prefs = self.engine.playback_prefs();
+                prefs.auto_skip = auto_skip;
+                self.engine.set_playback_prefs(prefs, true);
+            }
             Action::SetAutoplay(autoplay) => {
                 let mut prefs = self.engine.playback_prefs();
                 prefs.autoplay_next = autoplay;
@@ -850,7 +1133,13 @@ impl App {
                 self.engine.set_appearance(appearance);
                 theme::apply(ctx, appearance);
             }
-            Action::SetVolume { volume, commit } => self.set_volume(volume, commit),
+            Action::SetVolume { volume, commit } => {
+                self.set_volume(volume, commit);
+                // A slider shows its own value; a key press shows it here.
+                if commit {
+                    self.flash(ctx, format!("Volume {volume:.0}%"));
+                }
+            }
             Action::ToggleMute => {
                 let mut prefs = self.engine.playback_prefs();
                 // From what is playing, not from the preferences: mpv is the
@@ -861,6 +1150,7 @@ impl App {
                     None => !prefs.muted,
                 };
                 self.send_player(crate::playback::Command::SetMuted(prefs.muted));
+                self.flash(ctx, if prefs.muted { "Muted" } else { "Sound on" });
                 self.engine.set_playback_prefs(prefs, true);
             }
             Action::SelectTrack { kind, id } => {
@@ -907,7 +1197,13 @@ impl App {
     }
 
     /// The bar across the top: where you are, and what to search.
-    fn navigation(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>, search: &mut String) {
+    fn navigation(
+        &self,
+        ui: &mut egui::Ui,
+        actions: &mut Vec<Action>,
+        search: &mut String,
+        focus_search: bool,
+    ) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             ui.label(
@@ -955,7 +1251,11 @@ impl App {
                 ui.add_space(4.0);
                 if self.crawling {
                     ui.add(egui::Spinner::new().size(16.0));
-                    ui.label(ui::muted("crawling"));
+                    ui.label(ui::muted(match &self.crawl_progress {
+                        Some((share, 0)) => format!("crawling {share}"),
+                        Some((share, found)) => format!("crawling {share} · {found} found"),
+                        None => "crawling".to_owned(),
+                    }));
                 } else if self.matching {
                     ui.add(egui::Spinner::new().size(16.0));
                     ui.label(ui::muted("matching"));
@@ -972,11 +1272,7 @@ impl App {
 
                 if on_library && !self.library.is_empty() {
                     ui.add_space(8.0);
-                    ui.add(
-                        egui::TextEdit::singleline(search)
-                            .hint_text("Search")
-                            .desired_width(220.0),
-                    );
+                    ui::search_field(ui, search, focus_search);
                 }
             });
         });
@@ -993,6 +1289,8 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.pump(ctx, frame);
+        self.warm_next();
+        self.auto_skip(ctx);
 
         let mut actions: Vec<Action> = Vec::new();
 
@@ -1002,14 +1300,16 @@ impl eframe::App for App {
         if self.page == Page::Player && self.playback.is_none() && self.opening.is_none() {
             self.page = Page::Library;
         }
+        self.engine.set_picture_shown(self.page == Page::Player);
 
         if self.page == Page::Player {
             self.overlay.observe(ctx);
-            let volume = self
-                .playback
-                .as_ref()
-                .map_or(0.0, |playback| playback.volume);
-            shortcuts(ctx, self.fullscreen, volume, &mut actions);
+            let state = self.playback.as_ref().map(|playback| PlayerKeys {
+                volume: playback.volume,
+                speed: playback.speed,
+                skip_to: playback.skippable().map(|(_, end)| end),
+            });
+            shortcuts(ctx, self.fullscreen, state, &mut actions);
 
             // Before the draw, because drawing does not mutate — and it can
             // push an action of its own, which is why it takes the same list.
@@ -1039,6 +1339,12 @@ impl eframe::App for App {
                         &mut actions,
                     );
                 });
+            if let Some((text, at)) = &self.osd
+                && !ui::player::osd(ctx, text, *at)
+            {
+                self.osd = None;
+            }
+            self.toasts.show(ctx, self.overlay.covered());
 
             for action in actions {
                 self.apply(ctx, action);
@@ -1046,13 +1352,25 @@ impl eframe::App for App {
             return;
         }
 
+        // Not under a dialog: Escape there closes the dialog, and should not
+        // also leave the page behind it.
+        let dialog = self.matcher.is_some()
+            || self.confirm_partial_delete.is_some()
+            || self.confirm_remove_share.is_some()
+            || self.shortcuts_open;
+        if !dialog {
+            global_shortcuts(ctx, &self.page, &mut actions);
+        }
+
         // Split the borrow up front: the pages get read-only state and a place
         // to put actions, which is what keeps them from mutating mid-draw.
         {
             let mut search = std::mem::take(&mut self.search);
             let neighbours = self.neighbours();
+            let playback_prefs = self.engine.playback_prefs();
             let prefs = ui::settings::Prefs {
-                autoplay: self.engine.playback_prefs().autoplay_next,
+                autoplay: playback_prefs.autoplay_next,
+                auto_skip: playback_prefs.auto_skip,
                 appearance: self.engine.appearance(),
             };
 
@@ -1070,7 +1388,7 @@ impl eframe::App for App {
                 .show(ui, |ui| {
                     let shadow = ui.painter().add(egui::Shape::Noop);
                     let background = ui.painter().add(egui::Shape::Noop);
-                    self.navigation(ui, &mut actions, &mut search);
+                    self.navigation(ui, &mut actions, &mut search, self.focus_search);
                     // Full width from the space the panel was given, height from
                     // the space its contents took.
                     let content = ui.min_rect();
@@ -1090,6 +1408,8 @@ impl eframe::App for App {
                     );
                 });
             self.search = search;
+            self.focus_search = false;
+            self.view.refresh(&self.library, &self.search);
 
             let App {
                 engine,
@@ -1103,19 +1423,22 @@ impl eframe::App for App {
                 settings,
                 api_key,
                 search,
+                view,
+                loaded,
                 form,
                 matcher,
                 playback,
                 opening,
-                status,
                 downloads,
                 offline_files,
                 confirm_partial_delete,
+                confirm_remove_share,
                 ..
             } = self;
 
+            let mut covered = 0.0;
             if playback.is_some() || opening.is_some() {
-                egui::Panel::bottom("transport")
+                covered = egui::Panel::bottom("transport")
                     .resizable(false)
                     .frame(
                         egui::Frame::new()
@@ -1146,33 +1469,10 @@ impl eframe::App for App {
                             neighbours,
                             &mut actions,
                         );
-                    });
-            }
-
-            if let Some(line) = status {
-                let age = ctx.input(|input| input.time) - line.at;
-                if age < STATUS_SECONDS {
-                    egui::Panel::bottom("status")
-                        .resizable(false)
-                        .frame(
-                            egui::Frame::new()
-                                .fill(theme::background())
-                                .inner_margin(egui::Margin::symmetric(16, 6)),
-                        )
-                        .show(ui, |ui| {
-                            let colour = if line.error {
-                                theme::danger()
-                            } else {
-                                theme::muted()
-                            };
-                            ui.label(theme::Role::Caption.rich(&line.text).color(colour));
-                        });
-                    // Repaint once the line is due to disappear, or it lingers
-                    // until something else happens to cause a frame.
-                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(
-                        STATUS_SECONDS - age,
-                    ));
-                }
+                    })
+                    .response
+                    .rect
+                    .height();
             }
 
             egui::CentralPanel::default()
@@ -1193,9 +1493,17 @@ impl eframe::App for App {
                         episodes,
                     };
                     match page {
-                        Page::Library => {
-                            ui::library::show(ui, &mut art, library, search, &mut actions)
-                        }
+                        Page::Library => ui::library::show(
+                            ui,
+                            &mut art,
+                            ui::library::Shelves {
+                                library,
+                                view,
+                                loaded: *loaded,
+                                search,
+                            },
+                            &mut actions,
+                        ),
                         Page::Title(key) => ui::title::show(
                             ui,
                             &mut art,
@@ -1207,7 +1515,7 @@ impl eframe::App for App {
                             },
                             &mut actions,
                         ),
-                        Page::Shares => ui::shares::show(ui, shares, form, &mut actions),
+                        Page::Shares => ui::shares::show(ui, shares, library, form, &mut actions),
                         Page::Settings => {
                             ui::settings::show(ui, settings, prefs, api_key, &mut actions)
                         }
@@ -1232,25 +1540,46 @@ impl eframe::App for App {
             }
 
             if let Some(key) = confirm_partial_delete.clone() {
-                egui::Window::new("Delete partial download?")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                    .show(ctx, |ui| {
-                        ui.label(
-                            "This discards downloaded partial bytes. The online source is not changed.",
-                        );
-                        ui.horizontal(|ui| {
-                            if ui.button("Keep partial").clicked() {
-                                *confirm_partial_delete = None;
-                            }
-                            if ui.button("Delete partial").clicked() {
-                                engine.remove_download(key.clone(), true);
-                                *confirm_partial_delete = None;
-                            }
-                        });
-                    });
+                match ui::confirm(
+                    ctx,
+                    "partial",
+                    "Delete the partial download?",
+                    "What has been downloaded so far is discarded. The file in the share is \
+                     not touched.",
+                    "Delete",
+                ) {
+                    ui::Answer::Confirmed => {
+                        engine.remove_download(key, true);
+                        *confirm_partial_delete = None;
+                    }
+                    ui::Answer::Declined => *confirm_partial_delete = None,
+                    ui::Answer::Pending => {}
+                }
             }
+
+            if let Some(id) = confirm_remove_share.clone() {
+                let name = shares
+                    .iter()
+                    .find(|share| share.id == id)
+                    .map_or(id.as_str(), |share| share.name.as_str());
+                match ui::confirm(
+                    ctx,
+                    "remove-share",
+                    &format!("Remove {name}?"),
+                    "Its titles leave the library, along with what you have watched of them. \
+                     Its downloads are deleted, and the link and password are removed from the \
+                     keyring.",
+                    "Remove",
+                ) {
+                    ui::Answer::Confirmed => actions.push(Action::ForgetShare(id)),
+                    ui::Answer::Declined => *confirm_remove_share = None,
+                    ui::Answer::Pending => {}
+                }
+            }
+            if self.shortcuts_open && ui::shortcuts::show(ctx) {
+                actions.push(Action::ToggleShortcuts);
+            }
+            self.toasts.show(ctx, covered);
         }
 
         for action in actions {
@@ -1276,12 +1605,124 @@ impl eframe::App for App {
     }
 }
 
+/// Titles whose tile art is not what it was.
+///
+/// Compared by URL: the same URL is the same picture, and anything else —
+/// a different one, a new one, or none any more — has to be fetched or
+/// dropped.
+fn changed_art(
+    before: &HashMap<String, MetadataRecord>,
+    after: &HashMap<String, MetadataRecord>,
+) -> Vec<String> {
+    let url = |records: &HashMap<String, MetadataRecord>, key: &str| {
+        records
+            .get(key)
+            .and_then(|record| record.metadata.as_ref())
+            .and_then(|metadata| metadata.tile_art())
+            .map(|(url, _)| url.to_owned())
+    };
+    let mut keys: Vec<String> = before
+        .keys()
+        .chain(after.keys())
+        .filter(|key| url(before, key) != url(after, key))
+        .cloned()
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// Keys every page but the player answers to.
+///
+/// Plain keys — `/`, `?` — only while nothing is being typed into, or a search
+/// for "a/b" would jump to the search box halfway through it.
+fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>) {
+    use egui::{Key, Modifiers};
+
+    let typing = ctx.egui_wants_keyboard_input();
+    let mut tab = None;
+    ctx.input_mut(|input| {
+        if input.consume_key(Modifiers::COMMAND, Key::F)
+            || (!typing && input.key_pressed(Key::Slash))
+        {
+            actions.push(Action::FocusSearch);
+        }
+        if input.consume_key(Modifiers::NONE, Key::F5)
+            || input.consume_key(Modifiers::COMMAND, Key::R)
+        {
+            actions.push(Action::Crawl(None));
+        }
+        if !typing && input.key_pressed(Key::Questionmark) {
+            actions.push(Action::ToggleShortcuts);
+        }
+        if input.consume_key(Modifiers::ALT, Key::ArrowLeft)
+            || input.pointer.button_pressed(egui::PointerButton::Extra1)
+            || (!typing && matches!(page, Page::Title(_)) && input.key_pressed(Key::Escape))
+            || (!typing && *page == Page::Library && input.key_pressed(Key::Backspace))
+        {
+            actions.push(Action::Back);
+        }
+        for (key, index) in [
+            (Key::Num1, 0),
+            (Key::Num2, 1),
+            (Key::Num3, 2),
+            (Key::Num4, 3),
+        ] {
+            if input.consume_key(Modifiers::COMMAND, key) {
+                tab = Some(index);
+            }
+        }
+        if input.consume_key(Modifiers::COMMAND, Key::Comma) {
+            tab = Some(3);
+        }
+    });
+    if let Some(index) = tab {
+        let page = [Page::Library, Page::Shares, Page::Downloads, Page::Settings][index].clone();
+        actions.push(Action::Goto(page));
+    }
+}
+
 /// Keys the player page answers to.
 ///
 /// Only there: elsewhere space is a button press and the arrows move between
 /// widgets, and taking them would break the rest of the app to serve a page
 /// that is not on screen.
-fn shortcuts(ctx: &egui::Context, fullscreen: bool, volume: f64, actions: &mut Vec<Action>) {
+/// What the player keys need to know about what is playing.
+struct PlayerKeys {
+    volume: f64,
+    speed: f64,
+    /// Where the skip button would go, while there is one.
+    skip_to: Option<f64>,
+}
+
+/// The speeds `[` and `]` step through. Fixed steps rather than a nudge of a
+/// tenth, because 1.0 has to be somewhere a viewer can land on again.
+const SPEEDS: [f64; 8] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0];
+
+/// The next step from `speed` in `direction`, from wherever it is now.
+fn step_speed(speed: f64, faster: bool) -> f64 {
+    if faster {
+        SPEEDS
+            .iter()
+            .copied()
+            .find(|&step| step > speed + 1e-6)
+            .unwrap_or(SPEEDS[SPEEDS.len() - 1])
+    } else {
+        SPEEDS
+            .iter()
+            .rev()
+            .copied()
+            .find(|&step| step < speed - 1e-6)
+            .unwrap_or(SPEEDS[0])
+    }
+}
+
+fn shortcuts(
+    ctx: &egui::Context,
+    fullscreen: bool,
+    playing: Option<PlayerKeys>,
+    actions: &mut Vec<Action>,
+) {
     use crate::playback::Command;
     use egui::Key;
 
@@ -1301,6 +1742,9 @@ fn shortcuts(ctx: &egui::Context, fullscreen: bool, volume: f64, actions: &mut V
             Key::N,
             Key::P,
             Key::F,
+            Key::S,
+            Key::OpenBracket,
+            Key::CloseBracket,
             Key::Escape,
         ]
         .into_iter()
@@ -1308,6 +1752,7 @@ fn shortcuts(ctx: &egui::Context, fullscreen: bool, volume: f64, actions: &mut V
         .collect()
     });
 
+    let volume = playing.as_ref().map_or(0.0, |playing| playing.volume);
     for key in pressed {
         match key {
             Key::Space | Key::K => actions.push(Action::Player(Command::TogglePause)),
@@ -1327,6 +1772,19 @@ fn shortcuts(ctx: &egui::Context, fullscreen: bool, volume: f64, actions: &mut V
             Key::N => actions.push(Action::PlayAdjacent(Adjacent::Next)),
             Key::P => actions.push(Action::PlayAdjacent(Adjacent::Previous)),
             Key::F => actions.push(Action::ToggleFullscreen),
+            Key::S => {
+                if let Some(end) = playing.as_ref().and_then(|playing| playing.skip_to) {
+                    actions.push(Action::Player(Command::SeekTo(end)));
+                }
+            }
+            Key::OpenBracket | Key::CloseBracket => {
+                if let Some(playing) = &playing {
+                    actions.push(Action::SetSpeed(step_speed(
+                        playing.speed,
+                        key == Key::CloseBracket,
+                    )));
+                }
+            }
             // Escape leaves fullscreen first and the page second, which is what
             // it does everywhere else and what stops one press from both
             // un-maximising the window and hiding the film.
@@ -1356,5 +1814,103 @@ fn transport_panel(
                 )));
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pstr_core::library::TitleKind;
+    use pstr_core::metadata::{ProviderId, TitleMetadata};
+
+    use super::*;
+
+    fn record(key: &str, poster: Option<&str>) -> (String, MetadataRecord) {
+        let metadata = poster.map(|url| TitleMetadata {
+            provider: ProviderId::AniList,
+            remote_id: key.into(),
+            name: key.into(),
+            original_name: None,
+            overview: None,
+            year: None,
+            kind: TitleKind::Series,
+            poster_url: Some(url.into()),
+            backdrop_url: None,
+            rating: None,
+            genres: Vec::new(),
+            episodes: None,
+            url: None,
+        });
+        (
+            key.into(),
+            MetadataRecord {
+                title_key: key.into(),
+                provider: ProviderId::AniList,
+                metadata,
+                fetched_at: 0,
+                manual: false,
+            },
+        )
+    }
+
+    #[test]
+    fn the_filters_split_the_library_by_kind() {
+        use pstr_core::library::{Title, TitleKind};
+        let title = |kind| Title {
+            key: "k".into(),
+            name: "n".into(),
+            year: None,
+            kind,
+            seasons: Vec::new(),
+            share_ids: Vec::new(),
+        };
+        let film = title(TitleKind::Film);
+        let series = title(TitleKind::Series);
+        assert!(Filter::All.admits(&film) && Filter::All.admits(&series));
+        assert!(Filter::Films.admits(&film) && !Filter::Films.admits(&series));
+        assert!(Filter::Series.admits(&series) && !Filter::Series.admits(&film));
+        // Nothing watched of either: not started, and not being watched.
+        assert!(Filter::Unwatched.admits(&film));
+        assert!(!Filter::Watching.admits(&film));
+    }
+
+    #[test]
+    fn speed_steps_land_back_on_normal() {
+        assert_eq!(step_speed(1.0, true), 1.25);
+        assert_eq!(step_speed(1.25, false), 1.0);
+        // From somewhere between steps — a speed set on Android — to the
+        // nearest step in the direction asked.
+        assert_eq!(step_speed(1.1, true), 1.25);
+        assert_eq!(step_speed(1.1, false), 1.0);
+        assert_eq!(step_speed(3.0, true), 3.0);
+        assert_eq!(step_speed(0.5, false), 0.5);
+    }
+
+    #[test]
+    fn a_match_run_that_changes_nothing_keeps_every_poster() {
+        let before: HashMap<_, _> = [record("a", Some("x")), record("b", None)].into();
+        let after = before.clone();
+        assert!(changed_art(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn only_titles_whose_art_moved_lose_their_poster() {
+        let before: HashMap<_, _> = [
+            record("same", Some("x")),
+            record("moved", Some("old")),
+            record("dropped", Some("y")),
+            record("found", None),
+        ]
+        .into();
+        let after: HashMap<_, _> = [
+            record("same", Some("x")),
+            record("moved", Some("new")),
+            record("found", Some("z")),
+            record("added", Some("w")),
+        ]
+        .into();
+        assert_eq!(
+            changed_art(&before, &after),
+            vec!["added", "dropped", "found", "moved"]
+        );
     }
 }

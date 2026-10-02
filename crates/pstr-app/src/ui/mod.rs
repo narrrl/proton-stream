@@ -9,8 +9,11 @@ pub mod matcher;
 pub mod player;
 pub mod settings;
 pub mod shares;
+pub mod shortcuts;
 pub mod title;
+pub mod toast;
 pub mod transport;
+pub mod widgets;
 
 use std::collections::HashMap;
 
@@ -48,6 +51,28 @@ impl Art<'_> {
             .get(episode.node.parsed.season, number)
     }
 
+    /// A still for one episode: the provider's, else Proton's own thumbnail of
+    /// the file. Only asked for by rows that are on screen.
+    pub fn still(&mut self, title_key: &str, episode: &Episode) -> Option<egui::TextureHandle> {
+        let url = self
+            .episode(title_key, episode)
+            .and_then(|found| found.still_url.clone());
+        if let Some(url) = url {
+            let key = format!("still:{}", url);
+            let engine = self.engine;
+            if let Some(texture) = self
+                .posters
+                .texture(&key, || engine.request_poster(key.clone(), url))
+            {
+                return Some(texture);
+            }
+        }
+        let node = &episode.node;
+        let engine = self.engine;
+        self.thumbs
+            .texture(&thumbnail_key(node), || engine.request_thumbnail(node))
+    }
+
     /// The picture for a title, and how to fit it.
     ///
     /// Provider artwork first, then Proton's still, then nothing. That order is
@@ -62,12 +87,9 @@ impl Art<'_> {
             .and_then(|metadata| metadata.tile_art())
         {
             let engine = self.engine;
-            let key = title.key.clone();
-            let url = url.to_string();
-            if let Some(texture) = self
-                .posters
-                .texture(title.key.clone(), || engine.request_poster(key, url))
-            {
+            if let Some(texture) = self.posters.texture(&title.key, || {
+                engine.request_poster(title.key.clone(), url.to_string())
+            }) {
                 return Some((texture, shape));
             }
         }
@@ -76,7 +98,7 @@ impl Art<'_> {
         let engine = self.engine;
         let texture = self
             .thumbs
-            .texture(thumbnail_key(node), || engine.request_thumbnail(node))?;
+            .texture(&thumbnail_key(node), || engine.request_thumbnail(node))?;
         Some((texture, ArtShape::Landscape))
     }
 }
@@ -93,6 +115,12 @@ pub fn format_time(seconds: f64) -> String {
     } else {
         format!("{minutes}:{secs:02}")
     }
+}
+
+/// `1.25×`, or `1×`.
+pub fn format_speed(speed: f64) -> String {
+    let text = format!("{speed:.2}");
+    format!("{}×", text.trim_end_matches('0').trim_end_matches('.'))
 }
 
 /// `1.4 GiB`, for what a file costs to watch.
@@ -131,6 +159,184 @@ pub fn muted(text: impl Into<String>) -> egui::RichText {
 /// The one button style that means "this is the action".
 pub fn accent_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     filled(ui, text, Fill::Accent, Vec2::new(0.0, 0.0))
+}
+
+/// The search box in the top bar: a magnifier, the text, and a way to clear it.
+///
+/// Escape inside it clears it. `focus` puts the caret in it this frame — which
+/// is what `Ctrl+F` and `/` ask for from anywhere in the library.
+pub fn search_field(ui: &mut egui::Ui, search: &mut String, focus: bool) {
+    let id = egui::Id::new("library-search");
+    let width = 240.0;
+    let height = ui.spacing().interact_size.y;
+    let (outer, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let has_focus = ui.memory(|memory| memory.has_focus(id));
+    let lit = ui
+        .ctx()
+        .animate_bool_with_time(id.with("lit"), has_focus, 0.12);
+
+    let radius = CornerRadius::same((height / 2.0) as u8);
+    ui.painter().rect_filled(outer, radius, theme::card());
+    ui.painter().rect_stroke(
+        outer,
+        radius,
+        Stroke::new(1.0, theme::card_hover().lerp_to_gamma(theme::accent(), lit)),
+        egui::StrokeKind::Inside,
+    );
+
+    // A magnifier: a ring and a handle, so no font has to have the glyph.
+    let ink = theme::muted().lerp_to_gamma(theme::text(), lit);
+    let lens = egui::pos2(outer.left() + 16.0, outer.center().y - 1.0);
+    ui.painter().circle_stroke(lens, 5.0, Stroke::new(1.5, ink));
+    ui.painter().line_segment(
+        [lens + Vec2::new(3.6, 3.6), lens + Vec2::new(7.0, 7.0)],
+        Stroke::new(1.5, ink),
+    );
+
+    let clear_width = if search.is_empty() { 0.0 } else { 26.0 };
+    let field_rect = Rect::from_min_max(
+        egui::pos2(outer.left() + 28.0, outer.top()),
+        egui::pos2(outer.right() - 8.0 - clear_width, outer.bottom()),
+    );
+    let response = ui.put(
+        field_rect,
+        egui::TextEdit::singleline(search)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .hint_text(if has_focus {
+                "Titles and filenames"
+            } else {
+                "Search   Ctrl+F"
+            })
+            .vertical_align(egui::Align::Center)
+            .desired_width(field_rect.width()),
+    );
+    if focus {
+        response.request_focus();
+    }
+    if response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        search.clear();
+        response.surrender_focus();
+    }
+
+    if !search.is_empty() {
+        let clear = Rect::from_center_size(
+            egui::pos2(outer.right() - 18.0, outer.center().y),
+            Vec2::splat(18.0),
+        );
+        let response = ui.interact(clear, id.with("clear"), Sense::click());
+        let ink = if response.hovered() {
+            theme::text()
+        } else {
+            theme::muted()
+        };
+        let c = clear.center();
+        let d = 3.5;
+        ui.painter().line_segment(
+            [c + Vec2::new(-d, -d), c + Vec2::new(d, d)],
+            Stroke::new(1.5, ink),
+        );
+        ui.painter().line_segment(
+            [c + Vec2::new(-d, d), c + Vec2::new(d, -d)],
+            Stroke::new(1.5, ink),
+        );
+        if response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Clear (Esc)")
+            .clicked()
+        {
+            search.clear();
+        }
+    }
+}
+
+/// A thin bar in the accent, for how far something has got.
+///
+/// egui's own progress bar is one flat colour with the percentage written over
+/// it; this is the same bar the tiles and the seek bar use, so a download reads
+/// as part of the same app.
+pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, width: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let radius = CornerRadius::same(3);
+        ui.painter().rect_filled(rect, radius, theme::card_hover());
+        let mut done = rect;
+        done.set_width(rect.width() * fraction.clamp(0.0, 1.0));
+        if done.width() > 0.5 {
+            theme::accent_fill(ui.painter(), done, radius, 0.0);
+        }
+    }
+    response
+}
+
+/// A centred message for a page with nothing on it: what is missing, and what
+/// to do about it.
+pub fn empty_state(ui: &mut egui::Ui, heading: &str, body: &str) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(96.0);
+        ui.label(theme::Role::Title.rich(heading).strong());
+        ui.add_space(6.0);
+        ui.label(muted(body));
+    });
+}
+
+/// The danger colour as a button: for the one choice in a dialog that cannot be
+/// taken back.
+pub fn danger_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(text).color(theme::on_accent()))
+            .fill(theme::danger()),
+    )
+}
+
+/// What a viewer answered a [`confirm`] dialog with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// Still open.
+    Pending,
+    Confirmed,
+    /// Cancelled — by the button, Escape, or a click beside the dialog.
+    Declined,
+}
+
+/// A question with two answers, over everything else.
+///
+/// For the actions that destroy something the viewer cannot get back from
+/// inside the app — stored secrets, downloaded bytes. Everything else acts on
+/// the click.
+pub fn confirm(ctx: &egui::Context, id: &str, heading: &str, body: &str, verb: &str) -> Answer {
+    let mut answer = Answer::Pending;
+    let modal = egui::Modal::new(egui::Id::new(("confirm", id)))
+        .frame(
+            egui::Frame::new()
+                .fill(theme::surface())
+                .inner_margin(egui::Margin::same(18))
+                .corner_radius(CornerRadius::same(10)),
+        )
+        .show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.label(
+                theme::Role::Heading
+                    .rich(heading)
+                    .strong()
+                    .color(theme::text()),
+            );
+            ui.add_space(6.0);
+            ui.label(theme::Role::Body.rich(body).color(theme::muted()));
+            ui.add_space(16.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if danger_button(ui, verb).clicked() {
+                    answer = Answer::Confirmed;
+                }
+                if ui.button("Cancel").clicked() {
+                    answer = Answer::Declined;
+                }
+            });
+        });
+    if answer == Answer::Pending && modal.should_close() {
+        answer = Answer::Declined;
+    }
+    answer
 }
 
 /// What [`filled`] paints behind its label.
@@ -281,6 +487,17 @@ pub struct Card<'a> {
     pub width: f32,
 }
 
+/// Two lines of name plus one of subtitle. Fixed, because the tile is allocated
+/// before the name is laid out — and because a grid whose rows are each a
+/// different height by title length reads as broken.
+const CARD_TEXT_HEIGHT: f32 = 54.0;
+
+/// How tall [`card`] draws a tile of this width, so a grid can step over rows
+/// it does not draw.
+pub fn card_height(width: f32) -> f32 {
+    (width * theme::CARD_ASPECT).round() + CARD_TEXT_HEIGHT
+}
+
 /// Draw one tile and report whether it was clicked.
 ///
 /// A landscape picture is cropped to fill: a grid of differently-shaped black
@@ -292,10 +509,7 @@ pub struct Card<'a> {
 pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     let width = card.width;
     let image_height = (width * theme::CARD_ASPECT).round();
-    // Two lines of name plus one of subtitle. Fixed, because the tile is
-    // allocated before the name is laid out — and because a grid whose rows are
-    // each a different height by title length reads as broken.
-    let text_height = 54.0;
+    let text_height = CARD_TEXT_HEIGHT;
     let radius = CornerRadius::same(8);
 
     let (rect, response) =
@@ -328,13 +542,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     // Under the picture, not instead of it: it is what shows through while the
     // art fades in, and it is the whole tile when there is no art to come.
     if art_in < 1.0 {
-        painter.text(
-            image_rect.center(),
-            Align2::CENTER_CENTER,
-            initials(card.name),
-            egui::FontId::proportional(28.0),
-            theme::muted().gamma_multiply(1.0 - art_in),
-        );
+        placeholder(painter, image_rect, card.name, 1.0 - art_in);
     }
 
     // White because a textured rect *multiplies* its fill by the texture; the
@@ -470,7 +678,7 @@ fn contain_rect(image: Vec2, target: Rect) -> Rect {
 }
 
 /// UV rectangle that crops `image` to fill `target` without distorting it.
-fn cover_uv(image: Vec2, target: Vec2) -> Rect {
+pub fn cover_uv(image: Vec2, target: Vec2) -> Rect {
     if image.x <= 0.0 || image.y <= 0.0 || target.x <= 0.0 || target.y <= 0.0 {
         return Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
     }
@@ -485,14 +693,55 @@ fn cover_uv(image: Vec2, target: Vec2) -> Rect {
     Rect::from_center_size(egui::pos2(0.5, 0.5), Vec2::new(width, height))
 }
 
-/// Up to two letters, for a tile with no picture.
-fn initials(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|word| word.chars().next())
-        .filter(|character| character.is_alphanumeric())
-        .take(2)
-        .flat_map(char::to_uppercase)
-        .collect()
+/// What a tile with no picture shows: a gradient of its own, and its name.
+///
+/// Two grey letters on a grey card was the whole tile for any title nothing
+/// knew a picture for — a wall of them read as a page that had failed to load.
+/// The colours come from the name, so a title wears the same ones every time
+/// and two titles side by side rarely match.
+///
+/// The hash is FNV-1a: stable across runs and platforms, which the standard
+/// library's hasher deliberately is not.
+fn placeholder(painter: &egui::Painter, rect: Rect, name: &str, opacity: f32) {
+    let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    let hue = (hash % 360) as f32 / 360.0;
+    let light = theme::palette().light;
+    let (saturation, value) = if light { (0.25, 0.92) } else { (0.45, 0.34) };
+    let from: Color32 = egui::ecolor::Hsva::new(hue, saturation, value, 1.0).into();
+    let to: Color32 =
+        egui::ecolor::Hsva::new((hue + 0.12) % 1.0, saturation, value * 0.65, 1.0).into();
+    theme::ramp_fill(
+        painter,
+        rect,
+        CornerRadius::same(8),
+        (from, to),
+        theme::Direction::Vertical,
+        opacity,
+    );
+
+    let ink = if light {
+        Color32::from_black_alpha(170)
+    } else {
+        Color32::from_white_alpha(215)
+    }
+    .gamma_multiply(opacity);
+    let mut job = egui::text::LayoutJob::simple(
+        name.to_owned(),
+        theme::Role::Heading.font(),
+        ink,
+        rect.width() - 28.0,
+    );
+    job.wrap.max_rows = 3;
+    job.wrap.overflow_character = Some('…');
+    job.halign = egui::Align::Center;
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(rect.center().x, rect.center().y - galley.size().y / 2.0),
+        galley,
+        ink,
+    );
 }
 
 /// How a grid divides the width it was given.
@@ -565,13 +814,6 @@ mod tests {
             uv,
             Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
         );
-    }
-
-    #[test]
-    fn initials_take_two_letters() {
-        assert_eq!(initials("Cowboy Bebop"), "CB");
-        assert_eq!(initials("Akira"), "A");
-        assert_eq!(initials(""), "");
     }
 
     #[test]

@@ -2,30 +2,49 @@
 
 use pstr_core::library::{Library, Title, TitleKind};
 
-use crate::app::{Action, Page};
+use crate::app::{Action, Filter, LibraryView, Page, Sort};
 use crate::theme;
 use crate::ui::Art;
 use crate::ui::{self, Card};
 
-pub fn show(
-    ui: &mut egui::Ui,
-    art: &mut Art<'_>,
-    library: &Library,
-    search: &str,
-    actions: &mut Vec<Action>,
-) {
+/// What the page lists, and what it was asked for.
+pub struct Shelves<'a> {
+    pub library: &'a Library,
+    /// The search and the shelf, already worked out — see [`LibraryView`].
+    pub view: &'a LibraryView,
+    /// Whether the catalog has been read yet.
+    pub loaded: bool,
+    pub search: &'a str,
+}
+
+pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions: &mut Vec<Action>) {
+    let Shelves {
+        library,
+        view,
+        loaded,
+        search,
+    } = shelves;
+    if !loaded {
+        return placeholder(ui);
+    }
     if library.is_empty() {
         return empty_state(ui, actions);
     }
 
-    let matches = library.search(search);
+    let pick = |indices: &[usize]| -> Vec<&Title> {
+        indices
+            .iter()
+            .filter_map(|&index| library.titles.get(index))
+            .collect()
+    };
+    let matches = pick(&view.matches);
     let searching = !search.trim().is_empty();
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if !searching {
-                let resumable = library.continue_watching();
+                let resumable = pick(&view.resumable);
                 if !resumable.is_empty() {
                     ui::section(ui, "Continue watching");
                     continue_row(ui, art, &resumable, actions);
@@ -33,27 +52,79 @@ pub fn show(
                 }
             }
 
-            ui::section(
-                ui,
-                &if searching {
-                    format!(
-                        "{} matching {:?}",
-                        plural(matches.len(), "title"),
-                        search.trim()
-                    )
-                } else {
-                    plural(matches.len(), "title")
-                },
-            );
+            ui.horizontal(|ui| {
+                ui::section(
+                    ui,
+                    &if searching {
+                        format!(
+                            "{} matching {:?}",
+                            plural(matches.len(), "title"),
+                            search.trim()
+                        )
+                    } else {
+                        plural(matches.len(), "title")
+                    },
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    shelf_controls(ui, view, actions);
+                });
+            });
+            ui.add_space(6.0);
 
             if matches.is_empty() {
                 ui.add_space(8.0);
-                ui.label(ui::muted("Nothing here by that name."));
+                ui.label(ui::muted(if searching {
+                    "Nothing here by that name."
+                } else {
+                    "Nothing in the library fits that filter."
+                }));
                 return;
             }
 
             grid(ui, art, &matches, actions);
         });
+}
+
+/// The filter pills and the order, at the right of the grid's heading.
+fn shelf_controls(ui: &mut egui::Ui, view: &LibraryView, actions: &mut Vec<Action>) {
+    // Right to left: the order first, so it ends up last.
+    let sort = egui::ComboBox::from_id_salt("library-sort")
+        .selected_text(match view.sort {
+            Sort::Name => "A – Z",
+            Sort::Recent => "Recently watched",
+            Sort::Year => "Newest",
+        })
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            let mut picked = None;
+            for (sort, label) in [
+                (Sort::Name, "A – Z"),
+                (Sort::Recent, "Recently watched"),
+                (Sort::Year, "Newest"),
+            ] {
+                if ui.selectable_label(view.sort == sort, label).clicked() {
+                    picked = Some(sort);
+                }
+            }
+            picked
+        });
+    if let Some(Some(sort)) = sort.inner {
+        actions.push(Action::SetShelf(view.filter, sort));
+    }
+    ui.add_space(10.0);
+    if let Some(filter) = ui::widgets::segmented(
+        ui,
+        view.filter,
+        &[
+            (Filter::All, "All"),
+            (Filter::Series, "Series"),
+            (Filter::Films, "Films"),
+            (Filter::Watching, "Watching"),
+            (Filter::Unwatched, "Not started"),
+        ],
+    ) {
+        actions.push(Action::SetShelf(filter, view.sort));
+    }
 }
 
 /// The top shelf: one card per part-watched title, scrolling sideways.
@@ -111,7 +182,22 @@ fn continue_row(
 /// Every title, wrapped to the window.
 fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut Vec<Action>) {
     let grid = ui::columns(ui.available_width());
+    let row_height = ui::card_height(grid.width);
     for row in titles.chunks(grid.columns) {
+        // A row scrolled out of view is only its height. Laying it out anyway
+        // costs a subtitle and an artwork lookup per card per frame, and while
+        // a film plays under the transport bar a frame is every frame.
+        let slot = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(ui.available_width(), row_height),
+        );
+        if !ui.is_rect_visible(slot) {
+            // The spacing `horizontal` would have added after itself, too, or
+            // the page grows and shrinks under the scroll bar as rows come and
+            // go.
+            ui.add_space(row_height + ui.spacing().item_spacing.y + theme::CARD_GAP);
+            continue;
+        }
         ui.horizontal(|ui| {
             // The gap the width was divided around, so what is drawn matches
             // what was measured. egui's default item spacing is narrower, and
@@ -165,6 +251,34 @@ fn subtitle(title: &Title) -> String {
         format!("{} · watched", plural(total, "episode"))
     } else {
         format!("{watched} of {total} watched")
+    }
+}
+
+/// The page before the catalog has been read: the shape of a grid, with
+/// nothing in it yet.
+///
+/// Not the empty state. The catalog is on disk and is read in a fraction of a
+/// second, and telling every launch "Nothing in the library yet" for that
+/// fraction is a flash of something false.
+fn placeholder(ui: &mut egui::Ui) {
+    let grid = ui::columns(ui.available_width());
+    let height = ui::card_height(grid.width);
+    ui::section(ui, "Library");
+    for _ in 0..2 {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
+            for _ in 0..grid.columns {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(grid.width, height), egui::Sense::hover());
+                let image = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(grid.width, (grid.width * theme::CARD_ASPECT).round()),
+                );
+                ui.painter()
+                    .rect_filled(image, egui::CornerRadius::same(8), theme::card());
+            }
+        });
+        ui.add_space(theme::CARD_GAP);
     }
 }
 
