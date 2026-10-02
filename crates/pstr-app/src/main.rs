@@ -31,6 +31,17 @@ fn main() -> anyhow::Result<()> {
     );
     let dirs = AppDirs::ensure().context("resolve app directories")?;
 
+    // Before the window: a second launch hands its request to the first and
+    // never opens one.
+    let request = pstr_app::instance::Request::from_args(std::env::args().skip(1));
+    let instance = match pstr_app::instance::claim(&runtime, &dirs, &request) {
+        pstr_app::instance::Claim::First(listener) => listener,
+        pstr_app::instance::Claim::Handed => {
+            tracing::info!("handed over to the window already open");
+            return Ok(());
+        }
+    };
+
     let window = pstr_app::window::WindowState::load(&dirs.window_file());
     let mut viewport = egui::ViewportBuilder::default();
     // X11 and Windows take the icon from the window. Wayland ignores this and
@@ -57,7 +68,7 @@ fn main() -> anyhow::Result<()> {
         "proton-stream",
         options,
         Box::new(move |cc| {
-            pstr_app::app::App::new(cc, runtime, dirs)
+            pstr_app::app::App::new(cc, runtime, dirs, instance, request)
                 .map(|app| Box::new(app) as Box<dyn eframe::App>)
                 .map_err(|error| error.into())
         }),

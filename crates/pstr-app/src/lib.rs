@@ -23,6 +23,7 @@ pub mod app;
 pub mod desktop_prefs;
 pub mod engine;
 pub mod inhibit;
+pub mod instance;
 pub mod media;
 pub mod notify;
 pub mod pacing;

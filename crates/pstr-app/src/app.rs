@@ -417,6 +417,8 @@ pub struct ShareForm {
 pub struct App {
     engine: Engine,
     events: Receiver<Event>,
+    /// What later launches asked for. See [`crate::instance`].
+    requests: Receiver<crate::instance::Request>,
     pub page: Page,
     pub library: Library,
     pub shares: Vec<Share>,
@@ -498,7 +500,10 @@ impl App {
         cc: &eframe::CreationContext<'_>,
         runtime: std::sync::Arc<tokio::runtime::Runtime>,
         dirs: AppDirs,
+        instance: crate::instance::Listener,
+        request: crate::instance::Request,
     ) -> anyhow::Result<Self> {
+        let requests = instance.serve(&runtime, &cc.egui_ctx, request);
         // After the engine, not before: the engine is what reads the stored
         // theme, and a window that paints one frame in the default palette
         // before switching is a window that flashes on every launch.
@@ -518,6 +523,7 @@ impl App {
         Ok(Self {
             engine,
             events,
+            requests,
             page: Page::Library,
             library: Library::default(),
             shares: Vec::new(),
@@ -1571,6 +1577,15 @@ impl eframe::App for App {
         self.window.observe(ctx);
 
         let mut actions: Vec<Action> = Vec::new();
+        while let Ok(request) = self.requests.try_recv() {
+            // A second launch is someone looking for this window, so it comes
+            // forward even when there is nothing else to do.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if let crate::instance::Request::AddShare(url) = request {
+                actions.push(Action::PasteShare(url));
+            }
+        }
         self.media.drain(self.playback.as_ref(), &mut actions);
         let cover = self.media_cover();
         self.media.show(self.playback.as_ref(), cover.as_deref());

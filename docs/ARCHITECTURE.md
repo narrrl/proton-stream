@@ -124,3 +124,4 @@ an edge case.
 | Provider artwork | cache dir, `posters/` | Yes — refetched by URL; stored scaled to 640 px |
 | Desktop-only settings | config dir, `desktop.json` | Defaults if missing — hardware decoding, cache budget; never overwritten when unparseable |
 | Window size | config dir, `window.json` | Defaults if missing or implausible |
+| Single-instance pipe key (Windows) | config dir, `instance.key` | Yes — regenerated if missing |

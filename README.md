@@ -35,7 +35,11 @@ Its toolchain, emulator, signing, and release instructions are in [`docs/ANDROID
 
 ```bash
 cargo run --release -p pstr-app          # the app
+proton-stream 'https://drive.proton.me/urls/TOKEN#fragment'   # open the Add form with a link
 ```
+
+One window at a time: a second launch brings the open window forward and
+hands it any share link it was given, then exits.
 
 The `pstr` CLI does the same work headlessly, and is what tells you which layer
 is broken:
@@ -106,6 +110,9 @@ see [`docs/ANDROID.md`](docs/ANDROID.md) for exact setup and release signing.
 - The block cache holds decrypted content. It lives in your cache directory,
   can be deleted at any time the app is not running, and can be sized or
   emptied from Settings → Storage.
+- A share link given as a command-line argument is visible to other users of
+  the machine in the process list while that launch runs, and may land in
+  shell history. Pasting it into the window (Ctrl+V) does neither.
 - The desktop's media widget is handed the title, the episode and a `file://`
   path to artwork already on disk — never a provider URL, so the shell never
   contacts a metadata provider on its own.
