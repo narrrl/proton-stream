@@ -99,7 +99,21 @@ impl Role {
 /// Install a real CJK fallback before the default egui fonts.  egui ships a
 /// compact Latin font, but it intentionally does not bundle the multi-megabyte
 /// CJK families.  Native desktops already provide one, so use it when present.
+///
+/// On a thread of its own: `fc-match` and reading a font file of tens of
+/// megabytes held the first frame back by a visible moment, and every name
+/// that needs the fallback is still loading from the catalog by then anyway.
 pub fn install_font_fallbacks(ctx: &egui::Context) {
+    let ctx = ctx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("fonts".into())
+        .spawn(move || install_cjk_fallback(&ctx));
+    if let Err(error) = spawned {
+        tracing::debug!("font fallback thread: {error}");
+    }
+}
+
+fn install_cjk_fallback(ctx: &egui::Context) {
     let Some((path, index)) = system_cjk_font() else {
         return;
     };
@@ -116,6 +130,7 @@ pub fn install_font_fallbacks(ctx: &egui::Context) {
         fonts.families.entry(family).or_default().push(name.clone());
     }
     ctx.set_fonts(fonts);
+    ctx.request_repaint();
 }
 
 #[cfg(target_os = "linux")]

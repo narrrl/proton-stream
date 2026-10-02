@@ -610,7 +610,9 @@ impl Catalog {
 
     /// Record where playback is.
     pub fn set_watch_state(&self, share_id: &str, link_id: &str, state: &WatchState) -> Result<()> {
-        self.conn.execute(
+        // Cached: playback saves its position every few seconds, and this is
+        // the one write that runs on a clock rather than on a click.
+        let mut upsert = self.conn.prepare_cached(
             "INSERT INTO watch_state (share_id, link_id, position_secs, duration_secs, watched, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (share_id, link_id) DO UPDATE SET
@@ -618,15 +620,15 @@ impl Catalog {
                  duration_secs = excluded.duration_secs,
                  watched       = excluded.watched,
                  updated_at    = excluded.updated_at",
-            params![
-                share_id,
-                link_id,
-                state.position_secs,
-                state.duration_secs,
-                state.watched as i64,
-                state.updated_at,
-            ],
         )?;
+        upsert.execute(params![
+            share_id,
+            link_id,
+            state.position_secs,
+            state.duration_secs,
+            state.watched as i64,
+            state.updated_at,
+        ])?;
         Ok(())
     }
 

@@ -331,6 +331,28 @@ impl Library {
         self.titles.is_empty()
     }
 
+    /// Record a new watch state for one file in place. Returns whether the
+    /// file is in the library.
+    ///
+    /// What a save during playback or a "mark watched" needs: rebuilding the
+    /// whole library from the catalog for one changed row re-reads and re-sorts
+    /// every file, and on a large share that is a visible pause.
+    pub fn set_watch(&mut self, share_id: &str, link_id: &str, state: WatchState) -> bool {
+        let episode = self
+            .titles
+            .iter_mut()
+            .flat_map(|title| title.seasons.iter_mut())
+            .flat_map(|season| season.episodes.iter_mut())
+            .find(|episode| episode.node.share_id == share_id && episode.node.link_id == link_id);
+        match episode {
+            Some(episode) => {
+                episode.watch = Some(state);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn get(&self, key: &str) -> Option<&Title> {
         self.titles.iter().find(|title| title.key == key)
     }
@@ -588,6 +610,21 @@ mod tests {
         assert_eq!(title.next_up().unwrap().node.link_id, "2");
         assert_eq!(title.resume().unwrap().resume_at(), Some(700.0));
         assert_eq!(library.continue_watching().len(), 1);
+    }
+
+    #[test]
+    fn a_watch_state_set_in_place_matches_a_rebuild() {
+        let nodes = vec![
+            node("s", "1", "Show - S01E01", Some(1), Some(1)),
+            node("s", "2", "Show - S01E02", Some(1), Some(2)),
+        ];
+        let mut states = HashMap::new();
+        let mut library = Library::build(nodes.clone(), &states);
+        let state = watch(700.0, 1440.0, false, 20);
+        assert!(library.set_watch("s", "2", state));
+        states.insert(("s".into(), "2".into()), state);
+        assert_eq!(library, Library::build(nodes, &states));
+        assert!(!library.set_watch("s", "9", state));
     }
 
     #[test]

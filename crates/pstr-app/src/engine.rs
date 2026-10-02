@@ -18,7 +18,8 @@
 //! lands in the channel and sits there until the viewer happens to move the
 //! mouse.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -237,6 +238,12 @@ pub enum Event {
     },
     /// That player is gone: its window was closed, or playback ended.
     PlayerStopped { id: u64 },
+    /// One file's watch state was saved, for the library to patch in place.
+    Watched {
+        share_id: String,
+        link_id: String,
+        state: WatchState,
+    },
     /// Something the viewer should see, phrased for them.
     Error(String),
     /// Something the viewer might like to see, briefly.
@@ -244,6 +251,10 @@ pub enum Event {
     /// Full download-manager snapshot. Replacing rather than patching avoids
     /// stale rows when a task is removed.
     Downloads(Vec<DownloadItem>),
+    /// One running download moved on. Sent instead of a snapshot for byte
+    /// progress, which arrives several times a second per download, while the
+    /// list it would copy and sort holds every file ever kept offline.
+    DownloadProgress(Box<DownloadItem>),
     /// Completed local copies, for badges and online-only actions.
     OfflineFiles(HashSet<DownloadKey>),
 }
@@ -685,8 +696,10 @@ impl Engine {
             };
             match result {
                 Ok((files, watch)) => {
-                    engine.emit(Event::LibraryLoaded(Library::build(files, &watch)));
-                    engine.load_offline_files();
+                    let library = Library::build(files, &watch);
+                    let targets = download_targets(&library);
+                    engine.emit(Event::LibraryLoaded(library));
+                    engine.refresh_offline(Some(targets));
                 }
                 Err(error) => engine.fail("read the catalog", error),
             }
@@ -696,70 +709,74 @@ impl Engine {
     /// Refresh the lightweight offline index used by title badges and actions.
     pub fn load_offline_files(&self) {
         let engine = self.clone();
-        self.runtime.spawn_blocking(move || {
-            let result = (|| {
-                let catalog = engine.catalog.lock();
-                let files = catalog.all_offline_files()?;
-                let library = Library::build(catalog.all_files()?, &catalog.all_watch_states()?);
-                let mut targets = HashMap::new();
-                for title in &library.titles {
-                    for episode in title.episodes() {
-                        let target = PlaybackTarget::new(title, episode);
-                        targets.insert(DownloadKey::from(&target), target);
+        self.runtime
+            .spawn_blocking(move || engine.refresh_offline(None));
+    }
+
+    /// The offline index, against `targets` when the caller has just built a
+    /// library to take them from — otherwise one is built here, which on a
+    /// large catalog is most of what this costs.
+    fn refresh_offline(&self, targets: Option<HashMap<DownloadKey, PlaybackTarget>>) {
+        let result = (|| {
+            let catalog = self.catalog.lock();
+            let files = catalog.all_offline_files()?;
+            let targets = match targets {
+                Some(targets) => targets,
+                None => download_targets(&Library::build(
+                    catalog.all_files()?,
+                    &catalog.all_watch_states()?,
+                )),
+            };
+            let mut valid = HashSet::new();
+            let mut hydrated = Vec::new();
+            for ((share_id, link_id), file) in files {
+                let key = DownloadKey { share_id, link_id };
+                let path = self
+                    .dirs
+                    .offline_file(&key.share_id, &key.link_id, &file.revision_id);
+                let Some(expected) = file
+                    .block_sizes
+                    .iter()
+                    .try_fold(0_u64, |sum, size| sum.checked_add(*size))
+                else {
+                    catalog.remove_offline_file(&key.share_id, &key.link_id)?;
+                    continue;
+                };
+                if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == expected) {
+                    valid.insert(key.clone());
+                    if let Some(target) = targets.get(&key).cloned() {
+                        hydrated.push(DownloadItem {
+                            key,
+                            target,
+                            state: DownloadState::Completed,
+                            downloaded: expected,
+                            total: expected,
+                            rate: 0.0,
+                        });
                     }
+                } else {
+                    // The catalog is an index, not the bytes. A manually
+                    // removed or truncated file must stop wearing an
+                    // offline badge and remain playable from the share.
+                    catalog.remove_offline_file(&key.share_id, &key.link_id)?;
                 }
-                let mut valid = HashSet::new();
-                let mut hydrated = Vec::new();
-                for ((share_id, link_id), file) in files {
-                    let key = DownloadKey { share_id, link_id };
-                    let path =
-                        engine
-                            .dirs
-                            .offline_file(&key.share_id, &key.link_id, &file.revision_id);
-                    let Some(expected) = file
-                        .block_sizes
-                        .iter()
-                        .try_fold(0_u64, |sum, size| sum.checked_add(*size))
-                    else {
-                        catalog.remove_offline_file(&key.share_id, &key.link_id)?;
-                        continue;
-                    };
-                    if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == expected) {
-                        valid.insert(key.clone());
-                        if let Some(target) = targets.get(&key).cloned() {
-                            hydrated.push(DownloadItem {
-                                key,
-                                target,
-                                state: DownloadState::Completed,
-                                downloaded: expected,
-                                total: expected,
-                                rate: 0.0,
-                            });
-                        }
-                    } else {
-                        // The catalog is an index, not the bytes. A manually
-                        // removed or truncated file must stop wearing an
-                        // offline badge and remain playable from the share.
-                        catalog.remove_offline_file(&key.share_id, &key.link_id)?;
-                    }
-                }
-                Ok::<_, pstr_core::Error>((valid, hydrated))
-            })();
-            match result {
-                Ok((files, hydrated)) => {
-                    {
-                        let mut downloads = engine.downloads.lock();
-                        for item in hydrated {
-                            downloads.items.entry(item.key.clone()).or_insert(item);
-                        }
-                    }
-                    engine.hydrate_partial_downloads();
-                    engine.emit_downloads();
-                    engine.emit(Event::OfflineFiles(files));
-                }
-                Err(error) => engine.fail("read offline downloads", error),
             }
-        });
+            Ok::<_, pstr_core::Error>((valid, hydrated))
+        })();
+        match result {
+            Ok((files, hydrated)) => {
+                {
+                    let mut downloads = self.downloads.lock();
+                    for item in hydrated {
+                        downloads.items.entry(item.key.clone()).or_insert(item);
+                    }
+                }
+                self.hydrate_partial_downloads();
+                self.emit_downloads();
+                self.emit(Event::OfflineFiles(files));
+            }
+            Err(error) => self.fail("read offline downloads", error),
+        }
     }
 
     /// Crawl one share, or all of them, and reload the library.
@@ -917,7 +934,13 @@ impl Engine {
             .set_watch_state(share_id, link_id, state)
         {
             tracing::warn!("save watch state for {link_id}: {error}");
+            return;
         }
+        self.emit(Event::Watched {
+            share_id: share_id.to_owned(),
+            link_id: link_id.to_owned(),
+            state: *state,
+        });
     }
 
     pub fn title_track_prefs(&self, key: &str) -> Option<TitleTrackPrefs> {
@@ -1259,6 +1282,20 @@ impl Engine {
         self.emit_downloads();
     }
 
+    /// [`Self::update_download`] for a change to one row only: the row goes
+    /// to the UI on its own rather than in a fresh snapshot of every row.
+    fn progress_download(&self, key: &DownloadKey, update: impl FnOnce(&mut DownloadItem)) {
+        let item = {
+            let mut downloads = self.downloads.lock();
+            let Some(item) = downloads.items.get_mut(key) else {
+                return;
+            };
+            update(item);
+            item.clone()
+        };
+        self.emit(Event::DownloadProgress(Box::new(item)));
+    }
+
     fn partial_paths(&self, key: &DownloadKey) -> (std::path::PathBuf, std::path::PathBuf) {
         let partial = self
             .dirs
@@ -1457,7 +1494,7 @@ impl Engine {
             {
                 let seconds = last_snapshot.elapsed().as_secs_f64();
                 let instant = (offset - snapshot_bytes) as f64 / seconds.max(f64::EPSILON);
-                self.update_download(&key, |item| {
+                self.progress_download(&key, |item| {
                     item.state = DownloadState::Running;
                     item.downloaded = offset;
                     // Smoothed, or the time left jumps about with every block
@@ -1536,7 +1573,17 @@ impl Engine {
         self.runtime.spawn(async move {
             if let Ok(bytes) = tokio::fs::read(&path).await {
                 match decode_thumbnail(&bytes) {
-                    Ok(image) => return engine.emit(Event::Thumbnail { key, image }),
+                    Ok(decoded) => {
+                        // A cache written before entries were stored shrunk
+                        // holds the full preview; shrink it once, on its way out.
+                        if let Some(smaller) = &decoded.smaller {
+                            store_image(&path, smaller).await;
+                        }
+                        return engine.emit(Event::Thumbnail {
+                            key,
+                            image: decoded.image,
+                        });
+                    }
                     // A truncated or corrupt cache entry is not worth reporting;
                     // fall through and fetch it again.
                     Err(error) => tracing::debug!("cached thumbnail {key}: {error}"),
@@ -1579,13 +1626,14 @@ impl Engine {
                 return engine.emit(Event::ThumbnailMissing { key });
             };
 
-            if let Some(parent) = path.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-            let _ = tokio::fs::write(&path, &bytes).await;
-
             match decode_thumbnail(&bytes) {
-                Ok(image) => engine.emit(Event::Thumbnail { key, image }),
+                Ok(decoded) => {
+                    store_image(&path, decoded.smaller.as_deref().unwrap_or(&bytes)).await;
+                    engine.emit(Event::Thumbnail {
+                        key,
+                        image: decoded.image,
+                    })
+                }
                 Err(error) => {
                     tracing::debug!("decode thumbnail {key}: {error}");
                     engine.emit(Event::ThumbnailMissing { key });
@@ -1937,10 +1985,13 @@ impl Engine {
         self.runtime.spawn(async move {
             if let Ok(bytes) = tokio::fs::read(&path).await {
                 match decode_thumbnail(&bytes) {
-                    Ok(image) => {
+                    Ok(decoded) => {
+                        if let Some(smaller) = &decoded.smaller {
+                            store_image(&path, smaller).await;
+                        }
                         return engine.emit(Event::Poster {
                             key: title_key,
-                            image,
+                            image: decoded.image,
                         });
                     }
                     Err(error) => tracing::debug!("cached poster {title_key}: {error}"),
@@ -1960,16 +2011,14 @@ impl Engine {
                 }
             };
 
-            if let Some(parent) = path.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-            let _ = tokio::fs::write(&path, &bytes).await;
-
             match decode_thumbnail(&bytes) {
-                Ok(image) => engine.emit(Event::Poster {
-                    key: title_key,
-                    image,
-                }),
+                Ok(decoded) => {
+                    store_image(&path, decoded.smaller.as_deref().unwrap_or(&bytes)).await;
+                    engine.emit(Event::Poster {
+                        key: title_key,
+                        image: decoded.image,
+                    })
+                }
                 Err(error) => {
                     tracing::debug!("decode poster for {title_key}: {error}");
                     engine.emit(Event::PosterMissing { key: title_key })
@@ -1977,6 +2026,18 @@ impl Engine {
             }
         });
     }
+}
+
+/// Every file in `library`, by the key its download is filed under.
+fn download_targets(library: &Library) -> HashMap<DownloadKey, PlaybackTarget> {
+    let mut targets = HashMap::new();
+    for title in &library.titles {
+        for episode in title.episodes() {
+            let target = PlaybackTarget::new(title, episode);
+            targets.insert(DownloadKey::from(&target), target);
+        }
+    }
+    targets
 }
 
 /// A short, filesystem-safe name for a URL.
@@ -2117,24 +2178,61 @@ async fn write_marker_atomically(
     Ok(())
 }
 
+/// A picture ready to upload, and — when it had to be scaled down — the
+/// scaled copy encoded again, for the disk cache to keep instead.
+struct Decoded {
+    image: egui::ColorImage,
+    smaller: Option<Vec<u8>>,
+}
+
 /// Decode image bytes into something egui can upload, scaled down to
 /// [`THUMBNAIL_MAX_EDGE`].
 ///
 /// Runs on the runtime rather than the UI thread: a JPEG decode per tile during
 /// the first paint of a large library is visible as dropped frames.
-fn decode_thumbnail(bytes: &[u8]) -> anyhow::Result<egui::ColorImage> {
+///
+/// A provider's backdrop is often 1920 px or more, and decoding and resizing
+/// that every launch was most of what painting a cached grid cost. The scaled
+/// copy is handed back so the cache holds that instead, and the next launch
+/// decodes a picture already the size it is drawn at.
+fn decode_thumbnail(bytes: &[u8]) -> anyhow::Result<Decoded> {
     let decoded = image::load_from_memory(bytes)?;
-    let decoded = if decoded.width().max(decoded.height()) > THUMBNAIL_MAX_EDGE {
-        decoded.thumbnail(THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE)
+    let (decoded, smaller) = if decoded.width().max(decoded.height()) > THUMBNAIL_MAX_EDGE {
+        let scaled = decoded.thumbnail(THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE);
+        let encoded = encode_for_cache(&scaled);
+        (scaled, encoded)
     } else {
-        decoded
+        (decoded, None)
     };
     let rgba = decoded.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
-    Ok(egui::ColorImage::from_rgba_unmultiplied(
-        size,
-        rgba.as_flat_samples().as_slice(),
-    ))
+    Ok(Decoded {
+        image: egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_flat_samples().as_slice()),
+        smaller,
+    })
+}
+
+/// Encode a scaled picture for the cache: PNG when it has transparency to keep
+/// (a logo), JPEG otherwise. `None` if encoding failed, which leaves the cache
+/// holding the original — slower to load, never wrong.
+fn encode_for_cache(image: &image::DynamicImage) -> Option<Vec<u8>> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    let encoded = if image.color().has_alpha() {
+        image.write_to(&mut bytes, image::ImageFormat::Png)
+    } else {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 88)
+            .encode_image(&image.to_rgb8())
+    };
+    encoded.ok().map(|()| bytes.into_inner())
+}
+
+/// Write a cached picture. Best effort: the cache is a convenience, and a
+/// write that fails only means the next launch fetches it again.
+async fn store_image(path: &Path, bytes: &[u8]) {
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let _ = tokio::fs::write(path, bytes).await;
 }
 
 /// Watch state as of now, for a position in a file.
@@ -2168,14 +2266,58 @@ pub fn describe_failures(failures: &[(String, String)]) -> Option<String> {
 /// must be remembered as not existing. Without that second half, every render
 /// pays a round-trip per unmatched tile, which is exactly what
 /// `proton-drive-linux`'s photo grid had to learn.
-#[derive(Default)]
+///
+/// It is also bounded. Scrolling a large library once used to keep a texture
+/// for every title in it for the rest of the session; past [`IMAGE_BUDGET`]
+/// bytes the picture asked for longest ago goes, and comes back from the disk
+/// cache if it is asked for again.
 pub struct ImageCache {
-    textures: HashMap<String, egui::TextureHandle>,
-    requested: std::collections::HashSet<String>,
-    missing: std::collections::HashSet<String>,
+    textures: HashMap<String, Entry>,
+    requested: HashSet<String>,
+    missing: HashSet<String>,
+    /// Decoded, waiting for a frame with upload budget left.
+    pending: VecDeque<(String, egui::ColorImage)>,
+    /// A logical clock: one tick per lookup, so "asked for longest ago" needs
+    /// no wall time.
+    clock: u64,
+    bytes: usize,
+    budget: usize,
+}
+
+struct Entry {
+    texture: egui::TextureHandle,
+    used: u64,
+    bytes: usize,
+}
+
+/// Texture memory one [`ImageCache`] may hold. A 640 px card picture is about
+/// a megabyte, so this is a few hundred tiles — several screens of grid.
+const IMAGE_BUDGET: usize = 256 << 20;
+
+/// Textures uploaded per frame. A cached grid answers dozens of pictures at
+/// once, and uploading them all in one frame is a visible hitch; spread over a
+/// few frames they arrive faster than the eye follows.
+const UPLOADS_PER_FRAME: usize = 6;
+
+impl Default for ImageCache {
+    fn default() -> Self {
+        Self::with_budget(IMAGE_BUDGET)
+    }
 }
 
 impl ImageCache {
+    fn with_budget(budget: usize) -> Self {
+        Self {
+            textures: HashMap::new(),
+            requested: HashSet::new(),
+            missing: HashSet::new(),
+            pending: VecDeque::new(),
+            clock: 0,
+            bytes: 0,
+            budget,
+        }
+    }
+
     /// The texture for `key`, calling `fetch` the first time it is asked for.
     ///
     /// `None` while a fetch is in flight, and forever for a picture that turned
@@ -2184,8 +2326,10 @@ impl ImageCache {
     /// Borrows the key: this is asked once per tile per frame, and a hit — the
     /// usual answer — should not cost an allocation.
     pub fn texture(&mut self, key: &str, fetch: impl FnOnce()) -> Option<egui::TextureHandle> {
-        if let Some(texture) = self.textures.get(key) {
-            return Some(texture.clone());
+        self.clock += 1;
+        if let Some(entry) = self.textures.get_mut(key) {
+            entry.used = self.clock;
+            return Some(entry.texture.clone());
         }
         if !self.missing.contains(key) && !self.requested.contains(key) {
             self.requested.insert(key.to_owned());
@@ -2194,9 +2338,56 @@ impl ImageCache {
         None
     }
 
-    pub fn insert(&mut self, ctx: &egui::Context, key: String, image: egui::ColorImage) {
-        let texture = ctx.load_texture(&key, image, egui::TextureOptions::LINEAR);
-        self.textures.insert(key, texture);
+    /// Queue a decoded picture. It becomes a texture in [`Self::upload`].
+    pub fn insert(&mut self, key: String, image: egui::ColorImage) {
+        // Forgotten while it was being fetched: the answer is for a question
+        // nobody is asking any more.
+        if self.requested.contains(&key) {
+            self.pending.push_back((key, image));
+        }
+    }
+
+    /// Upload up to this frame's share of queued pictures. Returns whether any
+    /// are still waiting, so the caller can ask for another frame.
+    pub fn upload(&mut self, ctx: &egui::Context) -> bool {
+        for _ in 0..UPLOADS_PER_FRAME {
+            let Some((key, image)) = self.pending.pop_front() else {
+                break;
+            };
+            let bytes = image.pixels.len() * 4;
+            let texture = ctx.load_texture(&key, image, egui::TextureOptions::LINEAR);
+            self.clock += 1;
+            let entry = Entry {
+                texture,
+                used: self.clock,
+                bytes,
+            };
+            if let Some(old) = self.textures.insert(key, entry) {
+                self.bytes -= old.bytes;
+            }
+            self.bytes += bytes;
+            self.evict();
+        }
+        !self.pending.is_empty()
+    }
+
+    /// Drop the pictures asked for longest ago until the rest fit the budget.
+    fn evict(&mut self) {
+        while self.bytes > self.budget && self.textures.len() > 1 {
+            let Some(oldest) = self
+                .textures
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(entry) = self.textures.remove(&oldest) {
+                self.bytes -= entry.bytes;
+            }
+            // Asked for again, it is fetched again — from the disk cache.
+            self.requested.remove(&oldest);
+        }
     }
 
     pub fn mark_missing(&mut self, key: String) {
@@ -2205,9 +2396,12 @@ impl ImageCache {
 
     /// Forget one picture, so the next ask fetches it again.
     pub fn forget(&mut self, key: &str) {
-        self.textures.remove(key);
+        if let Some(entry) = self.textures.remove(key) {
+            self.bytes -= entry.bytes;
+        }
         self.requested.remove(key);
         self.missing.remove(key);
+        self.pending.retain(|(pending, _)| pending != key);
     }
 
     /// Forget everything. Used when the catalog is replaced, so a recrawl that
@@ -2217,6 +2411,67 @@ impl ImageCache {
         self.textures.clear();
         self.requested.clear();
         self.missing.clear();
+        self.pending.clear();
+        self.bytes = 0;
+    }
+}
+
+#[cfg(test)]
+mod image_cache_tests {
+    use super::*;
+
+    fn picture() -> egui::ColorImage {
+        egui::ColorImage::filled([4, 4], egui::Color32::WHITE)
+    }
+
+    #[test]
+    fn a_full_cache_drops_the_picture_asked_for_longest_ago() {
+        let ctx = egui::Context::default();
+        // Room for two 4×4 pictures.
+        let mut cache = ImageCache::with_budget(2 * 64);
+        for key in ["a", "b"] {
+            cache.texture(key, || {});
+            cache.insert(key.into(), picture());
+        }
+        cache.upload(&ctx);
+        // "a" is looked at again, so "b" is now the stale one.
+        assert!(cache.texture("a", || {}).is_some());
+        cache.texture("c", || {});
+        cache.insert("c".into(), picture());
+        cache.upload(&ctx);
+
+        assert!(cache.texture("a", || {}).is_some());
+        assert!(cache.texture("c", || {}).is_some());
+        let mut fetched = false;
+        assert!(cache.texture("b", || fetched = true).is_none());
+        assert!(
+            fetched,
+            "an evicted picture is fetched again when asked for"
+        );
+    }
+
+    #[test]
+    fn uploads_are_spread_over_frames() {
+        let ctx = egui::Context::default();
+        let mut cache = ImageCache::default();
+        for index in 0..UPLOADS_PER_FRAME + 1 {
+            let key = format!("{index}");
+            cache.texture(&key, || {});
+            cache.insert(key, picture());
+        }
+        assert!(cache.upload(&ctx), "one picture is left for the next frame");
+        assert!(!cache.upload(&ctx));
+    }
+
+    #[test]
+    fn an_answer_for_a_forgotten_picture_is_dropped() {
+        let ctx = egui::Context::default();
+        let mut cache = ImageCache::default();
+        cache.texture("a", || {});
+        cache.forget("a");
+        cache.insert("a".into(), picture());
+        cache.upload(&ctx);
+        assert!(cache.textures.is_empty());
     }
 }
 

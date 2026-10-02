@@ -565,9 +565,9 @@ impl App {
                     self.crawling = true;
                     self.crawl_progress = Some((share, found));
                 }
-                Event::Thumbnail { key, image } => self.thumbs.insert(ctx, key, image),
+                Event::Thumbnail { key, image } => self.thumbs.insert(key, image),
                 Event::ThumbnailMissing { key } => self.thumbs.mark_missing(key),
-                Event::Poster { key, image } => self.posters.insert(ctx, key, image),
+                Event::Poster { key, image } => self.posters.insert(key, image),
                 Event::PosterMissing { key } => self.posters.mark_missing(key),
                 Event::Metadata(records) => {
                     // Artwork keyed by a title whose record changed may now
@@ -695,9 +695,15 @@ impl App {
                             };
                         }
                     }
-                    // The position that was just saved is what the library
-                    // should now show.
-                    self.engine.load_library();
+                }
+                Event::Watched {
+                    share_id,
+                    link_id,
+                    state,
+                } => {
+                    if self.library.set_watch(&share_id, &link_id, state) {
+                        self.view.stale = true;
+                    }
                 }
                 Event::Error(text) => {
                     self.opening = None;
@@ -705,8 +711,19 @@ impl App {
                 }
                 Event::Status(text) => self.note(ctx, text, false),
                 Event::Downloads(downloads) => self.downloads = downloads,
+                Event::DownloadProgress(item) => {
+                    if let Some(row) = self.downloads.iter_mut().find(|row| row.key == item.key) {
+                        *row = *item;
+                    }
+                }
                 Event::OfflineFiles(files) => self.offline_files = files,
             }
+        }
+        // Pictures become textures a few per frame; the rest wait for the next.
+        let thumbs_waiting = self.thumbs.upload(ctx);
+        let posters_waiting = self.posters.upload(ctx);
+        if thumbs_waiting || posters_waiting {
+            ctx.request_repaint();
         }
     }
 
@@ -1075,7 +1092,6 @@ impl App {
                     link_id,
                     watch_state(position, duration, watched),
                 );
-                self.engine.load_library();
             }
             Action::Player(command) => {
                 if let crate::playback::Command::SeekBy(seconds) = command {
