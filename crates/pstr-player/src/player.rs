@@ -476,6 +476,14 @@ impl Player {
         Ok(())
     }
 
+    /// Save the current frame, without subtitles or anything drawn over it,
+    /// to `path`. The format follows the extension.
+    pub fn screenshot(&self, path: &std::path::Path) -> Result<()> {
+        let path = path.to_string_lossy();
+        self.mpv.command("screenshot-to-file", &[&path, "video"])?;
+        Ok(())
+    }
+
     pub fn stop(&self) -> Result<()> {
         self.mpv.command("stop", &[])?;
         Ok(())

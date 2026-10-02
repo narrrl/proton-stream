@@ -130,7 +130,7 @@ impl PlaybackTarget {
 }
 
 /// What the UI can ask the player to do.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Command {
     TogglePause,
     SeekBy(f64),
@@ -149,6 +149,8 @@ pub enum Command {
     SetSubtitlePosition(f64),
     /// 1.0 is normal speed.
     SetSpeed(f64),
+    /// Save the current frame to this file.
+    Screenshot(std::path::PathBuf),
     Stop,
 }
 
@@ -626,6 +628,7 @@ fn apply_command(
         Command::SetMuted(muted) => player.set_muted(muted),
         Command::SetSubtitlePosition(percent) => player.set_subtitle_position(percent),
         Command::SetSpeed(speed) => player.set_speed(speed),
+        Command::Screenshot(path) => player.screenshot(&path),
         Command::SelectTrack(kind, track) => select_track(engine, id, player, kind, track),
         Command::Stop => {
             let _ = player.quit();

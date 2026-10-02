@@ -105,6 +105,8 @@ pub enum Action {
     Crawl(Option<String>),
     /// Stop the crawls still listing.
     StopCrawl,
+    /// Save the frame on screen to the pictures folder.
+    Screenshot,
     /// A share link was pasted outside the form: open the form with it.
     PasteShare(String),
     AddShare {
@@ -449,6 +451,8 @@ pub struct App {
     media: crate::media::MediaSession,
     /// The cover handed to it, worked out once per player.
     media_cover: Option<(u64, Option<String>)>,
+    /// The page last drawn and when it was first drawn, for the fade in.
+    shown_page: (Option<Page>, f64),
     /// Holds the screensaver off while a film is on screen and playing.
     inhibitor: crate::inhibit::Inhibitor,
     notifier: crate::notify::Notifier,
@@ -521,6 +525,7 @@ impl App {
             media: crate::media::MediaSession::new(&cc.egui_ctx, window_handle(cc)),
             media_cover: None,
             inhibitor: crate::inhibit::Inhibitor::new(),
+            shown_page: (None, 0.0),
             notifier: crate::notify::Notifier::new(),
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
@@ -1172,6 +1177,24 @@ impl App {
                 self.engine.crawl(share);
             }
             Action::StopCrawl => self.engine.stop_crawl(),
+            Action::Screenshot => {
+                let Some(playback) = &self.playback else {
+                    return;
+                };
+                let Some(folder) = screenshot_folder() else {
+                    return self.note(ctx, "no pictures folder to save a screenshot in", true);
+                };
+                if let Err(error) = std::fs::create_dir_all(&folder) {
+                    return self.note(ctx, format!("could not save a screenshot: {error}"), true);
+                }
+                let path = folder.join(screenshot_name(
+                    &playback.target.title_name,
+                    playback.target.caption().as_str(),
+                    playback.position,
+                ));
+                self.send_player(crate::playback::Command::Screenshot(path));
+                self.flash(ctx, "screenshot saved".to_owned());
+            }
             Action::PasteShare(url) => {
                 self.page = Page::Shares;
                 self.form.url = url;
@@ -1659,6 +1682,7 @@ impl eframe::App for App {
                 offline_files,
                 confirm_partial_delete,
                 confirm_remove_share,
+                shown_page,
                 ..
             } = self;
 
@@ -1702,6 +1726,7 @@ impl eframe::App for App {
                     .height();
             }
 
+            let fade = page_fade(ctx, shown_page, page);
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::new()
@@ -1709,6 +1734,7 @@ impl eframe::App for App {
                         .inner_margin(egui::Margin::symmetric(18, 12)),
                 )
                 .show(ui, |ui| {
+                    ui.multiply_opacity(fade);
                     // Reborrowed rather than moved: the matching dialog below is
                     // drawn from the same caches, and a moved `&mut` would leave
                     // nothing to draw it with.
@@ -1849,6 +1875,54 @@ fn window_handle(cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_vo
 #[cfg(not(windows))]
 fn window_handle(_cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_void> {
     None
+}
+
+/// Where screenshots go: a folder of their own in the pictures folder.
+fn screenshot_folder() -> Option<std::path::PathBuf> {
+    let user = directories::UserDirs::new()?;
+    let pictures = user
+        .picture_dir()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| user.home_dir().to_path_buf());
+    Some(pictures.join("proton-stream"))
+}
+
+/// `Frieren  S01E04 · The Land Where Souls Rest  12-34.png` — what it is
+/// and where in it, with anything a file system would refuse taken out.
+fn screenshot_name(title: &str, caption: &str, position: f64) -> String {
+    let at = ui::format_time(position).replace(':', "-");
+    let name = if caption.is_empty() {
+        format!("{title}  {at}")
+    } else {
+        format!("{title}  {caption}  {at}")
+    };
+    let safe: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    format!("{}.png", safe.trim())
+}
+
+/// How far the page has faded in. A new page arrives over a few frames
+/// rather than in one: the cut between two pages of tiles reads as a flicker,
+/// a short fade as a change of place.
+fn page_fade(ctx: &egui::Context, shown: &mut (Option<Page>, f64), page: &Page) -> f32 {
+    const SECONDS: f64 = 0.14;
+    let now = ctx.input(|input| input.time);
+    if shown.0.as_ref() != Some(page) {
+        // The first page of a launch is there at once; only changes fade.
+        let first = shown.0.is_none();
+        *shown = (Some(page.clone()), if first { now - SECONDS } else { now });
+    }
+    let progress = ((now - shown.1) / SECONDS).clamp(0.0, 1.0) as f32;
+    if progress < 1.0 {
+        ctx.request_repaint();
+    }
+    1.0 - (1.0 - progress).powi(3)
 }
 
 /// What the top bar says while shares are being listed: one share by name,
@@ -2005,6 +2079,10 @@ fn shortcuts(
     /// enough that holding the key is a ramp rather than a switch.
     const VOLUME_STEP: f64 = 5.0;
 
+    // Before the plain keys, and consumed: Ctrl+S is not also S, which skips.
+    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::S)) {
+        actions.push(Action::Screenshot);
+    }
     let pressed: Vec<Key> = ctx.input(|input| {
         [
             Key::Space,
@@ -2159,6 +2237,15 @@ mod tests {
         // Nothing watched of either: not started, and not being watched.
         assert!(Filter::Unwatched.admits(&film));
         assert!(!Filter::Watching.admits(&film));
+    }
+
+    #[test]
+    fn a_screenshot_name_says_what_and_when_without_a_slash() {
+        assert_eq!(
+            screenshot_name("AC/DC Live", "S01E02", 754.0),
+            "AC-DC Live  S01E02  12-34.png"
+        );
+        assert_eq!(screenshot_name("Film", "", 5.0), "Film  0-05.png");
     }
 
     #[test]

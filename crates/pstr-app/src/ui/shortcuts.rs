@@ -28,6 +28,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Space  or  K", "Pause and play"),
             ("←  /  →", "Back 10 s, forward 30 s"),
             ("↑  /  ↓", "Volume"),
+            ("Ctrl S", "Save the frame to Pictures/proton-stream"),
             ("M", "Mute"),
             ("N  /  P", "Next and previous episode"),
             ("[  /  ]", "Slower and faster"),
