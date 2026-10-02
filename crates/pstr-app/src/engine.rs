@@ -2008,6 +2008,15 @@ impl Engine {
         });
     }
 
+    /// Where a provider's picture is cached, if it is.
+    pub fn poster_file(&self, url: &str) -> Option<std::path::PathBuf> {
+        let path = self
+            .dirs
+            .poster_cache()
+            .join(format!("{}.img", digest(url)));
+        path.is_file().then_some(path)
+    }
+
     /// Fetch, decode and post one title's artwork.
     ///
     /// Cached on disk under a hash of the URL, so a provider that moves its CDN

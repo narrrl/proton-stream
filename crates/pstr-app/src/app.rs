@@ -428,6 +428,12 @@ pub struct App {
     crawl_progress: std::collections::BTreeMap<String, usize>,
     /// The window's size, written at exit for the next launch.
     window: crate::window::WindowMemory,
+    /// Media keys and the desktop's media widget.
+    media: crate::media::MediaSession,
+    /// The cover handed to it, worked out once per player.
+    media_cover: Option<(u64, Option<String>)>,
+    /// Holds the screensaver off while a film is on screen and playing.
+    inhibitor: crate::inhibit::Inhibitor,
     pub downloads: Vec<DownloadItem>,
     pub offline_files: std::collections::HashSet<DownloadKey>,
     pub confirm_partial_delete: Option<DownloadKey>,
@@ -494,6 +500,9 @@ impl App {
             crawling: false,
             crawl_progress: Default::default(),
             window,
+            media: crate::media::MediaSession::new(&cc.egui_ctx, window_handle(cc)),
+            media_cover: None,
+            inhibitor: crate::inhibit::Inhibitor::new(),
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
@@ -738,6 +747,34 @@ impl App {
         if thumbs_waiting || posters_waiting {
             ctx.request_repaint();
         }
+    }
+
+    /// The playing title's artwork as a `file://` URL, if it is on disk.
+    ///
+    /// The cached file rather than the provider's URL: the desktop would
+    /// otherwise fetch it from the provider itself, and a desktop shell is not
+    /// something the viewer agreed would talk to one.
+    fn media_cover(&mut self) -> Option<String> {
+        let playback = self.playback.as_ref()?;
+        if let Some((id, cover)) = &self.media_cover
+            && *id == playback.id
+        {
+            return cover.clone();
+        }
+        let cover = self
+            .metadata
+            .get(&playback.target.title_key)
+            .and_then(|record| record.metadata.as_ref())
+            .and_then(|found| {
+                found
+                    .poster_url
+                    .as_deref()
+                    .or_else(|| found.tile_art().map(|(url, _)| url))
+            })
+            .and_then(|url| self.engine.poster_file(url))
+            .map(|path| format!("file://{}", path.display()));
+        self.media_cover = Some((playback.id, cover.clone()));
+        cover
     }
 
     fn share_name(&self, id: &str) -> String {
@@ -1343,6 +1380,9 @@ impl eframe::App for App {
         self.window.observe(ctx);
 
         let mut actions: Vec<Action> = Vec::new();
+        self.media.drain(self.playback.as_ref(), &mut actions);
+        let cover = self.media_cover();
+        self.media.show(self.playback.as_ref(), cover.as_deref());
 
         // A player page with nothing playing and nothing opening is a black
         // window with no way out. It should be unreachable — `pump` routes away
@@ -1351,6 +1391,15 @@ impl eframe::App for App {
             self.page = Page::Library;
         }
         self.engine.set_picture_shown(self.page == Page::Player);
+        // On screen and moving: a film paused, or playing behind another page,
+        // is no reason to keep the screen awake.
+        self.inhibitor.set(
+            self.page == Page::Player
+                && self
+                    .playback
+                    .as_ref()
+                    .is_some_and(|playback| playback.loaded && !playback.paused),
+        );
 
         if self.page == Page::Player {
             self.overlay.observe(ctx);
@@ -1654,6 +1703,22 @@ impl eframe::App for App {
         self.engine
             .shutdown_downloads(std::time::Duration::from_secs(3));
     }
+}
+
+/// The native window, for the parts of the OS that want it named — SMTC on
+/// Windows. Nothing else asks.
+#[cfg(windows)]
+fn window_handle(cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_void> {
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as *mut std::ffi::c_void),
+        _ => None,
+    }
+}
+
+#[cfg(not(windows))]
+fn window_handle(_cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_void> {
+    None
 }
 
 /// What the top bar says while shares are being listed: one share by name,

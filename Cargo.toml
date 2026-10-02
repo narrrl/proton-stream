@@ -84,6 +84,15 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # behind a poisoned lock for the rest of the session. Same reason
 # `proton-drive-linux` uses it.
 parking_lot = "0.12"
+# Media keys and the desktop's media widget: MPRIS on Linux, SMTC on Windows.
+# `dbus` rather than `zbus` because the keyring's Secret Service store already
+# links libdbus, so this adds no second D-Bus stack.
+souvlaki = { version = "0.8", default-features = false, features = ["use_dbus"] }
+# Holding the screensaver off while a film plays. mpv does that for a window of
+# its own, but the picture here is drawn into ours, and mpv has no window to
+# hold it for.
+dbus = "0.9"
+windows-sys = "0.61"
 rpassword = "7"
 libloading = "0.8"
 lru = "0.12"

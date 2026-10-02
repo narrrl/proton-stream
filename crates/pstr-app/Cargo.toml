@@ -29,3 +29,11 @@ sha2.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+souvlaki.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Power"] }
+raw-window-handle = "0.6"
