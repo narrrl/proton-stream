@@ -128,7 +128,7 @@ fn poster(ui: &mut egui::Ui, texture: &egui::TextureHandle, progress: Option<f64
 /// "← Library", as a link rather than a button: it is navigation, and a
 /// filled button beside the page's real actions competed with them.
 fn back_link(ui: &mut egui::Ui) -> egui::Response {
-    let text = theme::Role::Label.rich("←  Library");
+    let text = theme::Role::Label.rich(format!("{}  Library", egui_phosphor::regular::ARROW_LEFT));
     let response = ui.add(egui::Label::new(text.color(theme::muted())).sense(egui::Sense::click()));
     if response.hovered() {
         ui.painter().hline(
@@ -532,7 +532,7 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
 
     if let Some(found) = found {
         if let Some(rating) = found.rating {
-            parts.push(format!("★ {rating:.1}"));
+            parts.push(format!("{} {rating:.1}", egui_phosphor::regular::STAR));
         }
         // Only when it disagrees with what is on disk: "25 episodes · 25
         // episodes" tells nobody anything, but "12 episodes · 25 on AniList"

@@ -479,7 +479,7 @@ impl App {
         // before switching is a window that flashes on every launch.
         let window = crate::window::WindowMemory::new(dirs.window_file());
         let (engine, events) = Engine::new(runtime, dirs, cc.egui_ctx.clone())?;
-        theme::install_font_fallbacks(&cc.egui_ctx);
+        theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, engine.appearance());
 
         // Paint from the catalog immediately; the network catches up. A library
@@ -1493,7 +1493,10 @@ impl App {
                     ui.add(egui::Spinner::new().size(16.0));
                     ui.label(ui::muted("connecting"));
                 } else if ui
-                    .button("Refresh")
+                    .button(format!(
+                        "{}  Refresh",
+                        egui_phosphor::regular::ARROW_CLOCKWISE
+                    ))
                     .on_hover_text("Re-crawl every share")
                     .clicked()
                 {

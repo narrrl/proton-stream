@@ -32,8 +32,15 @@ fn main() -> anyhow::Result<()> {
     let dirs = AppDirs::ensure().context("resolve app directories")?;
 
     let window = pstr_app::window::WindowState::load(&dirs.window_file());
+    let mut viewport = egui::ViewportBuilder::default();
+    // X11 and Windows take the icon from the window. Wayland ignores this and
+    // looks the app id up in the installed desktop entry instead.
+    match eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")) {
+        Ok(icon) => viewport = viewport.with_icon(icon),
+        Err(error) => tracing::debug!("window icon: {error}"),
+    }
     let mut options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_title("proton-stream")
             .with_inner_size(window.map_or([1180.0, 780.0], |state| [state.width, state.height]))
             .with_maximized(window.is_some_and(|state| state.maximized))

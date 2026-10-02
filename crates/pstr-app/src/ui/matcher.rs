@@ -279,7 +279,7 @@ fn facts(found: &TitleMetadata) -> String {
         parts.push(ui::library::plural(episodes as usize, "episode"));
     }
     if let Some(rating) = found.rating {
-        parts.push(format!("★ {rating:.1}"));
+        parts.push(format!("{} {rating:.1}", egui_phosphor::regular::STAR));
     }
     parts.join("  ·  ")
 }

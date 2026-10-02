@@ -115,3 +115,6 @@ see [`docs/ANDROID.md`](docs/ANDROID.md) for exact setup and release signing.
 The shared Rust crates and desktop application are MIT licensed. The Android
 application and its combined native distribution are GPL-3.0-or-later; see
 [`android/LICENSE.md`](android/LICENSE.md) and the bundled-component notices.
+The desktop application embeds the Inter typeface, under the SIL Open Font
+License 1.1 ([`crates/pstr-app/assets/fonts/Inter-OFL.txt`](crates/pstr-app/assets/fonts/Inter-OFL.txt)),
+and the Phosphor icon font, under MIT.

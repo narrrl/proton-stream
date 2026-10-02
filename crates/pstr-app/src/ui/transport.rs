@@ -65,7 +65,7 @@ pub fn full(
         // hand reaches for it.
         step_button(
             ui,
-            "⏮",
+            egui_phosphor::regular::SKIP_BACK,
             "Previous (P)",
             neighbours.previous,
             actions,
@@ -76,9 +76,16 @@ pub fn full(
         skip_button(ui, "−10s", "Back ten seconds (←)", -10.0, actions);
         play_pause(ui, playback, actions, 44.0);
         skip_button(ui, "+30s", "Forward thirty seconds (→)", 30.0, actions);
-        step_button(ui, "⏭", "Next (N)", neighbours.next, actions, |a| {
-            a.push(Action::PlayAdjacent(Adjacent::Next));
-        });
+        step_button(
+            ui,
+            egui_phosphor::regular::SKIP_FORWARD,
+            "Next (N)",
+            neighbours.next,
+            actions,
+            |a| {
+                a.push(Action::PlayAdjacent(Adjacent::Next));
+            },
+        );
 
         ui.add_space(12.0);
         if playback.seeking || playback.buffering || !playback.loaded {
@@ -202,13 +209,20 @@ pub fn mini(
                         actions.push(Action::Player(Command::Stop));
                     }
                     ui.add_space(6.0);
-                    step_button(ui, "⏭", "Next (N)", neighbours.next, actions, |a| {
-                        a.push(Action::PlayAdjacent(Adjacent::Next));
-                    });
+                    step_button(
+                        ui,
+                        egui_phosphor::regular::SKIP_FORWARD,
+                        "Next (N)",
+                        neighbours.next,
+                        actions,
+                        |a| {
+                            a.push(Action::PlayAdjacent(Adjacent::Next));
+                        },
+                    );
                     play_pause(ui, playback, actions, 34.0);
                     step_button(
                         ui,
-                        "⏮",
+                        egui_phosphor::regular::SKIP_BACK,
                         "Previous (P)",
                         neighbours.previous,
                         actions,
@@ -414,12 +428,14 @@ fn volume(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
     }
 
     let icon = if playback.muted || playback.volume <= 0.0 {
-        "🔇"
+        egui_phosphor::regular::SPEAKER_SLASH
+    } else if playback.volume < 50.0 {
+        egui_phosphor::regular::SPEAKER_LOW
     } else {
-        "🔊"
+        egui_phosphor::regular::SPEAKER_HIGH
     };
     if ui
-        .button(icon)
+        .button(theme::Role::Subhead.rich(icon))
         .on_hover_text(format!("Mute (M) — {:.0}%", playback.volume))
         .clicked()
     {

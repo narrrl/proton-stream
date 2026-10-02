@@ -35,8 +35,16 @@ screen and not for anything in a library grid).
 | Caption | 12 | context rather than content: counts, sizes, errors under a field |
 | Micro | 11 | the smallest thing that stays legible — a badge over artwork |
 
-Weight and leading are each side's own: egui has one weight, and Compose derives
-line height as 1.35 × size rather than naming it nine more times.
+Weight and leading are each side's own. The desktop bundles Inter
+(`pstr-app/assets/fonts`, OFL) and sets Display, Title, Heading and Section in
+its semibold cut, which egui sees as a family of its own (`theme::semibold`);
+everything below Section is the regular cut. Compose derives line height as
+1.35 × size rather than naming it nine more times.
+
+Icons on the desktop come from the Phosphor icon font (`egui-phosphor`,
+regular weight), installed right behind Inter so an icon can sit inside an
+ordinary label. Do not use Unicode symbols such as ⏭ or 🔊 as icons: they come
+out of whichever fallback font has them, at that font's size and baseline.
 
 Both clients point their framework's *default* styles at the ramp — egui's five
 `TextStyle`s, Compose's fifteen — so a stock widget nobody restyled still lands

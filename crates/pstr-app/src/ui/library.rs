@@ -211,9 +211,11 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             ui.horizontal(|ui| {
                 if let Some(episode) = title.next_up() {
                     let label = match (title.resume(), episode.numbering()) {
-                        (Some(_), Some(numbering)) => format!("▶  Resume {numbering}"),
-                        (Some(_), None) => "▶  Resume".to_owned(),
-                        (None, _) => "▶  Play".to_owned(),
+                        (Some(_), Some(numbering)) => {
+                            format!("{}  Resume {numbering}", egui_phosphor::regular::PLAY)
+                        }
+                        (Some(_), None) => format!("{}  Resume", egui_phosphor::regular::PLAY),
+                        (None, _) => format!("{}  Play", egui_phosphor::regular::PLAY),
                     };
                     if ui::accent_button(ui, &label).clicked() {
                         actions.push(Action::Play(PlaybackTarget::new(title, episode)));
@@ -239,7 +241,7 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             let mut facts = vec![subtitle(title)];
             if let Some(found) = &found {
                 if let Some(rating) = found.rating {
-                    facts.push(format!("★ {rating:.1}"));
+                    facts.push(format!("{} {rating:.1}", egui_phosphor::regular::STAR));
                 }
                 facts.extend(found.genres.iter().take(3).cloned());
             }

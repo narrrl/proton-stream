@@ -84,26 +84,90 @@ impl Role {
         }
     }
 
+    /// Headings are set in the semibold cut; everything below them in the
+    /// regular one.
+    pub fn family(self) -> egui::FontFamily {
+        match self {
+            Self::Display | Self::Title | Self::Heading | Self::Section => semibold(),
+            _ => egui::FontFamily::Proportional,
+        }
+    }
+
     /// For the hand-painted parts, which lay text out through a `Painter` and
     /// never see a `RichText`.
     pub fn font(self) -> egui::FontId {
-        egui::FontId::proportional(self.size())
+        egui::FontId::new(self.size(), self.family())
     }
 
     /// For the parts that go through egui's widgets.
     pub fn rich(self, text: impl Into<String>) -> egui::RichText {
-        egui::RichText::new(text).size(self.size())
+        egui::RichText::new(text)
+            .size(self.size())
+            .family(self.family())
     }
 }
 
-/// Install a real CJK fallback before the default egui fonts.  egui ships a
-/// compact Latin font, but it intentionally does not bundle the multi-megabyte
-/// CJK families.  Native desktops already provide one, so use it when present.
+/// The UI typeface, bundled rather than taken from the system so a title
+/// sets the same on every desktop. Inter, under the OFL — the licence is
+/// beside the files.
+const INTER: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
+
+/// The family the headings are set in. egui has no notion of weight, so the
+/// semibold cut is a family of its own.
+pub fn semibold() -> egui::FontFamily {
+    egui::FontFamily::Name("semibold".into())
+}
+
+/// Inter, the icon font, and egui's own fonts behind them for the emoji and
+/// symbols Inter does not carry. `cjk` goes last, when there is one.
+fn font_definitions(cjk: Option<egui::FontData>) -> egui::FontDefinitions {
+    use egui::FontFamily::{Monospace, Proportional};
+
+    let mut fonts = egui::FontDefinitions::default();
+    fonts
+        .font_data
+        .insert("inter".into(), Arc::new(egui::FontData::from_static(INTER)));
+    fonts.font_data.insert(
+        "inter-semibold".into(),
+        Arc::new(egui::FontData::from_static(INTER_SEMIBOLD)),
+    );
+    fonts
+        .families
+        .entry(Proportional)
+        .or_default()
+        .insert(0, "inter".into());
+    // Right behind Inter. The icons are in the private use area, so nothing
+    // Inter has is shadowed by them.
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    if let Some(cjk) = cjk {
+        let name = "system-cjk-fallback".to_owned();
+        fonts.font_data.insert(name.clone(), Arc::new(cjk));
+        for family in [Proportional, Monospace] {
+            fonts.families.entry(family).or_default().push(name.clone());
+        }
+    }
+    let fallbacks = fonts.families[&Proportional]
+        .iter()
+        .filter(|name| *name != "inter")
+        .cloned();
+    let semibold_chain = std::iter::once("inter-semibold".to_owned())
+        .chain(fallbacks)
+        .collect();
+    fonts.families.insert(semibold(), semibold_chain);
+    fonts
+}
+
+/// Install the bundled fonts now, and a CJK fallback when the system has one.
 ///
-/// On a thread of its own: `fc-match` and reading a font file of tens of
-/// megabytes held the first frame back by a visible moment, and every name
-/// that needs the fallback is still loading from the catalog by then anyway.
-pub fn install_font_fallbacks(ctx: &egui::Context) {
+/// The bundled ones are compiled in and cost nothing to hand over. The CJK
+/// fallback is on a thread of its own: `fc-match` and reading a font file of
+/// tens of megabytes held the first frame back by a visible moment, and every
+/// name that needs the fallback is still loading from the catalog by then
+/// anyway. egui deliberately does not bundle the multi-megabyte CJK families,
+/// and native desktops already provide one.
+pub fn install_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(font_definitions(None));
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new()
         .name("fonts".into())
@@ -120,16 +184,9 @@ fn install_cjk_fallback(ctx: &egui::Context) {
     let Ok(bytes) = std::fs::read(path) else {
         return;
     };
-
-    let mut fonts = egui::FontDefinitions::default();
     let mut data = egui::FontData::from_owned(bytes);
     data.index = index;
-    let name = "system-cjk-fallback".to_owned();
-    fonts.font_data.insert(name.clone(), Arc::new(data));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push(name.clone());
-    }
-    ctx.set_fonts(fonts);
+    ctx.set_fonts(font_definitions(Some(data)));
     ctx.request_repaint();
 }
 

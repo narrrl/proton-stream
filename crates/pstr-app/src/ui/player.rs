@@ -657,14 +657,23 @@ fn chrome(
             });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
                 if ui
                     .add(
-                        egui::Button::new(theme::Role::Subhead.rich("⛶"))
-                            .fill(Color32::from_black_alpha(160))
-                            .corner_radius(CornerRadius::same(8))
-                            .min_size(Vec2::new(38.0, 32.0)),
+                        egui::Button::new(theme::Role::Subhead.rich(if fullscreen {
+                            egui_phosphor::regular::CORNERS_IN
+                        } else {
+                            egui_phosphor::regular::CORNERS_OUT
+                        }))
+                        .fill(Color32::from_black_alpha(160))
+                        .corner_radius(CornerRadius::same(8))
+                        .min_size(Vec2::new(38.0, 32.0)),
                     )
-                    .on_hover_text("Fullscreen (F)")
+                    .on_hover_text(if fullscreen {
+                        "Leave fullscreen (F)"
+                    } else {
+                        "Fullscreen (F)"
+                    })
                     .clicked()
                 {
                     actions.push(Action::ToggleFullscreen);
