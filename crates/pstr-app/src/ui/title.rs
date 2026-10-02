@@ -643,8 +643,13 @@ fn episode_row(
                 }
             });
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.set_min_height(STILL.y);
+            // A fixed height, the still's. `with_layout` would hand the
+            // buttons all the height left in the scroll area's viewport and
+            // centre them in it, so whichever row sat highest on screen
+            // stretched down to the bottom of the window.
+            let cluster = egui::vec2(ui.available_width(), STILL.y);
+            let layout = egui::Layout::right_to_left(egui::Align::Center);
+            ui.allocate_ui_with_layout(cluster, layout, |ui| {
                 if ui::widgets::watched_mark(ui, watched)
                     .on_hover_text(if watched {
                         "Mark unwatched"
