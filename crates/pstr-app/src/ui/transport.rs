@@ -104,82 +104,135 @@ pub fn full(
 }
 
 /// The strip under the library: what is playing, and back to it.
+/// How big the live picture in the mini-player is drawn.
+pub const MINI_PICTURE: Vec2 = Vec2::new(112.0, 63.0);
+
 pub fn mini(
     ui: &mut egui::Ui,
     playback: &Playback,
+    picture: Option<egui::TextureId>,
     neighbours: Neighbours,
     actions: &mut Vec<Action>,
 ) {
     ui.horizontal(|ui| {
-        ui.set_min_height(ROW_HEIGHT_MINI);
-
-        // The way back to the picture. First, and a real button rather than a
-        // label, because leaving the player page with Esc is otherwise a
-        // one-way trip: playback carries on with nowhere to watch it.
-        if ui
-            .add(
-                egui::Button::new(theme::Role::Label.rich("Back to video"))
-                    .fill(theme::card_hover())
-                    .corner_radius(CornerRadius::same(8)),
-            )
-            .on_hover_text("Show the picture again")
-            .clicked()
-        {
-            actions.push(Action::Goto(Page::Player));
+        // The way back to the picture, first, because leaving the player page
+        // with Esc is otherwise a one-way trip: playback carries on with
+        // nowhere to watch it. The picture itself when there is one — it is
+        // both the reminder that something is playing and the button.
+        match picture {
+            Some(texture) => {
+                let (rect, response) = ui.allocate_exact_size(MINI_PICTURE, Sense::click());
+                let painter = ui.painter();
+                let radius = CornerRadius::same(6);
+                painter.rect_filled(rect, radius, Color32::BLACK);
+                painter.add(
+                    egui::epaint::RectShape::filled(rect, radius, Color32::WHITE).with_texture(
+                        texture,
+                        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    ),
+                );
+                let hover = ui.ctx().animate_bool_with_time(
+                    response.id.with("hover"),
+                    response.hovered(),
+                    0.12,
+                );
+                if hover > 0.0 {
+                    painter.rect_filled(
+                        rect,
+                        radius,
+                        Color32::from_black_alpha((110.0 * hover) as u8),
+                    );
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Expand",
+                        theme::Role::Caption.font(),
+                        Color32::WHITE.gamma_multiply(hover),
+                    );
+                    painter.rect_stroke(
+                        rect,
+                        radius,
+                        egui::Stroke::new(2.0, theme::accent().gamma_multiply(hover)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if response.on_hover_text("Show the picture again").clicked() {
+                    actions.push(Action::Goto(Page::Player));
+                }
+            }
+            None => {
+                if ui
+                    .add(
+                        egui::Button::new(theme::Role::Label.rich("Back to video"))
+                            .fill(theme::card_hover())
+                            .corner_radius(CornerRadius::same(8)),
+                    )
+                    .on_hover_text("Show the picture again")
+                    .clicked()
+                {
+                    actions.push(Action::Goto(Page::Player));
+                }
+            }
         }
         ui.add_space(10.0);
-
         ui.vertical(|ui| {
-            // Back to what is playing: after ten minutes of browsing, the bar
-            // is the only thing that still knows which title this came from.
-            if ui
-                .add(
-                    egui::Label::new(theme::Role::Body.rich(&playback.target.title_name).strong())
-                        .sense(Sense::click()),
-                )
-                .on_hover_text("Show this title")
-                .clicked()
-            {
-                actions.push(Action::Goto(Page::Title(playback.target.title_key.clone())));
-            }
-            ui.label(ui::muted(playback.target.caption()));
-        });
+            ui.horizontal(|ui| {
+                ui.set_min_height(ROW_HEIGHT_MINI);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Stop").clicked() {
-                actions.push(Action::Player(Command::Stop));
-            }
-            ui.add_space(6.0);
-            step_button(ui, "⏭", "Next (N)", neighbours.next, actions, |a| {
-                a.push(Action::PlayAdjacent(Adjacent::Next));
+                ui.vertical(|ui| {
+                    // Back to what is playing: after ten minutes of browsing, the bar
+                    // is the only thing that still knows which title this came from.
+                    if ui
+                        .add(
+                            egui::Label::new(
+                                theme::Role::Body.rich(&playback.target.title_name).strong(),
+                            )
+                            .sense(Sense::click()),
+                        )
+                        .on_hover_text("Show this title")
+                        .clicked()
+                    {
+                        actions.push(Action::Goto(Page::Title(playback.target.title_key.clone())));
+                    }
+                    ui.label(ui::muted(playback.target.caption()));
+                });
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Stop").clicked() {
+                        actions.push(Action::Player(Command::Stop));
+                    }
+                    ui.add_space(6.0);
+                    step_button(ui, "⏭", "Next (N)", neighbours.next, actions, |a| {
+                        a.push(Action::PlayAdjacent(Adjacent::Next));
+                    });
+                    play_pause(ui, playback, actions, 34.0);
+                    step_button(
+                        ui,
+                        "⏮",
+                        "Previous (P)",
+                        neighbours.previous,
+                        actions,
+                        |a| {
+                            a.push(Action::PlayAdjacent(Adjacent::Previous));
+                        },
+                    );
+
+                    ui.add_space(8.0);
+                    track_menus(ui, playback, actions);
+                    ui.add_space(6.0);
+                    volume(ui, playback, actions);
+
+                    if playback.seeking || playback.buffering || !playback.loaded {
+                        ui.add_space(6.0);
+                        ui.add(egui::Spinner::new().size(14.0));
+                    }
+                });
             });
-            play_pause(ui, playback, actions, 34.0);
-            step_button(
-                ui,
-                "⏮",
-                "Previous (P)",
-                neighbours.previous,
-                actions,
-                |a| {
-                    a.push(Action::PlayAdjacent(Adjacent::Previous));
-                },
-            );
-
-            ui.add_space(8.0);
-            track_menus(ui, playback, actions);
-            ui.add_space(6.0);
-            volume(ui, playback, actions);
-
-            if playback.seeking || playback.buffering || !playback.loaded {
-                ui.add_space(6.0);
-                ui.add(egui::Spinner::new().size(14.0));
-            }
+            ui.add_space(4.0);
+            seek_bar(ui, playback, actions, 5.0);
+            times(ui, playback, false);
         });
     });
-
-    ui.add_space(4.0);
-    seek_bar(ui, playback, actions, 5.0);
-    times(ui, playback, false);
 }
 
 /// The one button whose position should never move.

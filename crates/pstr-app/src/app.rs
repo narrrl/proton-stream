@@ -1601,7 +1601,8 @@ impl eframe::App for App {
                             .add(theme::bar_shadow(false).as_shape(bar, egui::CornerRadius::ZERO));
                         transport_panel(
                             ui,
-                            playback.as_ref(),
+                            frame,
+                            playback.as_mut(),
                             opening.as_deref(),
                             neighbours,
                             &mut actions,
@@ -1979,13 +1980,26 @@ fn shortcuts(
 /// The transport bar, or the line that says a file is still opening.
 fn transport_panel(
     ui: &mut egui::Ui,
-    playback: Option<&Playback>,
+    frame: &mut eframe::Frame,
+    playback: Option<&mut Playback>,
     opening: Option<&str>,
     neighbours: ui::transport::Neighbours,
     actions: &mut Vec<Action>,
 ) {
     match playback {
-        Some(playback) => ui::transport::mini(ui, playback, neighbours, actions),
+        Some(playback) => {
+            // The film, small. Drawn as often as the window is — four times a
+            // second off the player page, see `Engine::wake` — which is enough
+            // for a reminder and costs a thumbnail-sized render, not a frame.
+            let scale = ui.ctx().pixels_per_point();
+            let size = ui::transport::MINI_PICTURE * scale;
+            let picture = playback.video.as_mut().and_then(|video| {
+                let texture =
+                    video.texture(frame, [size.x.round() as i32, size.y.round() as i32])?;
+                video.has_picture().then_some(texture)
+            });
+            ui::transport::mini(ui, playback, picture, neighbours, actions)
+        }
         None => {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(14.0));
