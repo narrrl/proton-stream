@@ -66,6 +66,10 @@ const SKIP_PAD_X: f32 = 22.0;
 /// on the full wash. See [`scrim_bottom`].
 const SCRIM_ALPHA: f32 = 170.0;
 const SCRIM_FADE: f32 = 88.0;
+/// How wide the episode list is, at most. A narrow window gives it less.
+const DRAWER_WIDTH: f32 = 380.0;
+/// The stills in the episode list.
+const DRAWER_STILL: Vec2 = Vec2::new(112.0, 63.0);
 
 /// State the page keeps between frames.
 ///
@@ -109,6 +113,17 @@ pub struct Chrome<'a> {
     pub up_next: Option<UpNextCard>,
     /// Whether stepping to another episode is possible in either direction.
     pub neighbours: Neighbours,
+    /// The title's episodes, when it has more than one — what the list down
+    /// the right of the picture shows.
+    pub episodes: Option<Episodes<'a>>,
+}
+
+/// The playing title's episodes, for the list beside the picture.
+pub struct Episodes<'a> {
+    pub title: &'a pstr_core::library::Title,
+    pub art: ui::Art<'a>,
+    /// Whether the list is out.
+    pub open: bool,
 }
 
 /// What the end-of-episode card says, when there is one.
@@ -187,6 +202,7 @@ pub fn show(
         overlay,
         up_next,
         neighbours,
+        mut episodes,
     } = chrome_state;
     let ctx = ui.ctx().clone();
     let rect = ui.available_rect_before_wrap();
@@ -228,7 +244,10 @@ pub fn show(
         actions.push(Action::ToggleFullscreen);
     }
 
-    let visible = overlay.visible(&ctx, playback);
+    let drawer_open = episodes.as_ref().is_some_and(|list| list.open);
+    // The controls stay up while the list is out: it hangs off the button in
+    // the title strip, and is read at leisure.
+    let visible = overlay.visible(&ctx, playback) || drawer_open;
     // Above the chrome when it is up, at the bottom corner when it is not —
     // and clear of it either way, which is what the measured height buys.
     let float_above = if visible {
@@ -260,12 +279,18 @@ pub fn show(
                     ui,
                     playback,
                     neighbours,
+                    episodes.as_ref().map(|list| list.open),
                     rect,
                     overlay.chrome_height,
                     actions,
                 )
             })
             .inner;
+    }
+    if let Some(list) = episodes.as_mut().filter(|list| list.open) {
+        episode_drawer(&ctx, list, playback, rect, overlay.chrome_height, actions);
+    } else {
+        ctx.data_mut(|data| data.remove::<String>(egui::Id::new(DRAWER_SCROLLED)));
     }
     if !visible {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
@@ -618,6 +643,7 @@ fn chrome(
     ui: &mut egui::Ui,
     playback: &Playback,
     neighbours: Neighbours,
+    drawer: Option<bool>,
     rect: Rect,
     previous_height: f32,
     actions: &mut Vec<Action>,
@@ -678,6 +704,35 @@ fn chrome(
                 {
                     actions.push(Action::ToggleFullscreen);
                 }
+                if let Some(open) = drawer {
+                    ui.add_space(theme::space::S);
+                    let fill = if open {
+                        theme::accent()
+                    } else {
+                        Color32::from_black_alpha(160)
+                    };
+                    let ink = if open {
+                        theme::on_accent()
+                    } else {
+                        Color32::WHITE
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                theme::Role::Subhead
+                                    .rich(egui_phosphor::regular::LIST_BULLETS)
+                                    .color(ink),
+                            )
+                            .fill(fill)
+                            .corner_radius(CornerRadius::same(theme::radius::MD))
+                            .min_size(Vec2::new(38.0, 32.0)),
+                        )
+                        .on_hover_text("Episodes (E)")
+                        .clicked()
+                    {
+                        actions.push(Action::ToggleEpisodes);
+                    }
+                }
             });
         },
     );
@@ -714,6 +769,216 @@ fn chrome(
         .inner;
 
     measured + CHROME_PAD_TOP + CHROME_PAD_BOTTOM
+}
+
+/// Which file the episode list last scrolled to, in egui's memory, so it
+/// scrolls to the playing one once when it opens rather than every frame.
+const DRAWER_SCROLLED: &str = "episode-drawer-scrolled";
+
+/// The title's episodes, down the right of the picture between the title
+/// strip and the controls. A season at a time, opened on the playing one.
+fn episode_drawer(
+    ctx: &egui::Context,
+    list: &mut Episodes<'_>,
+    playback: &Playback,
+    rect: Rect,
+    chrome_height: f32,
+    actions: &mut Vec<Action>,
+) {
+    let width = DRAWER_WIDTH.min(rect.width() * 0.45);
+    let area = Rect::from_min_max(
+        egui::pos2(rect.right() - width - 16.0, rect.top() + TITLE_HEIGHT),
+        egui::pos2(rect.right() - 16.0, rect.bottom() - chrome_height - 8.0),
+    );
+    if area.height() < 160.0 {
+        return;
+    }
+    let title = list.title;
+    let target = &playback.target;
+    let is_playing = |episode: &pstr_core::library::Episode| {
+        episode.node.share_id == target.share_id && episode.node.link_id == target.link_id
+    };
+    let playing_season = title
+        .seasons
+        .iter()
+        .position(|season| season.episodes.iter().any(is_playing))
+        .unwrap_or(0);
+    let season_id = egui::Id::new(("episode-drawer-season", &title.key));
+    let mut season = ctx
+        .data(|data| data.get_temp::<usize>(season_id))
+        .unwrap_or(playing_season)
+        .min(title.seasons.len().saturating_sub(1));
+
+    let margin = theme::space::L;
+    egui::Area::new(egui::Id::new("episode-drawer"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(area.min)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(theme::surface().gamma_multiply(0.96))
+                .corner_radius(CornerRadius::same(theme::radius::LG))
+                .inner_margin(egui::Margin::same(margin as i8))
+                .shadow(theme::tile_shadow(1.0))
+                .show(ui, |ui| {
+                    ui.set_width(area.width() - 2.0 * margin);
+                    ui.set_height(area.height() - 2.0 * margin);
+                    ui.horizontal(|ui| {
+                        ui.label(theme::Role::Heading.rich("Episodes").color(theme::text()));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        theme::Role::Subhead
+                                            .rich(egui_phosphor::regular::X)
+                                            .color(theme::muted()),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_text("Close (E)")
+                                .clicked()
+                            {
+                                actions.push(Action::ToggleEpisodes);
+                            }
+                        });
+                    });
+                    if title.seasons.len() > 1 {
+                        ui.add_space(theme::space::XS);
+                        let labels: Vec<(usize, String)> = title
+                            .seasons
+                            .iter()
+                            .enumerate()
+                            .map(|(index, season)| (index, season.label()))
+                            .collect();
+                        let choices: Vec<(usize, &str)> = labels
+                            .iter()
+                            .map(|(index, label)| (*index, label.as_str()))
+                            .collect();
+                        egui::ScrollArea::horizontal()
+                            .id_salt("drawer-seasons")
+                            .show(ui, |ui| {
+                                if let Some(picked) = ui::widgets::segmented(ui, season, &choices) {
+                                    season = picked;
+                                    ctx.data_mut(|data| data.insert_temp(season_id, picked));
+                                }
+                            });
+                    }
+                    ui.add_space(theme::space::S);
+
+                    let Some(shown) = title.seasons.get(season) else {
+                        return;
+                    };
+                    egui::ScrollArea::vertical()
+                        .id_salt("drawer-episodes")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for episode in &shown.episodes {
+                                let row = drawer_row(
+                                    ui,
+                                    &mut list.art,
+                                    title,
+                                    episode,
+                                    is_playing(episode),
+                                    actions,
+                                );
+                                if is_playing(episode) {
+                                    let scrolled = ctx.data(|data| {
+                                        data.get_temp::<String>(egui::Id::new(DRAWER_SCROLLED))
+                                    });
+                                    if scrolled.as_deref() != Some(target.link_id.as_str()) {
+                                        row.scroll_to_me(Some(egui::Align::Center));
+                                        ctx.data_mut(|data| {
+                                            data.insert_temp(
+                                                egui::Id::new(DRAWER_SCROLLED),
+                                                target.link_id.clone(),
+                                            )
+                                        });
+                                    }
+                                }
+                            }
+                        });
+                });
+        });
+}
+
+/// One episode in the list: its still, which plays it, and what it is.
+fn drawer_row(
+    ui: &mut egui::Ui,
+    art: &mut ui::Art<'_>,
+    title: &pstr_core::library::Title,
+    episode: &pstr_core::library::Episode,
+    playing: bool,
+    actions: &mut Vec<Action>,
+) -> egui::Response {
+    let frame = egui::Frame::new()
+        .corner_radius(CornerRadius::same(theme::radius::MD))
+        .inner_margin(egui::Margin::same(6))
+        .fill(if playing {
+            theme::accent_dim()
+        } else {
+            Color32::TRANSPARENT
+        });
+    let response = frame
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                ui::title::still(
+                    ui,
+                    art,
+                    title,
+                    episode,
+                    episode.is_watched(),
+                    DRAWER_STILL,
+                    actions,
+                );
+                ui.add_space(theme::space::M);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = theme::space::XXS;
+                    let name = art
+                        .episode(&title.key, episode)
+                        .and_then(|found| found.name.clone())
+                        .unwrap_or_else(|| episode.detail().to_owned());
+                    if let Some(numbering) = episode.numbering() {
+                        ui.label(
+                            egui::RichText::new(numbering)
+                                .monospace()
+                                .color(theme::muted()),
+                        );
+                    }
+                    let mut job = egui::text::LayoutJob::simple(
+                        name,
+                        theme::Role::Label.font(),
+                        if episode.is_watched() && !playing {
+                            theme::muted()
+                        } else {
+                            theme::text()
+                        },
+                        ui.available_width(),
+                    );
+                    job.wrap.max_rows = 2;
+                    job.wrap.overflow_character = Some('…');
+                    ui.label(job);
+                    let state = if playing {
+                        Some("Playing".to_owned())
+                    } else if episode.is_watched() {
+                        Some("Watched".to_owned())
+                    } else {
+                        episode
+                            .resume_at()
+                            .map(|at| format!("Stopped at {}", ui::format_time(at)))
+                    };
+                    if let Some(state) = state {
+                        ui.label(theme::Role::Caption.rich(state).color(if playing {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        }));
+                    }
+                });
+            });
+        })
+        .response;
+    ui.add_space(theme::space::XXS);
+    response
 }
 
 /// The gradient behind the title strip, fading downwards out of the top edge.

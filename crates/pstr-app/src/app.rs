@@ -195,6 +195,8 @@ pub enum Action {
         share_id: String,
         link_id: String,
     },
+    /// Open or close the list of episodes beside the picture.
+    ToggleEpisodes,
     /// Put watch states back as they were — what Undo does.
     RestoreWatch(Vec<(String, String, pstr_core::catalog::WatchState)>),
     ClearStreamCache,
@@ -456,6 +458,8 @@ pub struct App {
     /// Chapters already skipped on their own in this player, so seeking back
     /// into an opening on purpose is not undone a frame later.
     auto_skipped: (u64, Vec<i64>),
+    /// Whether the episode list is out on the player page.
+    pub episode_drawer: bool,
     /// Set while the window is fullscreen, so `F` can toggle rather than only
     /// ever entering. egui has no way to ask the platform.
     pub fullscreen: bool,
@@ -538,6 +542,7 @@ impl App {
             warmed: 0,
             auto_skipped: (0, Vec::new()),
             fullscreen: false,
+            episode_drawer: false,
             opening: None,
             connecting: true,
             crawling: false,
@@ -1377,6 +1382,7 @@ impl App {
             Action::RemoveFromHistory { share_id, link_id } => {
                 self.forget_watch(ctx, share_id, link_id, "history");
             }
+            Action::ToggleEpisodes => self.episode_drawer = !self.episode_drawer,
             Action::RestoreWatch(states) => {
                 for (share_id, link_id, state) in states {
                     self.engine.save_watch_state(share_id, link_id, state);
@@ -1593,7 +1599,13 @@ impl eframe::App for App {
                 speed: playback.speed,
                 skip_to: playback.skippable().map(|(_, end)| end),
             });
-            shortcuts(ctx, self.fullscreen, state, &mut actions);
+            shortcuts(
+                ctx,
+                self.fullscreen,
+                self.episode_drawer,
+                state,
+                &mut actions,
+            );
 
             // Before the draw, because drawing does not mutate — and it can
             // push an action of its own, which is why it takes the same list.
@@ -1603,8 +1615,30 @@ impl eframe::App for App {
                 playback,
                 opening,
                 overlay,
+                engine,
+                library,
+                thumbs,
+                posters,
+                metadata,
+                episodes,
+                episode_drawer,
                 ..
             } = self;
+            let list = playback
+                .as_ref()
+                .and_then(|playback| library.get(&playback.target.title_key))
+                .filter(|title| title.episode_count() > 1)
+                .map(|title| ui::player::Episodes {
+                    title,
+                    art: ui::Art {
+                        engine,
+                        thumbs,
+                        posters,
+                        metadata,
+                        episodes,
+                    },
+                    open: *episode_drawer,
+                });
             // No panels: the controls are drawn over the picture, and a nav bar
             // above a film is the one thing every player agrees not to do.
             egui::CentralPanel::default()
@@ -1619,6 +1653,7 @@ impl eframe::App for App {
                             overlay,
                             up_next,
                             neighbours,
+                            episodes: list,
                         },
                         &mut actions,
                     );
@@ -2114,6 +2149,7 @@ fn step_speed(speed: f64, faster: bool) -> f64 {
 fn shortcuts(
     ctx: &egui::Context,
     fullscreen: bool,
+    drawer: bool,
     playing: Option<PlayerKeys>,
     actions: &mut Vec<Action>,
 ) {
@@ -2143,6 +2179,7 @@ fn shortcuts(
             Key::S,
             Key::OpenBracket,
             Key::CloseBracket,
+            Key::E,
             Key::Escape,
         ]
         .into_iter()
@@ -2186,6 +2223,9 @@ fn shortcuts(
             // Escape leaves fullscreen first and the page second, which is what
             // it does everywhere else and what stops one press from both
             // un-maximising the window and hiding the film.
+            Key::E => actions.push(Action::ToggleEpisodes),
+            // The episode list is the innermost thing open, so it goes first.
+            Key::Escape if drawer => actions.push(Action::ToggleEpisodes),
             Key::Escape if fullscreen => actions.push(Action::ToggleFullscreen),
             Key::Escape => actions.push(Action::LeavePlayer),
             _ => {}
