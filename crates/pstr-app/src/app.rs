@@ -103,6 +103,8 @@ pub enum Action {
     RemoveDownload(DownloadKey, bool),
     /// Crawl one share, or every share.
     Crawl(Option<String>),
+    /// Stop the crawls still listing.
+    StopCrawl,
     AddShare {
         name: String,
         url: String,
@@ -422,7 +424,8 @@ pub struct App {
     pub connecting: bool,
     pub crawling: bool,
     /// Which share the crawl is on, and how far it has got.
-    crawl_progress: Option<(String, usize)>,
+    /// Files found so far, by share name, for each share still listing.
+    crawl_progress: std::collections::BTreeMap<String, usize>,
     pub downloads: Vec<DownloadItem>,
     pub offline_files: std::collections::HashSet<DownloadKey>,
     pub confirm_partial_delete: Option<DownloadKey>,
@@ -486,7 +489,7 @@ impl App {
             opening: None,
             connecting: true,
             crawling: false,
-            crawl_progress: None,
+            crawl_progress: Default::default(),
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
@@ -551,6 +554,7 @@ impl App {
                     seconds,
                 } => {
                     let name = self.share_name(&share_id);
+                    self.crawl_progress.remove(&name);
                     self.note(
                         ctx,
                         format!("{name}: {files} playable of {nodes} nodes in {seconds:.0}s"),
@@ -559,11 +563,16 @@ impl App {
                 }
                 Event::CrawlFinished => {
                     self.crawling = false;
-                    self.crawl_progress = None;
+                    self.crawl_progress.clear();
                 }
                 Event::CrawlProgress { share, found } => {
                     self.crawling = true;
-                    self.crawl_progress = Some((share, found));
+                    self.crawl_progress.insert(share, found);
+                }
+                Event::CrawlStopped { share_id } => {
+                    let name = self.share_name(&share_id);
+                    self.crawl_progress.remove(&name);
+                    self.note(ctx, format!("stopped crawling {name}"), false);
                 }
                 Event::Thumbnail { key, image } => self.thumbs.insert(key, image),
                 Event::ThumbnailMissing { key } => self.thumbs.mark_missing(key),
@@ -1058,6 +1067,7 @@ impl App {
                 self.note(ctx, "crawling…", false);
                 self.engine.crawl(share);
             }
+            Action::StopCrawl => self.engine.stop_crawl(),
             Action::AddShare {
                 name,
                 url,
@@ -1266,12 +1276,15 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(4.0);
                 if self.crawling {
+                    if ui
+                        .small_button("Stop")
+                        .on_hover_text("Stop listing; shares already listed are still stored")
+                        .clicked()
+                    {
+                        actions.push(Action::StopCrawl);
+                    }
                     ui.add(egui::Spinner::new().size(16.0));
-                    ui.label(ui::muted(match &self.crawl_progress {
-                        Some((share, 0)) => format!("crawling {share}"),
-                        Some((share, found)) => format!("crawling {share} · {found} found"),
-                        None => "crawling".to_owned(),
-                    }));
+                    ui.label(ui::muted(crawl_label(&self.crawl_progress)));
                 } else if self.matching {
                     ui.add(egui::Spinner::new().size(16.0));
                     ui.label(ui::muted("matching"));
@@ -1621,6 +1634,22 @@ impl eframe::App for App {
     }
 }
 
+/// What the top bar says while shares are being listed: one share by name,
+/// several as a count, with the files found across all of them.
+fn crawl_label(progress: &std::collections::BTreeMap<String, usize>) -> String {
+    let found: usize = progress.values().sum();
+    let which = match progress.len() {
+        0 => return "crawling".to_owned(),
+        1 => progress.keys().next().cloned().unwrap_or_default(),
+        shares => format!("{shares} shares"),
+    };
+    if found == 0 {
+        format!("crawling {which}")
+    } else {
+        format!("crawling {which} · {found} found")
+    }
+}
+
 /// Titles whose tile art is not what it was.
 ///
 /// Compared by URL: the same URL is the same picture, and anything else —
@@ -1887,6 +1916,17 @@ mod tests {
         // Nothing watched of either: not started, and not being watched.
         assert!(Filter::Unwatched.admits(&film));
         assert!(!Filter::Watching.admits(&film));
+    }
+
+    #[test]
+    fn the_crawl_label_names_one_share_and_counts_several() {
+        let mut progress = std::collections::BTreeMap::new();
+        assert_eq!(crawl_label(&progress), "crawling");
+        progress.insert("anime".to_owned(), 0);
+        assert_eq!(crawl_label(&progress), "crawling anime");
+        progress.insert("films".to_owned(), 40);
+        progress.insert("anime".to_owned(), 2);
+        assert_eq!(crawl_label(&progress), "crawling 2 shares · 42 found");
     }
 
     #[test]

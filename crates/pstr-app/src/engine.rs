@@ -186,6 +186,8 @@ pub enum Event {
     CrawlProgress { share: String, found: usize },
     /// Every requested crawl is done.
     CrawlFinished,
+    /// That share's crawl was stopped before it stored anything.
+    CrawlStopped { share_id: String },
     /// A decoded Proton thumbnail, keyed as [`thumbnail_key`].
     Thumbnail {
         key: String,
@@ -314,6 +316,8 @@ pub struct Engine {
     download_permits: Arc<tokio::sync::Semaphore>,
     /// Whether the player page is on screen. See [`Engine::wake`].
     picture_shown: Arc<AtomicBool>,
+    /// Bumped to stop the crawls in flight; each watches it from its start.
+    crawl_cancel: Arc<tokio::sync::watch::Sender<u64>>,
     events: Sender<Event>,
     ctx: egui::Context,
 }
@@ -410,6 +414,7 @@ impl Engine {
             downloads: Arc::new(Mutex::new(Downloads::default())),
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
             picture_shown: Arc::new(AtomicBool::new(false)),
+            crawl_cancel: Arc::new(tokio::sync::watch::channel(0).0),
             events,
             ctx,
         };
@@ -798,117 +803,148 @@ impl Engine {
             None => library.share_ids().map(str::to_string).collect(),
         };
 
-        for share_id in targets {
-            let started = std::time::Instant::now();
-            let name = self
-                .store
-                .list()
-                .ok()
-                .and_then(|shares| shares.into_iter().find(|share| share.id == share_id))
-                .map_or_else(|| share_id.clone(), |share| share.name);
-            self.emit(Event::CrawlProgress {
-                share: name.clone(),
-                found: 0,
-            });
-            // At most a few times a second: a wide level comes back as a burst
-            // of listings, and a frame per listing is a frame per folder.
-            let last = parking_lot::Mutex::new(std::time::Instant::now());
-            let report = |found: usize| {
-                let mut last = last.lock();
-                if last.elapsed() >= std::time::Duration::from_millis(250) {
-                    *last = std::time::Instant::now();
-                    self.emit(Event::CrawlProgress {
-                        share: name.clone(),
-                        found,
-                    });
-                }
-            };
-            let nodes = match library.crawl_reporting(&share_id, report).await {
+        // Every share at once: each is its own session against its own
+        // tree, and one large share no longer holds the rest back behind it.
+        let cancel = self.crawl_cancel.subscribe();
+        futures::future::join_all(
+            targets
+                .into_iter()
+                .map(|share_id| self.crawl_share(&library, share_id, cancel.clone())),
+        )
+        .await;
+        self.emit(Event::CrawlFinished);
+    }
+
+    /// Stop every crawl still listing. Shares already past their listing
+    /// finish storing what they found.
+    pub fn stop_crawl(&self) {
+        self.crawl_cancel.send_modify(|generation| *generation += 1);
+    }
+
+    /// Crawl one share and store what it holds.
+    async fn crawl_share(
+        &self,
+        library: &SharedLibrary,
+        share_id: String,
+        mut cancel: tokio::sync::watch::Receiver<u64>,
+    ) {
+        let started = std::time::Instant::now();
+        let name = self
+            .store
+            .list()
+            .ok()
+            .and_then(|shares| shares.into_iter().find(|share| share.id == share_id))
+            .map_or_else(|| share_id.clone(), |share| share.name);
+        self.emit(Event::CrawlProgress {
+            share: name.clone(),
+            found: 0,
+        });
+        // At most a few times a second: a wide level comes back as a burst
+        // of listings, and a frame per listing is a frame per folder.
+        let last = parking_lot::Mutex::new(std::time::Instant::now());
+        let report = |found: usize| {
+            let mut last = last.lock();
+            if last.elapsed() >= std::time::Duration::from_millis(250) {
+                *last = std::time::Instant::now();
+                self.emit(Event::CrawlProgress {
+                    share: name.clone(),
+                    found,
+                });
+            }
+        };
+        // Only the listing can be stopped. Past it the crawl is replacing the
+        // share's rows and its stale downloads, and stopping halfway through
+        // that would leave the two disagreeing.
+        let nodes = tokio::select! {
+            result = library.crawl_reporting(&share_id, report) => match result {
                 Ok(nodes) => nodes,
                 Err(error) => {
                     self.fail(&format!("crawl {share_id}"), error);
-                    continue;
+                    return;
                 }
-            };
-            let rows = build_rows(&share_id, &nodes);
-            let files = rows.len();
-
-            // A writer opened before the crawl may be producing the revision
-            // this crawl is about to supersede. Quiesce all writers for the
-            // share before inspecting or deleting any revision paths.
-            let active_downloads: Vec<_> = self
-                .downloads
-                .lock()
-                .jobs
-                .keys()
-                .filter(|key| key.share_id == share_id)
-                .cloned()
-                .collect();
-            for key in &active_downloads {
-                self.cancel_and_join(key).await;
+            },
+            Ok(()) = cancel.changed() => {
+                self.emit(Event::CrawlStopped { share_id });
+                return;
             }
+        };
+        let rows = build_rows(&share_id, &nodes);
+        let files = rows.len();
 
-            // Paths are derived from the old revision id, so inspect and
-            // remove stale bytes before changing or dropping their index rows.
-            let retained = match self.catalog.lock().offline_files_for_share(&share_id) {
-                Ok(files) => files,
-                Err(error) => {
-                    self.fail(&format!("inspect downloads for {share_id}"), error);
-                    continue;
-                }
-            };
-            let revisions: HashMap<&str, Option<&str>> = rows
-                .iter()
-                .map(|row| (row.link_id.as_str(), row.active_revision_id.as_deref()))
-                .collect();
-            let stale: Vec<_> = retained
-                .iter()
-                .filter(|(link_id, file)| {
-                    revisions.get(link_id.as_str()).copied().flatten()
-                        != Some(file.revision_id.as_str())
-                })
-                .map(|(link_id, file)| (link_id.clone(), file.clone()))
-                .collect();
-            let mut cleanup_failed = false;
-            for (link_id, file) in &stale {
-                let path = self
-                    .dirs
-                    .offline_file(&share_id, link_id, &file.revision_id);
-                if let Err(error) = remove_if_present(&path).await {
-                    self.fail(&format!("delete stale download for {share_id}"), error);
-                    cleanup_failed = true;
-                    break;
-                }
-            }
-            if cleanup_failed {
-                continue;
-            }
-
-            let stored = {
-                let mut catalog = self.catalog.lock();
-                catalog
-                    .replace_share_retaining_offline(&share_id, &rows)
-                    .and_then(|()| {
-                        for (link_id, _) in &stale {
-                            catalog.remove_offline_file(&share_id, link_id)?;
-                        }
-                        Ok(())
-                    })
-            };
-            if let Err(error) = stored {
-                self.fail(&format!("store {share_id}"), error);
-                continue;
-            }
-
-            self.emit(Event::Crawled {
-                share_id,
-                nodes: nodes.len(),
-                files,
-                seconds: started.elapsed().as_secs_f64(),
-            });
-            self.load_library();
+        // A writer opened before the crawl may be producing the revision
+        // this crawl is about to supersede. Quiesce all writers for the
+        // share before inspecting or deleting any revision paths.
+        let active_downloads: Vec<_> = self
+            .downloads
+            .lock()
+            .jobs
+            .keys()
+            .filter(|key| key.share_id == share_id)
+            .cloned()
+            .collect();
+        for key in &active_downloads {
+            self.cancel_and_join(key).await;
         }
-        self.emit(Event::CrawlFinished);
+
+        // Paths are derived from the old revision id, so inspect and
+        // remove stale bytes before changing or dropping their index rows.
+        let retained = match self.catalog.lock().offline_files_for_share(&share_id) {
+            Ok(files) => files,
+            Err(error) => {
+                self.fail(&format!("inspect downloads for {share_id}"), error);
+                return;
+            }
+        };
+        let revisions: HashMap<&str, Option<&str>> = rows
+            .iter()
+            .map(|row| (row.link_id.as_str(), row.active_revision_id.as_deref()))
+            .collect();
+        let stale: Vec<_> = retained
+            .iter()
+            .filter(|(link_id, file)| {
+                revisions.get(link_id.as_str()).copied().flatten()
+                    != Some(file.revision_id.as_str())
+            })
+            .map(|(link_id, file)| (link_id.clone(), file.clone()))
+            .collect();
+        let mut cleanup_failed = false;
+        for (link_id, file) in &stale {
+            let path = self
+                .dirs
+                .offline_file(&share_id, link_id, &file.revision_id);
+            if let Err(error) = remove_if_present(&path).await {
+                self.fail(&format!("delete stale download for {share_id}"), error);
+                cleanup_failed = true;
+                break;
+            }
+        }
+        if cleanup_failed {
+            return;
+        }
+
+        let stored = {
+            let mut catalog = self.catalog.lock();
+            catalog
+                .replace_share_retaining_offline(&share_id, &rows)
+                .and_then(|()| {
+                    for (link_id, _) in &stale {
+                        catalog.remove_offline_file(&share_id, link_id)?;
+                    }
+                    Ok(())
+                })
+        };
+        if let Err(error) = stored {
+            self.fail(&format!("store {share_id}"), error);
+            return;
+        }
+
+        self.emit(Event::Crawled {
+            share_id,
+            nodes: nodes.len(),
+            files,
+            seconds: started.elapsed().as_secs_f64(),
+        });
+        self.load_library();
     }
 
     /// Record where playback got to.
