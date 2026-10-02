@@ -125,3 +125,4 @@ an edge case.
 | Desktop-only settings | config dir, `desktop.json` | Defaults if missing — hardware decoding, cache budget; never overwritten when unparseable |
 | Window size | config dir, `window.json` | Defaults if missing or implausible |
 | Single-instance pipe key (Windows) | config dir, `instance.key` | Yes — regenerated if missing |
+| Notification app id (Windows) | `HKCU\Software\Classes\AppUserModelId\io.narl.proton-stream`, icon in cache dir | Yes — written again the first time a session notifies |

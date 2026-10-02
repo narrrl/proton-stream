@@ -98,6 +98,8 @@ souvlaki = { version = "0.8", default-features = false, features = ["use_dbus"] 
 # hold it for.
 dbus = "0.9"
 windows-sys = "0.61"
+# Toasts on Windows. Linux notifications go over the `dbus` above.
+tauri-winrt-notification = "0.8"
 rpassword = "7"
 libloading = "0.8"
 lru = "0.12"

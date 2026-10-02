@@ -508,6 +508,7 @@ impl App {
         // theme, and a window that paints one frame in the default palette
         // before switching is a window that flashes on every launch.
         let window = crate::window::WindowMemory::new(dirs.window_file());
+        let notifier = crate::notify::Notifier::new(&dirs.cache);
         let (engine, events) = Engine::new(runtime, dirs, cc.egui_ctx.clone())?;
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, engine.appearance());
@@ -558,7 +559,7 @@ impl App {
             media_cover: None,
             inhibitor: crate::inhibit::Inhibitor::new(),
             shown_page: (None, 0.0),
-            notifier: crate::notify::Notifier::new(),
+            notifier,
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,

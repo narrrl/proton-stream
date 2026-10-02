@@ -40,5 +40,6 @@ dbus.workspace = true
 [target.'cfg(windows)'.dependencies]
 # Named pipes, for handing a second launch's request to the open window.
 tokio = { workspace = true, features = ["net"] }
-windows-sys = { workspace = true, features = ["Win32_System_Power"] }
+windows-sys = { workspace = true, features = ["Win32_System_Power", "Win32_System_Registry"] }
+tauri-winrt-notification.workspace = true
 raw-window-handle = "0.6"
