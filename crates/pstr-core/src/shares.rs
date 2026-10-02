@@ -358,6 +358,19 @@ impl SharedLibrary {
     /// and a catalog that reorders itself between two identical crawls is
     /// needlessly hard to diff.
     pub async fn crawl(&self, share_id: &str) -> Result<Vec<Node>> {
+        self.crawl_reporting(share_id, |_| {}).await
+    }
+
+    /// [`Self::crawl`], calling `progress` with how many nodes have been found
+    /// so far each time a folder's listing comes back.
+    ///
+    /// A crawl of a large share takes minutes, and "crawling…" for minutes
+    /// reads as stuck. A count that keeps rising does not.
+    pub async fn crawl_reporting(
+        &self,
+        share_id: &str,
+        progress: impl Fn(usize),
+    ) -> Result<Vec<Node>> {
         use futures::stream::{StreamExt as _, TryStreamExt as _};
 
         let client = self
@@ -392,6 +405,7 @@ impl SharedLibrary {
                     }
                     found.push(child);
                 }
+                progress(found.len());
             }
             level = next;
         }
@@ -428,6 +442,15 @@ fn client_configuration() -> ProtonClientConfiguration {
 /// Parsed here as well as in the SDK because the store needs a stable id for a
 /// share *before* it has opened it — and the id must not be derived from the
 /// password, which would put a secret in the config file by the back door.
+/// The share token a link names, or why it is not a usable share link.
+///
+/// Public so a form can say what is wrong with a link while it is still being
+/// pasted, rather than after a round trip through [`ShareStore::add`] — which
+/// asks exactly this first.
+pub fn share_token(url: &str) -> Result<String> {
+    token_from_url(url)
+}
+
 fn token_from_url(url: &str) -> Result<String> {
     let (_, tail) = url
         .split_once("/urls/")

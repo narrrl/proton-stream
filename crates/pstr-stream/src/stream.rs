@@ -103,6 +103,11 @@ struct Inner {
     map: BlockMap,
     ring: Arc<BlockRing>,
     disk: Option<Arc<DiskCache>>,
+    /// Whether blocks fetched from the network are written to `disk`. Off for
+    /// a stream being copied out to a file, which reads what the cache already
+    /// holds but should not push what a viewer just watched out of it to make
+    /// room for bytes that are about to exist on disk anyway.
+    fill_disk: bool,
     /// One fetch per block, however many readers want it.
     flight: Arc<SingleFlight<BlockKey, CachedBlock>>,
     readahead: usize,
@@ -132,6 +137,28 @@ impl VideoStream {
         disk: Option<Arc<DiskCache>>,
         readahead: usize,
     ) -> Self {
+        Self::build(uid, blocks, ring, disk, readahead, true)
+    }
+
+    /// A stream that reads through the disk cache but never adds to it. See
+    /// [`crate::StreamSource::open_for_copy`].
+    pub(crate) fn copying(
+        uid: NodeUid,
+        blocks: SharedBlocks,
+        ring: Arc<BlockRing>,
+        disk: Option<Arc<DiskCache>>,
+    ) -> Self {
+        Self::build(uid, blocks, ring, disk, 0, false)
+    }
+
+    fn build(
+        uid: NodeUid,
+        blocks: SharedBlocks,
+        ring: Arc<BlockRing>,
+        disk: Option<Arc<DiskCache>>,
+        readahead: usize,
+        fill_disk: bool,
+    ) -> Self {
         let map = BlockMap::new(blocks.block_sizes());
         let readahead = clamp_readahead(readahead, ring.budget(), blocks.block_sizes());
         Self {
@@ -141,6 +168,7 @@ impl VideoStream {
                 map,
                 ring,
                 disk,
+                fill_disk,
                 flight: Arc::new(SingleFlight::new()),
                 readahead,
                 readahead_slots: Arc::new(Semaphore::new(readahead.max(1))),
@@ -174,6 +202,38 @@ impl VideoStream {
     /// Plaintext size of each block, in block order.
     pub fn block_sizes(&self) -> &[u64] {
         self.inner.blocks.block_sizes()
+    }
+
+    /// Start fetching the first and last blocks, without waiting for them.
+    ///
+    /// Every demuxer reads the head of a file first, and the containers this
+    /// app plays keep their index at the tail — Matroska's cues, an MP4's
+    /// `moov` when it was not written for streaming. Opening a file is
+    /// therefore two round trips, one after the other. Asked for together,
+    /// they are one. The player's own reads join these through the
+    /// single-flight, so nothing is fetched twice.
+    ///
+    /// Detached rather than read-ahead: the jump to the tail looks like a
+    /// seek, and a seek cancels read-ahead — which here would cancel the very
+    /// fetch it was meant to have started.
+    pub fn warm_edges(&self) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let count = self.inner.map.len();
+        let edges: &[usize] = match count {
+            0 => &[],
+            1 => &[0],
+            _ => &[0, count - 1],
+        };
+        for &index in edges {
+            let inner = Arc::clone(&self.inner);
+            runtime.spawn(async move {
+                if let Err(error) = block_at(inner, index).await {
+                    tracing::debug!(index, %error, "warming an edge block failed");
+                }
+            });
+        }
     }
 
     /// Fill `buf` from `offset`, returning how many bytes were written.
@@ -413,10 +473,17 @@ async fn block_at(inner: Arc<Inner>, index: usize) -> Result<CachedBlock> {
                 .fetched_bytes
                 .fetch_add(bytes.len() as u64, Ordering::Relaxed);
 
-            if let Some(disk) = inner.disk.as_ref() {
-                disk.put(&fetch_key, &bytes).await;
-            }
             let block: CachedBlock = bytes.into();
+            // Written behind the read, not before it: the cache is disposable,
+            // and a block the player is waiting for should not also wait for a
+            // 4 MiB write and its fsync. That wait was on every cold block,
+            // which is to say on the first frame and on every seek.
+            if let Some(disk) = inner.disk.as_ref().filter(|_| inner.fill_disk) {
+                let disk = Arc::clone(disk);
+                let key = fetch_key.clone();
+                let bytes = Arc::clone(&block);
+                tokio::spawn(async move { disk.put(&key, &bytes).await });
+            }
             inner.ring.insert(fetch_key, Arc::clone(&block));
             Ok(block)
         })
@@ -890,5 +957,86 @@ mod tests {
         let mut buf = vec![0_u8; 64];
         assert_eq!(stream.read_at(80, &mut buf).await.unwrap(), 20);
         assert_eq!(&buf[..20], &expected(80, 20)[..]);
+    }
+
+    async fn disk_in(tag: &str) -> Arc<DiskCache> {
+        let root = std::env::temp_dir().join(format!("pstr-stream-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        Arc::new(
+            DiskCache::open(crate::disk::DiskCacheConfig::new(root))
+                .await
+                .unwrap(),
+        )
+    }
+
+    /// Waits on a detached task without sleeping for a guessed duration.
+    async fn eventually(mut done: impl FnMut() -> bool) -> bool {
+        for _ in 0..200 {
+            if done() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        done()
+    }
+
+    #[tokio::test]
+    async fn warming_fetches_the_first_and_last_blocks_and_nothing_between() {
+        let fake = Fake::new(&[1000; 10]);
+        let stream = stream_over(Arc::clone(&fake), 0);
+
+        stream.warm_edges();
+        assert!(eventually(|| fake.fetches_of(0) == 1 && fake.fetches_of(9) == 1).await);
+        assert_eq!(fake.fetches(), 2);
+
+        // And the player's own reads are then served without a second fetch.
+        stream.read_range(0, 10).await.unwrap();
+        stream.read_range(9_990, 10).await.unwrap();
+        assert_eq!(fake.fetches(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_fetched_block_reaches_the_disk_cache_without_the_read_waiting_for_it() {
+        let disk = disk_in("fill").await;
+        let fake = Fake::new(&[1000, 1000]);
+        let stream = VideoStream::new(
+            uid(),
+            fake,
+            Arc::new(BlockRing::new(DEFAULT_RING_BYTES)),
+            Some(Arc::clone(&disk)),
+            0,
+        );
+
+        assert_eq!(stream.read_range(0, 10).await.unwrap(), expected(0, 10));
+        assert!(eventually(|| disk.stats().entries == 1).await);
+    }
+
+    #[tokio::test]
+    async fn a_copying_stream_reads_the_disk_cache_but_never_adds_to_it() {
+        let disk = disk_in("copy").await;
+        let fake = Fake::new(&[1000, 1000]);
+        let key = BlockKey::new(&uid(), "rev1", 0);
+        disk.put(&key, &expected(0, 1000)).await;
+
+        let stream = VideoStream::copying(
+            uid(),
+            Arc::clone(&fake) as SharedBlocks,
+            Arc::new(BlockRing::new(0)),
+            Some(Arc::clone(&disk)),
+        );
+        assert_eq!(stream.read_range(0, 2000).await.unwrap(), expected(0, 2000));
+
+        assert_eq!(
+            fake.fetches_of(0),
+            0,
+            "block 0 should have come from the disk"
+        );
+        assert_eq!(fake.fetches_of(1), 1);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            disk.stats().entries,
+            1,
+            "the copy wrote into the playback cache"
+        );
     }
 }

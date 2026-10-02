@@ -321,11 +321,9 @@ async fn write_entry(path: &Path, block: &[u8]) -> Result<()> {
     }
     tokio::fs::rename(&temp, path).await?;
 
-    let mut sidecar = tokio::fs::File::create(meta_path(path)).await?;
-    sidecar
-        .write_all(block.len().to_string().as_bytes())
-        .await?;
-    sidecar.sync_all().await?;
+    // Not synced. The block's sync is the one the ordering depends on; a
+    // sidecar lost to a crash only turns a valid entry into a miss.
+    tokio::fs::write(meta_path(path), block.len().to_string()).await?;
     Ok(())
 }
 

@@ -155,6 +155,24 @@ impl StreamSource {
             .await
     }
 
+    /// Open a file to copy it out whole, rather than to play it.
+    ///
+    /// Not the playback stream, and not shared with it: its blocks are read
+    /// once and written to a file, so caching them in memory only evicts the
+    /// blocks a viewer is about to need, and caching them on disk stores every
+    /// byte twice while pushing out what was just watched. It does still read
+    /// the disk cache — an episode watched and then downloaded is not fetched
+    /// again.
+    pub async fn open_for_copy(&self, share_id: &str, uid: &NodeUid) -> Result<VideoStream> {
+        let blocks = self.inner.opener.open(share_id, uid).await?;
+        Ok(VideoStream::copying(
+            uid.clone(),
+            blocks,
+            Arc::new(BlockRing::new(0)),
+            self.inner.disk.clone(),
+        ))
+    }
+
     /// Drop a stream and everything cached for it in memory.
     ///
     /// The disk cache is deliberately untouched: it exists precisely so the next
