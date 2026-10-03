@@ -1,6 +1,22 @@
 package io.narl.protonstream.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import io.narl.protonstream.download.DownloadCoordinator
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,8 +81,14 @@ internal fun LibraryScreen(
     onResume: (TitleRecord, Int) -> Unit,
     onTitle: (TitleRecord) -> Unit,
     onRefresh: () -> Unit,
+    onSetTitleWatched: (TitleRecord, Boolean) -> Unit,
+    onForgetPosition: (TitleRecord, EpisodeRecord) -> Unit,
     padding: PaddingValues,
 ) {
+    val context = LocalContext.current
+    // What a long press opened a menu for: a title, or a Continue watching card.
+    var menuFor by remember { mutableStateOf<TitleRecord?>(null) }
+    var menuResume by remember { mutableStateOf<Resumable?>(null) }
     // Most recently played first, one episode per show: a shelf that lists four
     // episodes of the same series is a shelf with room for nothing else.
     val resumable = remember(state.titles) {
@@ -117,10 +139,89 @@ internal fun LibraryScreen(
                     "Your library is empty",
                     "Add a Proton Drive public link under Shares, then refresh.",
                 )
-                else -> LibraryGrid(state, resumable, onResume, onTitle)
+                else -> LibraryGrid(
+                    state,
+                    resumable,
+                    onResume,
+                    onTitle,
+                    onTitleMenu = { menuFor = it },
+                    onResumeMenu = { menuResume = it },
+                )
             }
         }
     }
+    menuFor?.let { title ->
+        val playlist = title.seasons.flatMap(SeasonRecord::episodes)
+        val allWatched = title.episodeCount > 0uL && title.watchedCount == title.episodeCount
+        TileMenu(title.canonicalName ?: title.name, title.caption(), onDismiss = { menuFor = null }) {
+            MenuRow(Icons.Default.PlayArrow, if (playlist.any { it.resumeAt != null }) "Resume" else "Play") {
+                onResume(title, nextUpIndex(playlist))
+            }
+            MenuRow(Icons.Default.Info, "Open") { onTitle(title) }
+            MenuRow(Icons.Default.Download, "Download all") { DownloadCoordinator.enqueue(context, playlist) }
+            MenuRow(
+                if (allWatched) Icons.Outlined.CheckCircle else Icons.Default.CheckCircle,
+                if (allWatched) "Mark unwatched" else "Mark watched",
+            ) { onSetTitleWatched(title, !allWatched) }
+        }
+    }
+    menuResume?.let { entry ->
+        TileMenu(
+            entry.title.canonicalName ?: entry.title.name,
+            entry.episode.label,
+            onDismiss = { menuResume = null },
+        ) {
+            MenuRow(Icons.Default.PlayArrow, "Resume") { onResume(entry.title, entry.index) }
+            MenuRow(Icons.Default.Info, "Open") { onTitle(entry.title) }
+            MenuRow(Icons.Default.RemoveCircleOutline, "Remove from Continue watching") {
+                onForgetPosition(entry.title, entry.episode)
+            }
+        }
+    }
+}
+
+/**
+ * A long press's menu, from the bottom of the screen where the thumb already
+ * is. Each row closes it before doing its thing.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TileMenu(
+    heading: String,
+    caption: String,
+    onDismiss: () -> Unit,
+    rows: @Composable MenuScope.() -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            Text(
+                heading,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 24.dp),
+            )
+            Text(
+                caption,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+            )
+            MenuScope(onDismiss).rows()
+        }
+    }
+}
+
+private class MenuScope(val dismiss: () -> Unit)
+
+@Composable
+private fun MenuScope.MenuRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = { Icon(icon, contentDescription = null) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable { dismiss(); onClick() }.padding(horizontal = 8.dp),
+    )
 }
 
 @Composable
@@ -129,6 +230,8 @@ private fun LibraryGrid(
     resumable: List<Resumable>,
     onResume: (TitleRecord, Int) -> Unit,
     onTitle: (TitleRecord) -> Unit,
+    onTitleMenu: (TitleRecord) -> Unit,
+    onResumeMenu: (Resumable) -> Unit,
 ) {
     // Posters, three across on a phone. Cropped backdrops at full width fitted
     // two titles to a screen, which is a library read one row at a time.
@@ -152,7 +255,11 @@ private fun LibraryGrid(
                         contentPadding = PaddingValues(top = 10.dp),
                     ) {
                         items(resumable, key = { "${it.episode.shareId}/${it.episode.linkId}" }) { entry ->
-                            ContinueCard(entry) { onResume(entry.title, entry.index) }
+                            ContinueCard(
+                                entry,
+                                onClick = { onResume(entry.title, entry.index) },
+                                onLongClick = { onResumeMenu(entry) },
+                            )
                         }
                     }
                 }
@@ -161,14 +268,21 @@ private fun LibraryGrid(
                 Text("Library", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
             }
         }
-        items(state.titles, key = { it.key }) { title -> PosterTile(title) { onTitle(title) } }
+        items(state.titles, key = { it.key }) { title ->
+            PosterTile(title, onClick = { onTitle(title) }, onLongClick = { onTitleMenu(title) })
+        }
     }
 }
 
 /** A part-watched episode: its still, where it was left, and what is left of it. */
 @Composable
-private fun ContinueCard(entry: Resumable, onClick: () -> Unit) {
-    Column(Modifier.width(220.dp).clip(MaterialTheme.shapes.medium).clickable(onClick = onClick)) {
+private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Column(
+        Modifier
+            .width(220.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    ) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.medium)) {
             RemoteArtwork(
                 entry.episode.stillUrl ?: entry.title.backdropUrl,
@@ -202,8 +316,12 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit) {
 
 /** One title: its poster, and its name and size under it rather than in a card. */
 @Composable
-private fun PosterTile(title: TitleRecord, onClick: () -> Unit) {
-    Column(Modifier.clip(MaterialTheme.shapes.medium).clickable(onClick = onClick)) {
+private fun PosterTile(title: TitleRecord, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Column(
+        Modifier
+            .clip(MaterialTheme.shapes.medium)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    ) {
         RemoteArtwork(
             title.posterUrl ?: title.backdropUrl,
             title.canonicalName ?: title.name,

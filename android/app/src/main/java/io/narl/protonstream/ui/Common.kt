@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import uniffi.pstr_android.EpisodeRecord
 
 @Composable
 internal fun EmptyState(title: String, body: String) {
@@ -18,6 +19,15 @@ internal fun EmptyState(title: String, body: String) {
         }
     }
 }
+
+/**
+ * Where Play on a title lands: the most recently played part-watched episode,
+ * else the first unwatched one, else the first — the desktop's `next_up`.
+ */
+internal fun nextUpIndex(playlist: List<EpisodeRecord>): Int =
+    playlist.withIndex().filter { it.value.resumeAt != null }.maxByOrNull { it.value.lastPlayed }?.index
+        ?: playlist.indexOfFirst { !it.watched }.takeIf { it >= 0 }
+        ?: 0
 
 internal fun formatBytes(bytes: ULong): String {
     val value = bytes.toDouble()

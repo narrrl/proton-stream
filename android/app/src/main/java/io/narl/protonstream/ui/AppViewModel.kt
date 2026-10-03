@@ -33,6 +33,7 @@ import uniffi.pstr_android.MetadataProvider
 import uniffi.pstr_android.MetadataSettingsRecord
 import uniffi.pstr_android.StorageUsageRecord
 import uniffi.pstr_android.EpisodeRecord
+import uniffi.pstr_android.WatchStateRecord
 
 data class AppUiState(
     val loading: Boolean = true,
@@ -49,7 +50,15 @@ data class AppUiState(
     ),
     val storage: StorageUsageRecord = StorageUsageRecord(0uL, 0uL, 0uL, 0uL),
     val message: String? = null,
+    /** What Undo on [message] puts back, when the message offers one. */
+    val undo: List<WatchSnapshot>? = null,
 )
+
+/**
+ * One episode's watch state as it was before a change the viewer can undo.
+ * Null [state] means it had never been played.
+ */
+data class WatchSnapshot(val shareId: String, val linkId: String, val state: WatchStateRecord?)
 
 @OptIn(FlowPreview::class)
 class AppViewModel(context: Context, private val workManager: WorkManager) : ViewModel() {
@@ -185,7 +194,88 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }
     }
 
-    fun dismissMessage() = mutableState.update { it.copy(message = null) }
+    fun dismissMessage() = mutableState.update { it.copy(message = null, undo = null) }
+
+    /**
+     * Every episode of a title watched or unwatched, with an Undo: a whole
+     * title's positions are what this throws away, and a mis-tap on a tile's
+     * menu should not cost them.
+     */
+    fun setTitleWatched(title: TitleRecord, watched: Boolean) {
+        val episodes = title.seasons.flatMap { it.episodes }
+        changeWatch(
+            episodes,
+            "${title.canonicalName ?: title.name} marked ${if (watched) "watched" else "unwatched"}",
+        ) { engine, episode, before ->
+            val duration = before?.durationSecs
+            engine.saveWatchState(
+                episode.shareId,
+                episode.linkId,
+                if (watched) duration ?: 0.0 else 0.0,
+                duration,
+                watched,
+            )
+        }
+    }
+
+    /**
+     * Off Continue watching by forgetting where the episode stopped — what the
+     * desktop does — with an Undo that puts the position back.
+     */
+    fun forgetPosition(title: TitleRecord, episode: EpisodeRecord) {
+        changeWatch(
+            listOf(episode),
+            "${title.canonicalName ?: title.name} removed from Continue watching",
+        ) { engine, target, before ->
+            engine.saveWatchState(target.shareId, target.linkId, 0.0, before?.durationSecs, false)
+        }
+    }
+
+    /** Put back what the last undoable change replaced. */
+    fun undo() {
+        val snapshots = mutableState.value.undo ?: return
+        mutableState.update { it.copy(message = null, undo = null) }
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val engine = NativeRuntime.engine()
+                    snapshots.forEach { snapshot ->
+                        val state = snapshot.state
+                        engine.saveWatchState(
+                            snapshot.shareId,
+                            snapshot.linkId,
+                            state?.positionSecs ?: 0.0,
+                            state?.durationSecs,
+                            state?.watched ?: false,
+                        )
+                    }
+                }
+            }.onFailure(::reportError)
+            reload()
+        }
+    }
+
+    private fun changeWatch(
+        episodes: List<EpisodeRecord>,
+        message: String,
+        change: (uniffi.pstr_android.AndroidEngine, EpisodeRecord, WatchStateRecord?) -> Unit,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val engine = NativeRuntime.engine()
+                    episodes.map { episode ->
+                        val before = engine.watchState(episode.shareId, episode.linkId)
+                        change(engine, episode, before)
+                        WatchSnapshot(episode.shareId, episode.linkId, before)
+                    }
+                }
+            }.onSuccess { snapshots ->
+                mutableState.update { it.copy(message = message, undo = snapshots) }
+            }.onFailure(::reportError)
+            reload()
+        }
+    }
 
     fun reportError(error: Throwable) {
         mutableState.update { it.copy(message = error.message ?: "Unexpected error") }

@@ -98,14 +98,7 @@ internal fun TitleScreen(
     // Display order across seasons: what previous/next and autoplay walk, and
     // the same order the desktop client uses.
     val playlist = remember(title) { title.seasons.flatMap(SeasonRecord::episodes) }
-    // Where a press on Play lands. Part-watched wins over unwatched, most
-    // recently played first, which is the order the desktop client resumes in.
-    val nextUp = remember(playlist) {
-        val resumable = playlist.withIndex().filter { it.value.resumeAt != null }
-        resumable.maxByOrNull { it.value.lastPlayed }?.index
-            ?: playlist.indexOfFirst { !it.watched }.takeIf { it >= 0 }
-            ?: 0
-    }
+    val nextUp = remember(playlist) { nextUpIndex(playlist) }
     val upNext = playlist.getOrNull(nextUp)
     // One season on screen at a time, opened on the one Play would land in: a
     // forty-episode show as stacked sections is one long scroll to the part

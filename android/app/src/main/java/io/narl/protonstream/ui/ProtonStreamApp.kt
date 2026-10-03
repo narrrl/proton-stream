@@ -22,7 +22,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Icon
@@ -132,8 +134,13 @@ fun ProtonStreamApp(
     }
     LaunchedEffect(state.message) {
         state.message?.let {
-            snackbars.showSnackbar(it)
-            model.dismissMessage()
+            val undoable = state.undo != null
+            val result = snackbars.showSnackbar(
+                it,
+                actionLabel = if (undoable) "Undo" else null,
+                duration = if (undoable) SnackbarDuration.Long else SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) model.undo() else model.dismissMessage()
         }
     }
     // Read out here because `navigationSuiteItems` is not a composable scope.
@@ -202,6 +209,8 @@ fun ProtonStreamApp(
                             },
                             { selectedTitleKey = it.key },
                             model::refresh,
+                            model::setTitleWatched,
+                            model::forgetPosition,
                             body,
                         )
                     } else {
