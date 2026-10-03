@@ -82,6 +82,9 @@ egui = "0.35"
 # The icons on buttons. Glyphs like ⏭ and 🔊 come out of whichever fallback
 # font has them, at its own size and baseline; an icon font is one set.
 egui-phosphor = { version = "0.13", default-features = false, features = ["regular"] }
+# Tests only: reads the bundled fonts' character maps. The version epaint
+# already builds, so it costs no extra compile.
+skrifa = { version = "0.42", default-features = false, features = ["std"] }
 # Poster thumbnails only: Proton renders them as JPEG, and a decoder that also
 # pulls in every exotic format is weight this app has no use for.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

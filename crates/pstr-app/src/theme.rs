@@ -163,6 +163,14 @@ pub mod motion {
 /// The UI typeface, bundled rather than taken from the system so a title
 /// sets the same on every desktop. Inter, under the OFL — the licence is
 /// beside the files.
+///
+/// Both files have their private use area mappings removed, because the
+/// Phosphor icons live there. Inter maps 745 codepoints in that area to its
+/// own alternate glyphs, and as the first font in the family it won: the
+/// refresh arrow drew as an accented letter. The glyphs themselves are still
+/// in the files; only the character map entries are gone. Strip them again
+/// after any Inter update (fontTools: drop every `cmap` subtable entry in
+/// U+E000..=U+F8FF).
 const INTER: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
 const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 
@@ -190,8 +198,8 @@ fn font_definitions(cjk: Option<egui::FontData>) -> egui::FontDefinitions {
         .entry(Proportional)
         .or_default()
         .insert(0, "inter".into());
-    // Right behind Inter. The icons are in the private use area, so nothing
-    // Inter has is shadowed by them.
+    // Right behind Inter. The icons are in the private use area, which the
+    // bundled Inter no longer maps, so neither font shadows the other.
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     if let Some(cjk) = cjk {
         let name = "system-cjk-fallback".to_owned();
@@ -840,6 +848,27 @@ const RAMP_STOPS: usize = 64;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bundled_inter_leaves_the_icon_codepoints_to_phosphor() {
+        use skrifa::MetadataProvider as _;
+
+        for (name, bytes) in [("regular", INTER), ("semibold", INTER_SEMIBOLD)] {
+            let font = skrifa::FontRef::new(bytes).expect("bundled Inter parses");
+            let shadowed: Vec<u32> = font
+                .charmap()
+                .mappings()
+                .map(|(codepoint, _)| codepoint)
+                .filter(|codepoint| (0xE000..=0xF8FF).contains(codepoint))
+                .collect();
+            assert!(
+                shadowed.is_empty(),
+                "Inter {name} maps {} private use codepoints, starting U+{:04X}",
+                shadowed.len(),
+                shadowed[0]
+            );
+        }
+    }
 
     #[test]
     fn the_shipped_default_is_the_palette_that_was_here_before() {
