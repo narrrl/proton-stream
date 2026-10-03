@@ -1,6 +1,32 @@
+<!--
+  The play mark from packaging/io.narl.proton-stream.svg, cut into the blocks a
+  revision is fetched in. The paths are in the SVG's 128-unit space; the group
+  maps its 104-unit tile onto the 72dp a launcher shows of a 108dp layer.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#CBA6F7" android:pathData="M24,22h60v64h-60z" />
-    <path android:fillColor="#1E1E2E" android:pathData="M45,39l26,15 -26,15z" />
+    <group
+        android:pivotX="64" android:pivotY="62"
+        android:scaleX="0.6923" android:scaleY="0.6923"
+        android:translateX="-10" android:translateY="-8">
+        <group android:translateY="3">
+            <clip-path android:pathData="M0,0h63v128h-63zM68.5,0h10v128h-10zM84,0h44v128h-44z" />
+            <path android:fillColor="#4D2E1596" android:pathData="M50,41.5v41a6,6 0,0 0,9.1 5.1l34.2,-20.5a6,6 0,0 0,0 -10.3L59.1,36.4A6,6 0,0 0,50 41.5z" />
+        </group>
+        <group>
+            <clip-path android:pathData="M0,0h63v128h-63zM68.5,0h10v128h-10zM84,0h44v128h-44z" />
+            <path android:pathData="M50,41.5v41a6,6 0,0 0,9.1 5.1l34.2,-20.5a6,6 0,0 0,0 -10.3L59.1,36.4A6,6 0,0 0,50 41.5z">
+                <aapt:attr name="android:fillColor">
+                    <gradient android:type="linear"
+                        android:startX="0" android:startY="36"
+                        android:endX="0" android:endY="88">
+                        <item android:offset="0" android:color="#FFFFFFFF" />
+                        <item android:offset="1" android:color="#FFECE6FF" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+        </group>
+    </group>
 </vector>

@@ -1,3 +1,9 @@
 <resources>
-    <string name="app_name">proton-stream</string>
+    <!-- Settings, recents, notifications and the share sheet: room for the full name. -->
+    <string name="app_name">Proton Stream</string>
+    <!--
+      Under the launcher icon, where about ten characters fit before the
+      launcher cuts the label off; "proton-stream" showed as "proton-st…".
+    -->
+    <string name="launcher_name">Stream</string>
 </resources>

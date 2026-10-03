@@ -1,18 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="proton-stream">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#8b6dff"/>
-      <stop offset="1" stop-color="#6d4aff"/>
+    <linearGradient id="ps-face" x1="12" y1="12" x2="116" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A48BFF"/>
+      <stop offset="0.55" stop-color="#7552FF"/>
+      <stop offset="1" stop-color="#5B36F2"/>
     </linearGradient>
+    <linearGradient id="ps-glyph" x1="0" y1="36" x2="0" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#ECE6FF"/>
+    </linearGradient>
+    <!-- The play mark, cut into the blocks a revision is fetched in: each one
+         decrypts on its own, which is the whole reason this app can seek. -->
+    <mask id="ps-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+      <path d="M50 41.5v41a6 6 0 0 0 9.1 5.1l34.2-20.5a6 6 0 0 0 0-10.3L59.1 36.4A6 6 0 0 0 50 41.5z" fill="#FFFFFF"/>
+      <g fill="#000000">
+        <rect x="63" y="0" width="5.5" height="128"/>
+        <rect x="78.5" y="0" width="5.5" height="128"/>
+      </g>
+    </mask>
   </defs>
-  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#g)"/>
-  <!-- The blocks a revision is fetched in: each one decrypts on its own, which
-       is the whole reason this app can seek. -->
-  <rect x="26" y="30" width="14" height="14" rx="3" fill="#ffffff" opacity="0.45"/>
-  <rect x="26" y="50" width="14" height="14" rx="3" fill="#ffffff" opacity="0.7"/>
-  <rect x="26" y="70" width="14" height="14" rx="3" fill="#ffffff" opacity="0.45"/>
-  <rect x="26" y="90" width="14" height="14" rx="3" fill="#ffffff" opacity="0.25"/>
-  <!-- play -->
-  <path fill="#ffffff" d="M56 34l46 30-46 30z"/>
+
+  <!-- base: a rounded tile with a darker lower edge for depth -->
+  <rect x="12" y="16" width="104" height="100" rx="26" fill="#4424C0"/>
+  <rect x="12" y="12" width="104" height="100" rx="26" fill="url(#ps-face)"/>
+  <rect x="12.5" y="12.5" width="103" height="99" rx="25.5" stroke="#FFFFFF" stroke-opacity="0.2"/>
+
+  <!-- glyph shadow, then the glyph itself -->
+  <g transform="translate(0 3)">
+    <rect width="128" height="128" fill="#2E1596" fill-opacity="0.3" mask="url(#ps-cut)"/>
+  </g>
+  <rect width="128" height="128" fill="url(#ps-glyph)" mask="url(#ps-cut)"/>
 </svg>

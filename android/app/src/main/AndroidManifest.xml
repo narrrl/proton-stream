@@ -11,7 +11,7 @@
         android:name=".ProtonStreamApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:icon="@drawable/ic_launcher_foreground"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.ProtonStream">
@@ -29,6 +29,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:label="@string/launcher_name"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|uiMode|density|fontScale|locale|layoutDirection|keyboardHidden"
             android:exported="true"
             android:launchMode="singleTask"

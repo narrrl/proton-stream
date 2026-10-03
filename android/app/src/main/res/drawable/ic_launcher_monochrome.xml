@@ -1,0 +1,12 @@
+<!-- The foreground's glyph as one flat shape, for themed launcher icons. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group
+        android:pivotX="64" android:pivotY="62"
+        android:scaleX="0.6923" android:scaleY="0.6923"
+        android:translateX="-10" android:translateY="-8">
+        <clip-path android:pathData="M0,0h63v128h-63zM68.5,0h10v128h-10zM84,0h44v128h-44z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M50,41.5v41a6,6 0,0 0,9.1 5.1l34.2,-20.5a6,6 0,0 0,0 -10.3L59.1,36.4A6,6 0,0 0,50 41.5z" />
+    </group>
+</vector>
