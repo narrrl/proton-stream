@@ -40,12 +40,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!--
-              Proton Drive public links. Not autoVerify: the domain is Proton's,
-              so Android treats these as unverified and only opens them here
-              once "Open supported links" is allowed in the app's settings.
-              Sharing a link to the app works without that.
+              Proton Drive public links. autoVerify="false", said explicitly:
+              the domain is Proton's, so this can never be a verified App Link.
+              Android only opens these here once "Open supported links" is
+              allowed in the app's settings; sharing a link to the app works
+              without that.
             -->
-            <intent-filter>
+            <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
