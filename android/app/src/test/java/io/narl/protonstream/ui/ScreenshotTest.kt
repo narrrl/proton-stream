@@ -104,13 +104,20 @@ class ScreenshotTest {
     }
 
     private companion object {
-        fun episode(season: UInt, number: UInt, watched: Boolean = false, progress: Double? = null) = EpisodeRecord(
+        fun episode(season: UInt, number: UInt, watched: Boolean = false, progress: Double? = null): EpisodeRecord {
+            // `detail` is the filename unless the filename named the episode,
+            // which is what the bridge sends.
+            val file = "[Group] Oshi no Ko - S%02dE%02d.mkv".format(season.toInt(), number.toInt())
+            return episodeRecord(season, number, file, watched, progress)
+        }
+
+        fun episodeRecord(season: UInt, number: UInt, file: String, watched: Boolean, progress: Double?) = EpisodeRecord(
             shareId = "share",
             volumeId = "volume",
             linkId = "s${season}e$number",
-            name = "[Group] Oshi no Ko - S%02dE%02d.mkv".format(season.toInt(), number.toInt()),
+            name = file,
             label = "S%02dE%02d".format(season.toInt(), number.toInt()),
-            detail = "1.2 GiB",
+            detail = file,
             season = season,
             number = number,
             size = 1_300_000_000uL,
