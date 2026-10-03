@@ -20,9 +20,9 @@ use std::collections::HashMap;
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Vec2};
 use pstr_core::library::{Episode, Title};
-use pstr_core::metadata::{ArtShape, EpisodeGuide, EpisodeMetadata, MetadataRecord};
+use pstr_core::metadata::{ArtShape, EpisodeGuide, EpisodeMetadata, MetadataRecord, TitleNames};
 
-use crate::engine::{Engine, ImageCache, thumbnail_key};
+use crate::engine::{Engine, ImageCache, WIDE_MAX_EDGE, thumbnail_key};
 use crate::theme;
 
 /// Everything the pages need to draw one title's picture.
@@ -40,6 +40,22 @@ pub struct Art<'a> {
     pub metadata: &'a HashMap<String, MetadataRecord>,
     /// What they said about the episodes under those titles.
     pub episodes: &'a HashMap<String, EpisodeGuide>,
+    /// Which name a title goes by.
+    pub names: TitleNames,
+}
+
+/// The name to show for `title`: the provider's, in the form the viewer
+/// picked, else the share's.
+pub fn title_name<'a>(
+    title: &'a Title,
+    metadata: &'a HashMap<String, MetadataRecord>,
+    names: TitleNames,
+) -> &'a str {
+    metadata
+        .get(&title.key)
+        .and_then(|record| record.metadata.as_ref())
+        .and_then(|found| found.display_name(names))
+        .unwrap_or(&title.name)
 }
 
 impl Art<'_> {
@@ -74,6 +90,58 @@ impl Art<'_> {
             .texture(&thumbnail_key(node), || engine.request_thumbnail(node))
     }
 
+    /// The name to show for `title`. See [`title_name`].
+    pub fn name<'t>(&'t self, title: &'t Title) -> &'t str {
+        title_name(title, self.metadata, self.names)
+    }
+
+    /// A 2:3 cover for `title`, for the poster grid; whatever [`Art::of`]
+    /// has when there is none.
+    pub fn poster(&mut self, title: &Title) -> Option<(egui::TextureHandle, ArtShape)> {
+        let url = self
+            .metadata
+            .get(&title.key)
+            .and_then(|record| record.metadata.as_ref())
+            .and_then(|metadata| metadata.poster_url.clone());
+        if let Some(url) = url {
+            let key = poster_key(&title.key);
+            let engine = self.engine;
+            if let Some(texture) = self
+                .posters
+                .texture(&key, || engine.request_poster(key.clone(), url))
+            {
+                return Some((texture, ArtShape::Portrait));
+            }
+        }
+        self.of(title)
+    }
+
+    /// Art for a strip across the whole window, at full size: fanart, else
+    /// AniList's banner, else whatever [`Art::of`] has.
+    ///
+    /// Its own texture rather than the tile's: a 640 px tile picture
+    /// stretched to a 1600 px hero is soft, and a 1920 px one in every tile
+    /// would be most of the texture budget.
+    pub fn wide(&mut self, title: &Title) -> Option<(egui::TextureHandle, ArtShape)> {
+        let url = self
+            .metadata
+            .get(&title.key)
+            .and_then(|record| record.metadata.as_ref())
+            .and_then(|metadata| metadata.wide_art())
+            .map(str::to_owned);
+        if let Some(url) = url {
+            let key = wide_key(&title.key);
+            let engine = self.engine;
+            if let Some(texture) = self
+                .posters
+                .texture(&key, || engine.request_art(key.clone(), url, WIDE_MAX_EDGE))
+            {
+                return Some((texture, ArtShape::Landscape));
+            }
+        }
+        self.of(title)
+    }
+
     /// The picture for a title, and how to fit it.
     ///
     /// Provider artwork first, then Proton's still, then nothing. That order is
@@ -102,6 +170,17 @@ impl Art<'_> {
             .texture(&thumbnail_key(node), || engine.request_thumbnail(node))?;
         Some((texture, ArtShape::Landscape))
     }
+}
+
+/// The texture key of a title's cover, beside [`Art::of`]'s, which is the
+/// title key itself.
+pub fn poster_key(title_key: &str) -> String {
+    format!("poster:{title_key}")
+}
+
+/// The texture key of a title's full-size wide art.
+pub fn wide_key(title_key: &str) -> String {
+    format!("wide:{title_key}")
 }
 
 /// `1:03:47`, or `4:12` for anything under an hour.
@@ -492,6 +571,9 @@ pub struct Card<'a> {
     /// sideways-scrolling shelf has no edge to reach and passes
     /// [`theme::CARD_WIDTH`].
     pub width: f32,
+    /// The picture's height over its width: [`theme::CARD_ASPECT`] for a
+    /// still, [`theme::POSTER_ASPECT`] for a cover.
+    pub aspect: f32,
 }
 
 /// Two lines of name plus one of subtitle. Fixed, because the tile is allocated
@@ -499,10 +581,10 @@ pub struct Card<'a> {
 /// different height by title length reads as broken.
 const CARD_TEXT_HEIGHT: f32 = 54.0;
 
-/// How tall [`card`] draws a tile of this width, so a grid can step over rows
-/// it does not draw.
-pub fn card_height(width: f32) -> f32 {
-    (width * theme::CARD_ASPECT).round() + CARD_TEXT_HEIGHT
+/// How tall [`card`] draws a tile of this width and shape, so a grid can step
+/// over rows it does not draw.
+pub fn card_height(width: f32, aspect: f32) -> f32 {
+    (width * aspect).round() + CARD_TEXT_HEIGHT
 }
 
 /// Draw one tile and report whether it was clicked.
@@ -515,7 +597,10 @@ pub fn card_height(width: f32) -> f32 {
 /// reads as deliberate in a way a stretched poster does not.
 pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     let width = card.width;
-    let image_height = (width * theme::CARD_ASPECT).round();
+    let image_height = (width * card.aspect).round();
+    // A cover fitted into a still-shaped tile is drawn whole; into a tile its
+    // own shape, it fills it like anything else.
+    let fit = card.aspect < 1.0;
     let text_height = CARD_TEXT_HEIGHT;
     let radius = CornerRadius::same(theme::radius::MD);
 
@@ -574,7 +659,7 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
                     .with_texture(texture.id(), cover_uv(size, image_rect.size())),
             );
         }
-        Some((texture, ArtShape::Portrait)) => {
+        Some((texture, ArtShape::Portrait)) if fit => {
             painter.add(
                 egui::epaint::RectShape::filled(
                     contain_rect(texture.size_vec2(), image_rect),
@@ -584,6 +669,14 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
                 .with_texture(
                     texture.id(),
                     Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                ),
+            );
+        }
+        Some((texture, ArtShape::Portrait)) => {
+            painter.add(
+                egui::epaint::RectShape::filled(image_rect, radius, ink).with_texture(
+                    texture.id(),
+                    cover_uv(texture.size_vec2(), image_rect.size()),
                 ),
             );
         }
@@ -777,9 +870,13 @@ pub struct Grid {
 /// dead space at the right of every row, and on a wide window that reads as a
 /// layout that failed to line up rather than as a margin.
 pub fn columns(available: f32) -> Grid {
-    let columns = (((available + theme::CARD_GAP) / (theme::CARD_WIDTH + theme::CARD_GAP)).floor()
-        as usize)
-        .max(1);
+    columns_of(available, theme::CARD_WIDTH)
+}
+
+/// [`columns`], for cards at least `minimum` wide.
+pub fn columns_of(available: f32, minimum: f32) -> Grid {
+    let columns =
+        (((available + theme::CARD_GAP) / (minimum + theme::CARD_GAP)).floor() as usize).max(1);
     // The gaps come out of the width before it is split. Floored, because a
     // fraction of a point times four columns is enough to push the last card
     // onto a row of its own. A window too narrow for even one full card gets a

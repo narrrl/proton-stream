@@ -31,7 +31,7 @@ use crate::library::TitleKind;
 /// Stored as a string in the catalog rather than an integer: a row whose
 /// provider this build does not recognise should read as "some other provider",
 /// which is a re-match, not a parse failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderId {
     /// AniList. Anime only, no API key, no account.
@@ -112,6 +112,154 @@ pub struct TitleMetadata {
     pub episodes: Option<u32>,
     /// The title's page, for a viewer who wants the rest of it.
     pub url: Option<String>,
+    /// Everything else the provider said: what the library is sorted, grouped
+    /// and shelved by. `None` on a record stored before there was any of it,
+    /// which is what tells a match run to fetch it — see
+    /// `pstr_meta::service::plan`.
+    pub details: Option<TitleDetails>,
+}
+
+/// What a provider says about a title beyond what a tile draws.
+///
+/// Stored whole as one JSON column rather than a column each: nothing here is
+/// ever queried by SQLite, every field is optional at every provider, and a
+/// field added later has to read as absent from a row written before it, not
+/// fail the row. TMDB fills none of it yet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TitleDetails {
+    /// The title in romaji — `Sousou no Frieren` — for a viewer who would
+    /// rather see that than the English one.
+    pub romaji: Option<String>,
+    /// AniList's ultra-wide banner, around 4.75:1. Never drawn into a 16:9
+    /// tile — it is what a strip that shape falls back to when there is no
+    /// fanart.
+    pub banner_url: Option<String>,
+    /// As the provider writes it: `TV`, `TV_SHORT`, `MOVIE`, `SPECIAL`, `OVA`,
+    /// `ONA`, `MUSIC`. [`TitleDetails::format_label`] is what is shown.
+    pub format: Option<String>,
+    /// The broadcast season: `WINTER`, `SPRING`, `SUMMER` or `FALL`.
+    pub season: Option<String>,
+    /// When it first aired, `YYYY-MM-DD` with whatever parts are known —
+    /// `2013-04`, `2013`. Sorts as text, which is why it is kept that way.
+    pub start_date: Option<String>,
+    /// The main animation studios.
+    pub studios: Vec<String>,
+    pub directors: Vec<String>,
+    /// The provider's descriptive tags, most relevant first, spoilers left out.
+    pub tags: Vec<String>,
+    /// How many people follow it at the provider. Only ever compared with
+    /// other titles from the same provider.
+    pub popularity: Option<u32>,
+    /// `FINISHED`, `RELEASING`, `NOT_YET_RELEASED`, `CANCELLED` or `HIATUS`.
+    pub status: Option<String>,
+    /// The next episode to air, and when — Unix seconds. As of when the
+    /// answer was fetched, so a time in the past means nothing.
+    pub next_episode: Option<u32>,
+    pub next_airing_at: Option<i64>,
+    /// The provider ids of entries in the same story — prequels, sequels,
+    /// side stories, recaps, retellings. What the library groups a franchise
+    /// by; see `crate::franchise`.
+    pub related: Vec<String>,
+    /// The entries enrichment walked through to find the title's episodes —
+    /// its own sequels, by provider id. Stored apart from the rest, because
+    /// it is enrichment's answer rather than the match's.
+    #[serde(skip)]
+    pub chain: Vec<String>,
+}
+
+impl TitleDetails {
+    /// `TV` → `TV`, `MOVIE` → `Film`, `TV_SHORT` → `TV short`.
+    pub fn format_label(&self) -> Option<&'static str> {
+        Some(match self.format.as_deref()? {
+            "TV" => "TV",
+            "TV_SHORT" => "TV short",
+            "MOVIE" => "Film",
+            "SPECIAL" => "Special",
+            "OVA" => "OVA",
+            "ONA" => "ONA",
+            "MUSIC" => "Music video",
+            _ => return None,
+        })
+    }
+
+    /// `Spring 2013`, or just the year.
+    pub fn season_label(&self) -> Option<String> {
+        let year = self.start_date.as_deref()?.get(..4)?;
+        let season = match self.season.as_deref() {
+            Some("WINTER") => "Winter",
+            Some("SPRING") => "Spring",
+            Some("SUMMER") => "Summer",
+            Some("FALL") => "Fall",
+            _ => return Some(year.to_string()),
+        };
+        Some(format!("{season} {year}"))
+    }
+
+    /// Whether it is still airing.
+    pub fn is_airing(&self) -> bool {
+        self.status.as_deref() == Some("RELEASING")
+    }
+
+    /// The next episode and when it airs, when that is still after `now`.
+    pub fn next_airing(&self, now: i64) -> Option<(u32, i64)> {
+        let at = self.next_airing_at.filter(|at| *at > now)?;
+        Some((self.next_episode?, at))
+    }
+}
+
+impl TitleMetadata {
+    /// Ultra-wide art: the backdrop where there is one, else the banner.
+    ///
+    /// For the library's hero and the title page's band, which are much wider
+    /// than 16:9 — a backdrop cropped to them loses some sky, a banner fits
+    /// them as drawn.
+    pub fn wide_art(&self) -> Option<&str> {
+        self.backdrop_url.as_deref().or_else(|| {
+            self.details
+                .as_ref()
+                .and_then(|details| details.banner_url.as_deref())
+        })
+    }
+
+    /// The name to show, as the viewer asked for it.
+    pub fn display_name(&self, names: TitleNames) -> Option<&str> {
+        match names {
+            TitleNames::Library => None,
+            TitleNames::English => Some(&self.name),
+            TitleNames::Romaji => self
+                .details
+                .as_ref()
+                .and_then(|details| details.romaji.as_deref())
+                .or(Some(&self.name)),
+        }
+    }
+}
+
+/// Which name a title goes by in the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TitleNames {
+    /// The folder's — what the share calls it. The default, because it is the
+    /// one name that is there whether or not anything matched.
+    #[default]
+    Library,
+    /// The provider's English title, where it has one.
+    English,
+    /// The provider's romaji title.
+    Romaji,
+}
+
+impl TitleNames {
+    pub const ALL: [Self; 3] = [Self::Library, Self::English, Self::Romaji];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Library => "As in the share",
+            Self::English => "English",
+            Self::Romaji => "Romaji",
+        }
+    }
 }
 
 impl TitleMetadata {
@@ -181,6 +329,9 @@ pub struct Enrichment {
     /// A 16:9 picture of the whole title, when one was found. `None` leaves
     /// whatever backdrop the match already had.
     pub backdrop_url: Option<String>,
+    /// Every provider entry the episodes were taken from, the match's own
+    /// included. See [`TitleDetails::chain`].
+    pub chain: Vec<String>,
 }
 
 /// Every episode a provider listed for one title, ready to look up.
@@ -401,6 +552,7 @@ mod tests {
             genres: Vec::new(),
             episodes: Some(26),
             url: None,
+            details: None,
         }
     }
 

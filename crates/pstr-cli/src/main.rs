@@ -493,6 +493,7 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                 &stored,
                 &enriched,
                 settings.provider,
+                service.has_details(),
                 force,
             );
             if let Some(limit) = limit {
@@ -514,7 +515,12 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
             // for is reading the output.
             let (mut matched, mut failed) = (0usize, 0usize);
             for work in pending {
+                use pstr_meta::service::Work;
                 let name = &work.title().name;
+                // Whether this work asks for episodes at all — a refresh of an
+                // already-enriched title does not, and saying they were "not
+                // fetched" there reads as a failure.
+                let enriches = matches!(work, Work::Match(_) | Work::Refresh { enrich: true, .. });
                 let outcome = match service.work(&work).await {
                     Ok(outcome) => outcome,
                     Err(error) => {
@@ -564,10 +570,11 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                     }
                     // Matched, but the episodes could not be asked for; the
                     // next run asks again.
-                    None if outcome
-                        .record
-                        .as_ref()
-                        .is_some_and(|r| r.metadata.is_some()) =>
+                    None if enriches
+                        && outcome
+                            .record
+                            .as_ref()
+                            .is_some_and(|r| r.metadata.is_some()) =>
                     {
                         println!("  {:<40}   ! episodes not fetched", "");
                     }

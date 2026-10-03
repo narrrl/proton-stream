@@ -20,6 +20,7 @@ pub fn show(
     art: &mut Art<'_>,
     library: &Library,
     key: &str,
+    franchise: Option<&[String]>,
     offline: OfflineView<'_>,
     actions: &mut Vec<Action>,
 ) {
@@ -40,6 +41,15 @@ pub fn show(
         .show(ui, |ui| {
             header(ui, art, title, &offline, actions);
             ui.add_space(theme::space::XL);
+
+            if let Some(keys) = franchise {
+                let members: Vec<&Title> = keys.iter().filter_map(|key| library.get(key)).collect();
+                if members.len() > 1 {
+                    ui::section(ui, "In this franchise");
+                    franchise_row(ui, art, title, &members, actions);
+                    ui.add_space(theme::space::XL);
+                }
+            }
 
             // One season at a time, picked from a row of pills, rather than
             // every season stacked as a collapsing header: a four-season show
@@ -97,6 +107,60 @@ pub fn show(
                 episode_row(ui, art, title, season, episode, &offline, actions);
             }
             ui.add_space(theme::space::L);
+        });
+}
+
+/// Every title of the franchise, in release order, as covers — this one
+/// marked rather than left out, so the row says where it sits in the story.
+fn franchise_row(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    current: &Title,
+    members: &[&Title],
+    actions: &mut Vec<Action>,
+) {
+    egui::ScrollArea::horizontal()
+        .id_salt(("franchise", &current.key))
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
+                for member in members {
+                    let here = member.key == current.key;
+                    let picture = art.poster(member);
+                    let found = art
+                        .metadata
+                        .get(&member.key)
+                        .and_then(|record| record.metadata.as_ref());
+                    let what = found
+                        .and_then(|found| found.details.as_ref())
+                        .and_then(|details| details.format_label())
+                        .unwrap_or(match member.kind {
+                            TitleKind::Series => "Series",
+                            TitleKind::Film => "Film",
+                        });
+                    let year = found
+                        .and_then(|found| found.year)
+                        .or(member.year)
+                        .map(|year| format!("  ·  {year}"))
+                        .unwrap_or_default();
+                    let response = ui::card(
+                        ui,
+                        Card {
+                            art: picture,
+                            name: art.name(member),
+                            subtitle: format!("{what}{year}"),
+                            progress: member.resume().and_then(|e| e.progress()).map(|v| v as f32),
+                            badge: here.then(|| "Here".to_owned()),
+                            width: 128.0,
+                            aspect: theme::POSTER_ASPECT,
+                        },
+                    );
+                    if !here && response.clicked() {
+                        actions.push(Action::Goto(Page::Title(member.key.clone())));
+                    }
+                }
+            });
         });
 }
 
@@ -190,16 +254,19 @@ fn header(
     let record = art.metadata.get(&title.key);
     let found = record.and_then(|record| record.metadata.clone());
     let by_hand = record.is_some_and(|record| record.manual);
-    // Asked for once and used twice: the same picture is the poster beside the
-    // text and the banner behind all of it.
-    let picture = art.of(title);
+    // The cover beside the text, and the widest, largest picture there is
+    // behind all of it — two textures, because the band is drawn across the
+    // whole window and a tile-sized one stretched that far is soft.
+    let picture = art.poster(title);
+    let wide = art.wide(title);
 
     // Reserved before the header is laid out, because the band is as tall as
     // whatever the header comes to — a fixed height would clip a long overview
     // on one title and leave a gap under a short one on the next.
-    let backdrop = picture
+    let backdrop = wide
         .as_ref()
         .map(|(texture, _)| (texture.clone(), ui.painter().add(egui::Shape::Noop)));
+    let shown = art.name(title).to_owned();
 
     ui.add_space(theme::space::S);
     ui.horizontal_top(|ui| {
@@ -214,11 +281,12 @@ fn header(
                     ui,
                     Card {
                         art: picture,
-                        name: &title.name,
+                        name: &shown,
                         subtitle: String::new(),
                         progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
                         badge: None,
                         width: theme::CARD_WIDTH,
+                        aspect: theme::CARD_ASPECT,
                     },
                 );
             }
@@ -229,16 +297,24 @@ fn header(
             // Text in a column a person can read, with the picture to the
             // right of it rather than under it.
             ui.set_max_width(ui.available_width().min(820.0));
-            ui.label(theme::Role::Display.rich(&title.name).strong());
-            // The provider's name for it, when it is not the one the files use.
-            // Worth showing rather than replacing the filename's: a viewer
-            // should be able to tell what the match actually matched.
-            if let Some(found) = &found
-                && found.name != title.name
-            {
+            ui.label(theme::Role::Display.rich(&shown).strong());
+            // Whichever of the share's name and the provider's is not the one
+            // shown. Worth showing rather than only replacing: a viewer should
+            // be able to tell what the match actually matched, and find the
+            // folder it came from.
+            let other = found
+                .as_ref()
+                .map(|found| {
+                    if shown == found.name {
+                        title.name.clone()
+                    } else {
+                        found.name.clone()
+                    }
+                })
+                .filter(|other| *other != shown);
+            if let Some(other) = other {
                 ui.label(ui::muted(format!(
-                    "also known as {}{}",
-                    found.name,
+                    "also known as {other}{}",
                     if by_hand { " (chosen by hand)" } else { "" }
                 )));
             }
@@ -449,11 +525,21 @@ fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::S
 
 /// What the provider had to say. Only ever drawn under a match.
 fn description(ui: &mut egui::Ui, found: &TitleMetadata) {
-    if !found.genres.is_empty() {
+    let tags = found
+        .details
+        .as_ref()
+        .map(|details| details.tags.as_slice())
+        .unwrap_or_default();
+    if !found.genres.is_empty() || !tags.is_empty() {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             for genre in &found.genres {
                 ui::widgets::chip(ui, genre);
+            }
+            // After the genres and quieter than them: a tag is the
+            // provider's community describing it, not what it is filed as.
+            for tag in tags.iter().take(5) {
+                ui.label(ui::muted(tag));
             }
         });
         ui.add_space(theme::space::M);
@@ -530,6 +616,30 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
         parts.push(format!("{watched} watched"));
     }
 
+    if let Some(details) = found.and_then(|found| found.details.as_ref()) {
+        if let Some(season) = details.season_label() {
+            parts.push(season);
+        }
+        parts.extend(details.studios.iter().take(2).cloned());
+        if let Some(director) = details.directors.first() {
+            parts.push(format!("dir. {director}"));
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs() as i64);
+        if let Some((episode, at)) = details.next_airing(now) {
+            let when = chrono::DateTime::from_timestamp(at, 0)
+                .map(|at| {
+                    at.with_timezone(&chrono::Local)
+                        .format("%a %-d %b, %H:%M")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            parts.push(format!("episode {episode} airs {when}"));
+        } else if details.is_airing() {
+            parts.push("airing".to_owned());
+        }
+    }
     if let Some(found) = found {
         if let Some(rating) = found.rating {
             parts.push(format!("{} {rating:.1}", egui_phosphor::regular::STAR));

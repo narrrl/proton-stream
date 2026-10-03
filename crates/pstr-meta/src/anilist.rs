@@ -17,7 +17,9 @@
 use std::collections::HashSet;
 
 use pstr_core::library::{self, TitleKind};
-use pstr_core::metadata::{Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleMetadata};
+use pstr_core::metadata::{
+    Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleDetails, TitleMetadata,
+};
 use serde::Deserialize;
 
 use crate::anizip::AniZip;
@@ -54,25 +56,81 @@ const PAGE_SIZE: u32 = 8;
 /// AniList scores out of 100 and the rest of the app works out of 10.
 const SCORE_SCALE: f32 = 10.0;
 
-const SEARCH: &str = r#"
+/// Everything one entry is asked for, by search and by id alike.
+///
+/// The relations are the franchise's — see `pstr_core::franchise` — and the
+/// staff are only the most relevant few, which is where a director sits.
+macro_rules! entry_fragment {
+    () => {
+        r#"
+fragment entry on Media {
+  id
+  title { romaji english native }
+  synonyms
+  description(asHtml: false)
+  startDate { year month day }
+  season
+  coverImage { extraLarge large }
+  bannerImage
+  averageScore
+  popularity
+  genres
+  tags { name rank isMediaSpoiler }
+  episodes
+  format
+  status
+  siteUrl
+  studios(isMain: true) { nodes { name } }
+  staff(sort: RELEVANCE, perPage: 6) { edges { role node { name { full } } } }
+  nextAiringEpisode { episode airingAt }
+  relations { edges { relationType node { id type } } }
+}
+"#
+    };
+}
+
+const SEARCH: &str = concat!(
+    r#"
 query ($search: String, $perPage: Int) {
   Page(page: 1, perPage: $perPage) {
-    media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
-      id
-      title { romaji english native }
-      synonyms
-      description(asHtml: false)
-      startDate { year }
-      coverImage { extraLarge large }
-      averageScore
-      genres
-      episodes
-      format
-      siteUrl
-    }
+    media(search: $search, type: ANIME, sort: SEARCH_MATCH) { ...entry }
   }
 }
-"#;
+"#,
+    entry_fragment!()
+);
+
+/// One entry by the id a match already found — how a stored match gets the
+/// fields it was stored without, without being searched for and decided
+/// again.
+const BY_ID: &str = concat!(
+    r#"
+query ($id: Int) {
+  Media(id: $id, type: ANIME) { ...entry }
+}
+"#,
+    entry_fragment!()
+);
+
+/// The relations that keep to one story. `SPIN_OFF`, `CHARACTER` and `OTHER`
+/// are left out: they are how one franchise reaches into another, and
+/// following them merged unrelated shows into one tile.
+const STORY_RELATIONS: [&str; 8] = [
+    "PREQUEL",
+    "SEQUEL",
+    "PARENT",
+    "SIDE_STORY",
+    "SUMMARY",
+    "ALTERNATIVE",
+    "COMPILATION",
+    "CONTAINS",
+];
+
+/// A tag ranked below this is AniList's community being unsure of it.
+const MIN_TAG_RANK: u32 = 60;
+
+/// How many tags to keep: the rest are increasingly specific trivia.
+const MAX_TAGS: usize = 8;
 
 /// The entries an entry leads on to.
 ///
@@ -173,6 +231,8 @@ impl Provider for AniList {
         let mut enrichment = Enrichment::default();
         let mut taken = HashSet::new();
         let mut visited = HashSet::new();
+        // The same ids as `visited`, in the order they were read.
+        let mut chain = Vec::new();
         let mut series_entries = 0;
         let mut next = Some(Link {
             id: first,
@@ -180,6 +240,7 @@ impl Provider for AniList {
         });
         while let Some(link) = next.take() {
             visited.insert(link.id);
+            chain.push(link.id.to_string());
             let entry_season = link.series.then(|| {
                 series_entries += 1;
                 series_entries
@@ -209,11 +270,29 @@ impl Provider for AniList {
             enrichment.episodes.len(),
             visited.len()
         );
+        enrichment.chain = chain;
         Ok(enrichment)
     }
 }
 
 impl AniList {
+    /// The entry the AniList id `id` names, as search would have found it.
+    /// `None` for an id AniList no longer has.
+    pub async fn entry(&self, id: &str) -> Result<Option<TitleMetadata>> {
+        let Ok(id) = id.parse::<i64>() else {
+            return Ok(None);
+        };
+        let data: Option<EntryData> = self
+            .query(serde_json::json!({
+                "query": BY_ID,
+                "variables": { "id": id },
+            }))
+            .await?;
+        Ok(data
+            .and_then(|data| data.media)
+            .map(|media| media.into_candidate().metadata))
+    }
+
     /// The entry `id` continues into, if any.
     async fn sequel(&self, id: i64, visited: &HashSet<i64>) -> Result<Option<Link>> {
         let data: Option<RelationsData> = self
@@ -443,14 +522,80 @@ struct Media {
     start_date: Option<FuzzyDate>,
     #[serde(rename = "coverImage")]
     cover_image: Option<CoverImage>,
+    #[serde(rename = "bannerImage")]
+    banner_image: Option<String>,
     #[serde(rename = "averageScore")]
     average_score: Option<f32>,
+    popularity: Option<u32>,
     #[serde(default)]
     genres: Vec<String>,
+    #[serde(default)]
+    tags: Vec<Tag>,
     episodes: Option<u32>,
     format: Option<String>,
+    season: Option<String>,
+    status: Option<String>,
     #[serde(rename = "siteUrl")]
     site_url: Option<String>,
+    studios: Option<Studios>,
+    staff: Option<Staff>,
+    #[serde(rename = "nextAiringEpisode")]
+    next_airing_episode: Option<NextAiring>,
+    relations: Option<Relations>,
+}
+
+#[derive(Deserialize)]
+struct EntryData {
+    #[serde(rename = "Media")]
+    media: Option<Media>,
+}
+
+#[derive(Deserialize)]
+struct Tag {
+    name: String,
+    rank: Option<u32>,
+    #[serde(rename = "isMediaSpoiler", default)]
+    spoiler: bool,
+}
+
+#[derive(Deserialize)]
+struct Studios {
+    #[serde(default)]
+    nodes: Vec<Named>,
+}
+
+#[derive(Deserialize)]
+struct Named {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct Staff {
+    #[serde(default)]
+    edges: Vec<StaffEdge>,
+}
+
+#[derive(Deserialize)]
+struct StaffEdge {
+    role: Option<String>,
+    node: Option<Person>,
+}
+
+#[derive(Deserialize)]
+struct Person {
+    name: PersonName,
+}
+
+#[derive(Deserialize)]
+struct PersonName {
+    full: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NextAiring {
+    episode: Option<u32>,
+    #[serde(rename = "airingAt")]
+    airing_at: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -463,6 +608,20 @@ struct Title {
 #[derive(Deserialize)]
 struct FuzzyDate {
     year: Option<u32>,
+    month: Option<u32>,
+    day: Option<u32>,
+}
+
+impl FuzzyDate {
+    /// `2013-04-07`, `2013-04` or `2013` — as much as AniList knows.
+    fn text(&self) -> Option<String> {
+        let year = self.year?;
+        Some(match (self.month, self.day) {
+            (Some(month), Some(day)) => format!("{year:04}-{month:02}-{day:02}"),
+            (Some(month), None) => format!("{year:04}-{month:02}"),
+            _ => format!("{year:04}"),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -506,6 +665,72 @@ impl Media {
             .cover_image
             .and_then(|cover| cover.extra_large.or(cover.large));
 
+        let details = TitleDetails {
+            romaji: self.title.romaji.clone(),
+            banner_url: self.banner_image,
+            format: self.format.clone(),
+            season: self.season,
+            start_date: self.start_date.as_ref().and_then(FuzzyDate::text),
+            studios: self
+                .studios
+                .map(|studios| {
+                    studios
+                        .nodes
+                        .into_iter()
+                        .map(|studio| studio.name)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            directors: self
+                .staff
+                .map(|staff| {
+                    staff
+                        .edges
+                        .into_iter()
+                        // `Director`, and not `Assistant Director`,
+                        // `Episode Director` or `Director (eps 3, 7)` — those
+                        // are many people per show, and a shelf of one
+                        // storyboard artist's episodes is not what a
+                        // "directed by" row means.
+                        .filter(|edge| edge.role.as_deref() == Some("Director"))
+                        .filter_map(|edge| edge.node.and_then(|person| person.name.full))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            tags: self
+                .tags
+                .into_iter()
+                .filter(|tag| !tag.spoiler && tag.rank.unwrap_or(0) >= MIN_TAG_RANK)
+                .take(MAX_TAGS)
+                .map(|tag| tag.name)
+                .collect(),
+            popularity: self.popularity,
+            status: self.status,
+            next_episode: self
+                .next_airing_episode
+                .as_ref()
+                .and_then(|next| next.episode),
+            next_airing_at: self.next_airing_episode.and_then(|next| next.airing_at),
+            related: self
+                .relations
+                .map(|relations| {
+                    relations
+                        .edges
+                        .into_iter()
+                        .filter(|edge| {
+                            edge.relation_type
+                                .as_deref()
+                                .is_some_and(|kind| STORY_RELATIONS.contains(&kind))
+                        })
+                        .filter_map(|edge| edge.node)
+                        .filter(|node| node.kind.as_deref() == Some("ANIME"))
+                        .map(|node| node.id.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            chain: Vec::new(),
+        };
+
         Candidate {
             metadata: TitleMetadata {
                 provider: ProviderId::AniList,
@@ -525,6 +750,7 @@ impl Media {
                 genres: self.genres,
                 episodes: self.episodes,
                 url: self.site_url,
+                details: Some(details),
             },
             aliases,
             // Null on anything AniList has not seen air yet, which is not the

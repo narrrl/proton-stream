@@ -389,6 +389,27 @@ impl Library {
         played
     }
 
+    /// When each title last gained a file, Unix seconds — the newest
+    /// [`crate::catalog::Catalog::first_seen`] among its episodes. `0` for a
+    /// title whose files were all there before that was recorded.
+    pub fn added_at(&self, first_seen: &HashMap<(String, String), i64>) -> HashMap<String, i64> {
+        self.titles
+            .iter()
+            .map(|title| {
+                let newest = title
+                    .episodes()
+                    .filter_map(|episode| {
+                        first_seen
+                            .get(&(episode.node.share_id.clone(), episode.node.link_id.clone()))
+                    })
+                    .copied()
+                    .max()
+                    .unwrap_or(0);
+                (title.key.clone(), newest)
+            })
+            .collect()
+    }
+
     /// Substring match over the display name and every filename under it, so
     /// searching for a release group or an episode name finds its title.
     pub fn search(&self, query: &str) -> Vec<&Title> {
@@ -438,7 +459,7 @@ pub fn title_key(title: &str) -> String {
 
 /// Sort key for the shelf: case-insensitive, and a leading article ignored, so
 /// `The Expanse` files under E where a viewer looks for it.
-fn sort_name(name: &str) -> String {
+pub fn sort_name(name: &str) -> String {
     let lower = name.to_lowercase();
     for article in ["the ", "a ", "an "] {
         if let Some(rest) = lower.strip_prefix(article) {

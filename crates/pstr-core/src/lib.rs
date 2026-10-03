@@ -10,11 +10,13 @@ pub mod catalog;
 pub mod chapters;
 pub mod config;
 pub mod error;
+pub mod franchise;
 pub mod library;
 pub mod metadata;
 pub mod naming;
 pub mod prefs;
 pub mod shares;
+pub mod shelves;
 
 pub use error::{Error, Result};
 #[cfg(not(target_os = "android"))]

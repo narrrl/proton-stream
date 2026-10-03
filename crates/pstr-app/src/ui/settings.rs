@@ -5,8 +5,8 @@
 //! that manages Proton Drive links, and a page that is half link management and
 //! half preferences is two pages.
 
-use pstr_core::appearance::{Accent, Appearance, Flavor};
-use pstr_core::metadata::{MetadataConfig, ProviderId};
+use pstr_core::appearance::{Accent, Appearance, Flavor, Tiles};
+use pstr_core::metadata::{MetadataConfig, ProviderId, TitleNames};
 
 use crate::app::Action;
 use crate::desktop_prefs::{CACHE_CHOICES, DesktopPrefs};
@@ -101,6 +101,41 @@ fn appearance_form(ui: &mut egui::Ui, appearance: Appearance, actions: &mut Vec<
                 }
             }
         });
+
+        ui::widgets::settings_row(
+            ui,
+            "Library tiles",
+            Some("Covers, or 16:9 stills. Covers are the art every matched title has."),
+            |ui| {
+                let choices: Vec<(Tiles, &str)> = Tiles::ALL
+                    .iter()
+                    .map(|tiles| (*tiles, tiles.label()))
+                    .collect();
+                if let Some(tiles) = ui::widgets::segmented(ui, appearance.tiles, &choices) {
+                    actions.push(Action::SetAppearance(Appearance {
+                        tiles,
+                        ..appearance
+                    }));
+                }
+            },
+        );
+        ui::widgets::settings_row(
+            ui,
+            "Title names",
+            Some("The name a matched title goes by. Its other names still find it in search."),
+            |ui| {
+                let choices: Vec<(TitleNames, &str)> = TitleNames::ALL
+                    .iter()
+                    .map(|names| (*names, names.label()))
+                    .collect();
+                if let Some(names) = ui::widgets::segmented(ui, appearance.names, &choices) {
+                    actions.push(Action::SetAppearance(Appearance {
+                        names,
+                        ..appearance
+                    }));
+                }
+            },
+        );
 
         let mut gradients = appearance.gradients;
         ui::widgets::settings_row(

@@ -1,5 +1,6 @@
 //! The library page: what to watch, as a wall of stills.
 
+use pstr_core::appearance::Tiles;
 use pstr_core::library::{Library, Title, TitleKind};
 
 use crate::app::{Action, Filter, LibraryView, Page, Sort};
@@ -16,6 +17,8 @@ pub struct Shelves<'a> {
     /// Whether the catalog has been read yet.
     pub loaded: bool,
     pub search: &'a str,
+    /// The grid's shape.
+    pub tiles: Tiles,
 }
 
 pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions: &mut Vec<Action>) {
@@ -24,6 +27,7 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
         view,
         loaded,
         search,
+        tiles,
     } = shelves;
     if !loaded {
         return placeholder(ui);
@@ -54,6 +58,16 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
                     ui::section(ui, "Continue watching");
                     continue_row(ui, art, &resumable, actions);
                     ui.add_space(theme::space::XL);
+                }
+                // Only over the whole library: under a filter, a shelf of
+                // titles the grid below is hiding reads as the filter not
+                // working.
+                if view.filter == Filter::All {
+                    for (label, indices) in &view.shelves {
+                        ui::section(ui, label);
+                        shelf_row(ui, art, label, &pick(indices), tiles, actions);
+                        ui.add_space(theme::space::XL);
+                    }
                 }
             }
 
@@ -86,7 +100,7 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
                 return;
             }
 
-            grid(ui, art, &matches, actions);
+            grid(ui, art, &matches, view, tiles, actions);
         });
 }
 
@@ -121,7 +135,7 @@ fn featured<'a>(
             metadata
                 .get(&title.key)
                 .and_then(|record| record.metadata.as_ref())
-                .is_some_and(|found| found.backdrop_url.is_some())
+                .is_some_and(|found| found.wide_art().is_some())
         })
         .collect();
     if pictured.is_empty() {
@@ -144,7 +158,7 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
         return;
     }
     let radius = egui::CornerRadius::same(theme::radius::LG);
-    let picture = art.of(title);
+    let picture = art.wide(title);
     let found = art
         .metadata
         .get(&title.key)
@@ -252,7 +266,7 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             ui.add(
                 egui::Label::new(
                     theme::Role::Display
-                        .rich(&title.name)
+                        .rich(art.name(title))
                         .strong()
                         .color(theme::text()),
                 )
@@ -266,24 +280,20 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
     }
 }
 
-/// The filter pills and the order, at the right of the grid's heading.
+/// The filter pills, the order and the grouping, at the right of the grid's
+/// heading.
 fn shelf_controls(ui: &mut egui::Ui, view: &LibraryView, actions: &mut Vec<Action>) {
     // Right to left: the order first, so it ends up last.
     let sort = egui::ComboBox::from_id_salt("library-sort")
-        .selected_text(match view.sort {
-            Sort::Name => "A – Z",
-            Sort::Recent => "Recently watched",
-            Sort::Year => "Newest",
-        })
+        .selected_text(view.sort.label())
         .width(150.0)
         .show_ui(ui, |ui| {
             let mut picked = None;
-            for (sort, label) in [
-                (Sort::Name, "A – Z"),
-                (Sort::Recent, "Recently watched"),
-                (Sort::Year, "Newest"),
-            ] {
-                if ui.selectable_label(view.sort == sort, label).clicked() {
+            for sort in Sort::ALL {
+                if ui
+                    .selectable_label(view.sort == sort, sort.label())
+                    .clicked()
+                {
                     picked = Some(sort);
                 }
             }
@@ -291,6 +301,19 @@ fn shelf_controls(ui: &mut egui::Ui, view: &LibraryView, actions: &mut Vec<Actio
         });
     if let Some(Some(sort)) = sort.inner {
         actions.push(Action::SetShelf(view.filter, sort));
+    }
+    ui.add_space(theme::space::S);
+    let mut grouped = view.grouped;
+    if ui
+        .toggle_value(&mut grouped, egui_phosphor::regular::STACK)
+        .on_hover_text(if view.grouped {
+            "One tile per franchise. Click to show every title"
+        } else {
+            "Every title. Click to fold each franchise into one tile"
+        })
+        .changed()
+    {
+        actions.push(Action::SetGrouped(grouped));
     }
     ui.add_space(theme::space::L);
     if let Some(filter) = ui::widgets::segmented(
@@ -305,6 +328,57 @@ fn shelf_controls(ui: &mut egui::Ui, view: &LibraryView, actions: &mut Vec<Actio
         ],
     ) {
         actions.push(Action::SetShelf(filter, view.sort));
+    }
+}
+
+/// One shelf: titles that share something, scrolling sideways, in the grid's
+/// own shape.
+fn shelf_row(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    label: &str,
+    titles: &[&Title],
+    tiles: Tiles,
+    actions: &mut Vec<Action>,
+) {
+    let (width, aspect) = tile_shape(tiles);
+    egui::ScrollArea::horizontal()
+        .id_salt(("shelf", label))
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
+                for title in titles {
+                    let picture = match tiles {
+                        Tiles::Posters => art.poster(title),
+                        Tiles::Stills => art.of(title),
+                    };
+                    let response = ui::card(
+                        ui,
+                        Card {
+                            art: picture,
+                            name: art.name(title),
+                            subtitle: subtitle(title),
+                            progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
+                            badge: None,
+                            width,
+                            aspect,
+                        },
+                    );
+                    tile_menu(&response, title, false, actions);
+                    if response.clicked() {
+                        actions.push(Action::Goto(Page::Title(title.key.clone())));
+                    }
+                }
+            });
+        });
+}
+
+/// The minimum width and the picture's shape of a tile.
+fn tile_shape(tiles: Tiles) -> (f32, f32) {
+    match tiles {
+        Tiles::Posters => (theme::POSTER_WIDTH, theme::POSTER_ASPECT),
+        Tiles::Stills => (theme::CARD_WIDTH, theme::CARD_ASPECT),
     }
 }
 
@@ -337,17 +411,20 @@ fn continue_row(
                         })
                         .unwrap_or_else(|| episode.label());
 
+                    let picture = art.of(title);
                     let response = ui::card(
                         ui,
                         Card {
-                            art: art.of(title),
-                            name: &title.name,
+                            art: picture,
+                            name: art.name(title),
                             subtitle: remaining,
                             progress: episode.progress().map(|value| value as f32),
                             badge: episode.numbering(),
                             // A shelf that scrolls sideways has no right edge
-                            // to reach, so nothing to flex to.
+                            // to reach, so nothing to flex to. Always a
+                            // still: it is a frame from where they stopped.
                             width: theme::CARD_WIDTH,
+                            aspect: theme::CARD_ASPECT,
                         },
                     );
                     tile_menu(&response, title, true, actions);
@@ -361,10 +438,18 @@ fn continue_row(
 }
 
 /// Every title, wrapped to the window.
-fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut Vec<Action>) {
-    let grid = ui::columns(ui.available_width());
-    let row_height = ui::card_height(grid.width);
-    for row in titles.chunks(grid.columns) {
+fn grid(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    titles: &[&Title],
+    view: &LibraryView,
+    tiles: Tiles,
+    actions: &mut Vec<Action>,
+) {
+    let (minimum, aspect) = tile_shape(tiles);
+    let grid = ui::columns_of(ui.available_width(), minimum);
+    let row_height = ui::card_height(grid.width, aspect);
+    for (row, chunk) in titles.chunks(grid.columns).enumerate() {
         // A row scrolled out of view is only its height. Laying it out anyway
         // costs a subtitle and an artwork lookup per card per frame, and while
         // a film plays under the transport bar a frame is every frame.
@@ -385,18 +470,32 @@ fn grid(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut V
             // the difference times the column count is a visible drift towards
             // the left edge.
             ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
-            for title in row {
+            for (column, title) in chunk.iter().enumerate() {
+                let picture = match tiles {
+                    Tiles::Posters => art.poster(title),
+                    Tiles::Stills => art.of(title),
+                };
+                let folded = view
+                    .matches
+                    .get(row * grid.columns + column)
+                    .and_then(|index| view.folded.get(index))
+                    .copied();
                 let response = ui::card(
                     ui,
                     Card {
-                        art: art.of(title),
-                        name: &title.name,
-                        subtitle: subtitle(title),
+                        art: picture,
+                        name: art.name(title),
+                        subtitle: match folded {
+                            Some(more) => format!("{}  ·  +{more} more", subtitle(title)),
+                            None => subtitle(title),
+                        },
                         progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
                         // What a film is says itself in the subtitle below the
-                        // card; a second `Film` over the poster is noise.
-                        badge: None,
+                        // card; a second `Film` over the poster is noise. A
+                        // folded franchise says how much is under it.
+                        badge: folded.map(|more| format!("+{more}")),
                         width: grid.width,
+                        aspect,
                     },
                 );
                 tile_menu(&response, title, false, actions);
@@ -517,7 +616,7 @@ fn subtitle(title: &Title) -> String {
 /// fraction is a flash of something false.
 fn placeholder(ui: &mut egui::Ui) {
     let grid = ui::columns(ui.available_width());
-    let height = ui::card_height(grid.width);
+    let height = ui::card_height(grid.width, theme::CARD_ASPECT);
     ui::section(ui, "Library");
     for _ in 0..2 {
         ui.horizontal(|ui| {

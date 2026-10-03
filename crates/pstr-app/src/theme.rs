@@ -35,6 +35,12 @@ pub const CARD_WIDTH: f32 = 232.0;
 /// Video stills are 16:9. A poster shape would letterbox every one of them.
 pub const CARD_ASPECT: f32 = 9.0 / 16.0;
 pub const CARD_GAP: f32 = 14.0;
+/// The poster grid's minimum width: narrower than a still, because a cover is
+/// read by its art rather than by detail, and six across a laptop screen is
+/// what makes a wall of covers look like a shelf.
+pub const POSTER_WIDTH: f32 = 168.0;
+/// Covers are 2:3.
+pub const POSTER_ASPECT: f32 = 3.0 / 2.0;
 
 /// The type ramp, named once.
 ///

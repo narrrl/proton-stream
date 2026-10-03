@@ -264,6 +264,10 @@ pub struct MatchRecord {
     pub genres: Vec<String>,
     pub episode_count: Option<u32>,
     pub external_url: Option<String>,
+    /// `TitleDetails` as JSON, opaque to Kotlin: carried so that a match
+    /// picked by hand keeps the studios, relations and dates search found,
+    /// rather than losing them on the way back across the bridge.
+    pub details: Option<String>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -1180,8 +1184,15 @@ impl AndroidEngine {
     }
 
     pub fn set_appearance(&self, appearance: AppearanceRecord) -> Result<(), BridgeError> {
-        pstr_core::appearance::save(&self.dirs, &appearance_choice(appearance))
-            .map_err(BridgeError::from_display)
+        // The record carries the palette and nothing else; what the desktop's
+        // library layout fields hold is kept as it was stored.
+        let stored = pstr_core::appearance::load(&self.dirs).unwrap_or_default();
+        let appearance = Appearance {
+            tiles: stored.tiles,
+            names: stored.names,
+            ..appearance_choice(appearance)
+        };
+        pstr_core::appearance::save(&self.dirs, &appearance).map_err(BridgeError::from_display)
     }
 
     /// The colours the stored choice resolves to.
@@ -1435,7 +1446,14 @@ impl AndroidEngine {
             .lock()
             .enrichment_ages()
             .map_err(BridgeError::from_display)?;
-        let pending = pstr_meta::service::plan(titles, &stored, &enriched, provider, force);
+        let pending = pstr_meta::service::plan(
+            titles,
+            &stored,
+            &enriched,
+            provider,
+            service.has_details(),
+            force,
+        );
 
         let permits = Arc::new(tokio::sync::Semaphore::new(LOOKUP_CONCURRENCY));
         let mut lookups = tokio::task::JoinSet::new();
@@ -2377,6 +2395,7 @@ fn appearance_choice(record: AppearanceRecord) -> Appearance {
             AccentChoice::Red => Accent::Red,
         },
         gradients: record.gradients,
+        ..Appearance::default()
     }
 }
 
@@ -2533,6 +2552,10 @@ fn match_record(metadata: TitleMetadata) -> MatchRecord {
         genres: metadata.genres,
         episode_count: metadata.episodes,
         external_url: metadata.url,
+        details: metadata
+            .details
+            .as_ref()
+            .and_then(|details| serde_json::to_string(details).ok()),
     }
 }
 
@@ -2551,6 +2574,10 @@ fn title_metadata(record: MatchRecord) -> TitleMetadata {
         genres: record.genres,
         episodes: record.episode_count,
         url: record.external_url,
+        details: record
+            .details
+            .as_deref()
+            .and_then(|details| serde_json::from_str(details).ok()),
     }
 }
 
@@ -2926,6 +2953,11 @@ mod tests {
             genres: vec!["Action".to_owned(), "Sci-Fi".to_owned()],
             episodes: Some(26),
             url: Some("https://anilist.co/anime/1".to_owned()),
+            details: Some(pstr_core::metadata::TitleDetails {
+                studios: vec!["Sunrise".to_owned()],
+                related: vec!["5".to_owned()],
+                ..Default::default()
+            }),
         };
 
         assert_eq!(title_metadata(match_record(metadata.clone())), metadata);

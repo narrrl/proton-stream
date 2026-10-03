@@ -103,29 +103,61 @@ stored AniList episode row and every AniList banner-as-backdrop — all of it
 un-enriched, so the next match run (which the app starts on its own) refills
 them. Matches, hand-picked ones included, are kept.
 
-## Phase 2 — art and order
+## Phase 2 — art and order (done)
 
-- **Art slots** instead of one backdrop: poster (2:3), fanart (16:9), banner
-  (ultra-wide), logo. The hero and the 16:9 tiles take fanart; the banner only
-  ever fills an ultra-wide strip.
-- **A larger size class for the hero.** `THUMBNAIL_MAX_EDGE` is 640 for every
-  picture; the hero is drawn up to ~1600 px wide.
-- **A poster grid on desktop**, as an option or the default — AniList's covers
-  are the best art this library has, and Android already proves the layout.
-- **More of the AniList answer kept**: format, season and year, studios,
-  director, tags, popularity, status, next airing episode — all in the search
-  response already, so no extra request.
-- **Sorts**: by the displayed name (English / romaji / folder, as a setting),
-  release season, rating, popularity, recently added (needs a `first_seen`
-  column), in-progress first.
-- **Franchise grouping** from relations: the Evangelion TV series, its two films
-  and the Rebuild folder; Made in Abyss and its three films; Mushishi and its
-  specials; the Heaven's Feel trilogy. One tile each, with the parts in release
-  order on the title page.
-- **Shelves**: genre, studio, director — this library has a Satoshi Kon shelf
-  waiting in it — format, decade, airing now.
+**More of the answer kept.** The AniList query now also asks for the full
+start date, broadcast season, banner, popularity, status, the next airing
+episode, spoiler-free tags ranked 60 or more, main studios, the `Director`
+among the most relevant staff, and the relations that keep to one story
+(`PREQUEL`, `SEQUEL`, `PARENT`, `SIDE_STORY`, `SUMMARY`, `ALTERNATIVE`,
+`COMPILATION`, `CONTAINS` — not `SPIN_OFF`, `CHARACTER` or `OTHER`, which reach
+into other franchises). All of it lives in `TitleDetails`, stored as one JSON
+column (**schema v10**). A match stored before that is fetched again *by id*
+(`Work::Refresh`) — never searched for, so hand-picked matches stay — and a
+refresh of the same entry keeps its episodes, fanart and enrichment record.
+Enrichment also stores the chain of entries it walked.
+
+**Art.** Three textures per title where there was one: the tile's (`Art::of`),
+the 2:3 cover (`Art::poster`), and wide art (`Art::wide` — fanart, else the
+AniList banner) decoded at up to 1920 px for the library's hero and the title
+page's band. The banner, wrong in a 16:9 tile, fits those strips as drawn.
+
+**Poster grid.** Settings → Appearance → *Library tiles*: covers (the default)
+or 16:9 stills. Covers fill their tile; a cover in a still-shaped tile is still
+fitted whole.
+
+**Names.** Settings → Appearance → *Title names*: the share's, English or
+romaji. Search matches all of them whichever is shown.
+
+**Sorts.** A–Z by the shown name, recently watched, recently added (from
+`node_first_seen`, which survives recrawls; files present before v10 count as
+added at 0), newest by air date, highest rated, most popular.
+
+**Franchises.** `pstr_core::franchise::group` joins titles that share a
+provider id — their own, a related one, or one their episode walk passed
+through. The grid folds each franchise into its lead (the first series to air,
+else the first film) with a `+N` badge; the stack button beside the sort turns
+that off. The title page shows the whole franchise in release order. On the
+library this was built against: Evangelion ×4, Made in Abyss ×4, Heaven's Feel
+×3, Mushishi with its OVA, Jujutsu Kaisen with *0*, Chainsaw Man with *Reze*.
+
+**Shelves.** `pstr_core::shelves::pick`: airing now, then directors, studios
+and genres, each only when it spans three *franchises* — Made in Abyss's four
+titles are one director's, and that is not a shelf — and a genre only under 40%
+of the library. Four at most, over the unfiltered library. Here: *Directed by
+Satoshi Kon*, *From MADHOUSE*, *From MAPPA*, *From Production I.G*.
+
+**The title page** adds the season, studios, director and next airing episode
+to its line of facts, and the tags beside the genres.
+
+Not done: Android shows none of this yet beyond what it already drew — the
+bridge carries `TitleDetails` through a hand-picked match, and the grouping,
+shelves and sorts are in `pstr-core` ready for it, but its screens are
+unchanged. TMDB fills no details.
 
 ## Phase 3 — reach
+
+- **Android**: the sorts, grouping, shelves and names above.
 
 - **Local matching** against the offline database, so only ids leave the
   machine.

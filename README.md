@@ -72,7 +72,7 @@ against the SDK's own range download.
 | Transcoding | None. mpv demuxes and decodes natively. |
 | UI | egui/eframe on glow; mpv renders into the same GL context. |
 | Themes | The shipped near-black palette, Catppuccin Latte, Frappé, Macchiato and Mocha, and a Persona 5 one — black, white and one loud red, which is what the Red accent is there for — each with a choice of nine accents, drawn as a gradient unless you turn that off. Picked on the Settings page, applied without a restart. |
-| Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses, fanart and per-episode titles and synopses (for AniList, from ani.zip, which is sent the matched ids); a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. See [docs/METADATA.md](docs/METADATA.md). |
+| Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses, fanart and per-episode titles and synopses (for AniList, from ani.zip, which is sent the matched ids); a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. The library sorts by name, watch, add or air date, rating and popularity, folds a franchise into one tile, and shelves titles by director, studio and genre. See [docs/METADATA.md](docs/METADATA.md). |
 | Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. A native Android 12+ client is available featuring a Material 3 UI and immersive fullscreen playback. |
 
 ## Building

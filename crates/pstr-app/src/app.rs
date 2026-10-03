@@ -12,7 +12,7 @@ use pstr_core::Share;
 use pstr_core::appearance::Appearance;
 use pstr_core::config::AppDirs;
 use pstr_core::library::Library;
-use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord};
+use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, TitleNames};
 
 use crate::engine::{
     DownloadItem, DownloadKey, Engine, Event, ImageCache, describe_failures, watch_state,
@@ -213,6 +213,8 @@ pub enum Action {
     FocusSearch,
     /// Show a different slice of the library, or in a different order.
     SetShelf(Filter, Sort),
+    /// Fold each franchise into one tile, or show every title.
+    SetGrouped(bool),
     /// Open or close the list of keyboard shortcuts.
     ToggleShortcuts,
     /// One page back: a title to the library, the library to nowhere.
@@ -302,23 +304,53 @@ impl Matcher {
 /// every title by when it was last played. Neither is slow once; both were
 /// being done on every frame, and while a film plays under the transport bar
 /// that is the film's frame rate.
-#[derive(Default)]
 pub struct LibraryView {
     /// The query `matches` answers, as typed.
     query: String,
     /// Which titles the grid shows, and in what order.
     pub filter: Filter,
     pub sort: Sort,
-    /// The filter and order `matches` was built with.
-    built_with: (Filter, Sort),
+    /// One tile per franchise rather than one per title. See
+    /// `pstr_core::franchise`.
+    pub grouped: bool,
+    /// What `matches` was built with.
+    built_with: Option<(Filter, Sort, bool, TitleNames)>,
     /// Indices into [`Library::titles`].
     pub matches: Vec<usize>,
+    /// In a grouped grid, how many other titles a tile stands for, by index.
+    pub folded: HashMap<usize, usize>,
+    /// Every title in a franchise of more than one, by key: the keys of the
+    /// whole franchise in release order, its own included.
+    pub franchises: HashMap<String, Vec<String>>,
+    /// The rows above the grid, as a heading and indices.
+    pub shelves: Vec<(String, Vec<usize>)>,
     /// Every played episode, newest first, for the history page.
     pub history: Vec<ui::history::Entry>,
     /// The "Continue watching" shelf, most recent first, as indices.
     pub resumable: Vec<usize>,
-    /// The library changed under the lists.
+    /// The library or what is known about it changed under the lists.
     stale: bool,
+}
+
+impl Default for LibraryView {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            filter: Filter::default(),
+            sort: Sort::default(),
+            // On: a share holding a series and its three films is four tiles
+            // of the same picture otherwise.
+            grouped: true,
+            built_with: None,
+            matches: Vec::new(),
+            folded: HashMap::new(),
+            franchises: HashMap::new(),
+            shelves: Vec::new(),
+            history: Vec::new(),
+            resumable: Vec::new(),
+            stale: false,
+        }
+    }
 }
 
 /// Which titles the grid shows.
@@ -353,49 +385,233 @@ impl Filter {
 /// What order the grid is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sort {
-    /// The library's own order: by name, ignoring a leading article.
+    /// By the name shown, ignoring a leading article.
     #[default]
     Name,
     /// Most recently played first.
     Recent,
-    /// Newest first, undated last.
-    Year,
+    /// Most recently given a new file first.
+    Added,
+    /// Newest first by when it aired, undated last.
+    Release,
+    /// Best rated first, unrated last.
+    Rating,
+    /// Most followed at the provider first.
+    Popularity,
 }
 
+impl Sort {
+    pub const ALL: [Self; 6] = [
+        Self::Name,
+        Self::Recent,
+        Self::Added,
+        Self::Release,
+        Self::Rating,
+        Self::Popularity,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "A – Z",
+            Self::Recent => "Recently watched",
+            Self::Added => "Recently added",
+            Self::Release => "Newest",
+            Self::Rating => "Highest rated",
+            Self::Popularity => "Most popular",
+        }
+    }
+}
+
+/// What the library view is built from, besides the library itself.
+pub struct ViewInputs<'a> {
+    pub query: &'a str,
+    pub metadata: &'a HashMap<String, MetadataRecord>,
+    pub names: TitleNames,
+    /// When each title last gained a file, by key.
+    pub added: &'a HashMap<String, i64>,
+}
+
+/// How many shelves the library shows above the grid.
+const SHELVES: usize = 4;
+
 impl LibraryView {
-    fn refresh(&mut self, library: &Library, query: &str) {
-        if !self.stale && self.query == query && self.built_with == (self.filter, self.sort) {
+    fn refresh(&mut self, library: &Library, inputs: ViewInputs<'_>) {
+        use pstr_core::library::{Title, sort_name};
+
+        let built_with = (self.filter, self.sort, self.grouped, inputs.names);
+        if !self.stale && self.query == inputs.query && self.built_with == Some(built_with) {
             return;
         }
-        let index_of = |title: &pstr_core::library::Title| {
-            library
+        let metadata = inputs.metadata;
+        let found = |title: &Title| {
+            metadata
+                .get(&title.key)
+                .and_then(|record| record.metadata.as_ref())
+        };
+        let name = |title: &Title| ui::title_name(title, metadata, inputs.names).to_owned();
+
+        if self.stale {
+            let all: Vec<&Title> = library.titles.iter().collect();
+            self.franchises = pstr_core::franchise::group(&all, metadata)
+                .into_iter()
+                .filter(|franchise| franchise.members.len() > 1)
+                .flat_map(|franchise| {
+                    let keys: Vec<String> = franchise
+                        .members
+                        .iter()
+                        .map(|&index| all[index].key.clone())
+                        .collect();
+                    keys.clone().into_iter().map(move |key| (key, keys.clone()))
+                })
+                .collect();
+            let index: HashMap<&str, usize> = library
                 .titles
                 .iter()
-                .position(|candidate| std::ptr::eq(candidate, title))
-        };
-        let mut matches: Vec<&pstr_core::library::Title> = library
-            .search(query)
+                .enumerate()
+                .map(|(at, title)| (title.key.as_str(), at))
+                .collect();
+            self.shelves = pstr_core::shelves::pick(&library.titles, metadata, SHELVES)
+                .into_iter()
+                .map(|shelf| {
+                    let indices = shelf
+                        .keys
+                        .iter()
+                        .filter_map(|key| index.get(key.as_str()).copied())
+                        .collect();
+                    (shelf.label, indices)
+                })
+                .collect();
+        }
+
+        // A search finds a title by the provider's names for it as well as
+        // the share's: a folder called `Sousou no Frieren` is found by typing
+        // "Frieren: Beyond".
+        let needle = inputs.query.trim().to_lowercase();
+        let by_files: std::collections::HashSet<*const Title> = library
+            .search(inputs.query)
             .into_iter()
-            .filter(|title| self.filter.admits(title))
+            .map(|title| title as *const Title)
             .collect();
+        let mut titles: Vec<(usize, &Title)> = library
+            .titles
+            .iter()
+            .enumerate()
+            .filter(|(_, title)| {
+                by_files.contains(&(*title as *const Title))
+                    || found(title).is_some_and(|found| {
+                        std::iter::once(found.name.as_str())
+                            .chain(found.original_name.as_deref())
+                            .chain(
+                                found
+                                    .details
+                                    .as_ref()
+                                    .and_then(|details| details.romaji.as_deref()),
+                            )
+                            .any(|name| name.to_lowercase().contains(&needle))
+                    })
+            })
+            .filter(|(_, title)| self.filter.admits(title))
+            .collect();
+        titles.sort_by_cached_key(|(_, title)| sort_name(&name(title)));
+
+        // Each entry is the tile and every title it stands for.
+        let entries: Vec<(usize, Vec<usize>)> = if self.grouped {
+            let refs: Vec<&Title> = titles.iter().map(|(_, title)| *title).collect();
+            pstr_core::franchise::group(&refs, metadata)
+                .into_iter()
+                .map(|franchise| {
+                    let lead = titles[franchise.lead(&refs)].0;
+                    let members = franchise
+                        .members
+                        .iter()
+                        .map(|&member| titles[member].0)
+                        .collect();
+                    (lead, members)
+                })
+                .collect()
+        } else {
+            titles
+                .iter()
+                .map(|&(index, _)| (index, vec![index]))
+                .collect()
+        };
+        let mut entries = entries;
+        let titles_of = |members: &[usize]| -> Vec<&Title> {
+            members
+                .iter()
+                .map(|&index| &library.titles[index])
+                .collect()
+        };
+        // Every sort is stable over the name order above, so ties and the
+        // undated, unrated and unplayed keep their alphabetical order.
         match self.sort {
             Sort::Name => {}
-            // Stable, so titles never played keep their alphabetical order
-            // after the ones that have been.
-            Sort::Recent => matches.sort_by_key(|title| std::cmp::Reverse(title.last_played())),
-            Sort::Year => matches.sort_by_key(|title| std::cmp::Reverse(title.year.unwrap_or(0))),
+            Sort::Recent => entries.sort_by_key(|(_, members)| {
+                std::cmp::Reverse(
+                    titles_of(members)
+                        .iter()
+                        .map(|title| title.last_played())
+                        .max(),
+                )
+            }),
+            Sort::Added => entries.sort_by_key(|(_, members)| {
+                std::cmp::Reverse(
+                    titles_of(members)
+                        .iter()
+                        .filter_map(|title| inputs.added.get(&title.key))
+                        .max()
+                        .copied(),
+                )
+            }),
+            Sort::Release => entries.sort_by_cached_key(|(_, members)| {
+                std::cmp::Reverse(
+                    titles_of(members)
+                        .iter()
+                        .map(|title| pstr_core::franchise::release_key(title, metadata))
+                        // `~` is how the key says "undated"; it sorts last
+                        // here rather than first.
+                        .filter(|key| key != "~")
+                        .max(),
+                )
+            }),
+            Sort::Rating => entries.sort_by_key(|(lead, _)| {
+                std::cmp::Reverse(
+                    found(&library.titles[*lead])
+                        .and_then(|found| found.rating)
+                        .map(|rating| (rating * 100.0) as i64),
+                )
+            }),
+            Sort::Popularity => entries.sort_by_key(|(lead, _)| {
+                std::cmp::Reverse(
+                    found(&library.titles[*lead])
+                        .and_then(|found| found.details.as_ref())
+                        .and_then(|details| details.popularity),
+                )
+            }),
         }
-        self.matches = matches.into_iter().filter_map(index_of).collect();
-        self.built_with = (self.filter, self.sort);
+
+        self.folded = entries
+            .iter()
+            .filter(|(_, members)| members.len() > 1)
+            .map(|(lead, members)| (*lead, members.len() - 1))
+            .collect();
+        self.matches = entries.into_iter().map(|(lead, _)| lead).collect();
+        self.built_with = Some(built_with);
         if self.stale {
             self.history = ui::history::entries(library);
+            let index_of = |title: &Title| {
+                library
+                    .titles
+                    .iter()
+                    .position(|candidate| std::ptr::eq(candidate, title))
+            };
             self.resumable = library
                 .continue_watching()
                 .into_iter()
                 .filter_map(index_of)
                 .collect();
         }
-        self.query = query.to_owned();
+        self.query = inputs.query.to_owned();
         self.stale = false;
     }
 }
@@ -428,6 +644,8 @@ pub struct App {
     pub posters: ImageCache,
     /// What the providers have said, keyed by title key.
     pub metadata: HashMap<String, MetadataRecord>,
+    /// When each title last gained a file, by key — for "Recently added".
+    pub added: HashMap<String, i64>,
     /// What they said about the episodes under those titles.
     pub episodes: HashMap<String, EpisodeGuide>,
     pub settings: MetadataConfig,
@@ -531,6 +749,7 @@ impl App {
             thumbs: ImageCache::default(),
             posters: ImageCache::default(),
             metadata: HashMap::new(),
+            added: HashMap::new(),
             episodes: HashMap::new(),
             settings,
             api_key: String::new(),
@@ -612,8 +831,9 @@ impl App {
                     self.connecting = false;
                     self.note(ctx, format!("could not open the shares: {error}"), true);
                 }
-                Event::LibraryLoaded(library) => {
+                Event::LibraryLoaded(library, added) => {
                     self.library = library;
+                    self.added = added;
                     self.loaded = true;
                     self.view.stale = true;
                 }
@@ -678,6 +898,8 @@ impl App {
                         self.posters.forget(&key);
                     }
                     self.metadata = records;
+                    // Names, franchises and shelves all come from it.
+                    self.view.stale = true;
                 }
                 Event::EpisodeMetadata(episodes) => self.episodes = episodes,
                 Event::MetadataConfig(config) => {
@@ -975,6 +1197,7 @@ impl App {
                 posters: &mut self.posters,
                 metadata: &self.metadata,
                 episodes: &self.episodes,
+                names: self.engine.appearance().names,
             }
             .still(&title.key, episode)
         });
@@ -1220,6 +1443,7 @@ impl App {
                 self.view.filter = filter;
                 self.view.sort = sort;
             }
+            Action::SetGrouped(grouped) => self.view.grouped = grouped,
             Action::Back => match self.page {
                 Page::Title(_) => self.page = Page::Library,
                 // Back out of a search before out of anything else: it is the
@@ -1652,6 +1876,7 @@ impl eframe::App for App {
                         posters,
                         metadata,
                         episodes,
+                        names: engine.appearance().names,
                     },
                     open: *episode_drawer,
                 });
@@ -1750,7 +1975,15 @@ impl eframe::App for App {
                 });
             self.search = search;
             self.focus_search = false;
-            self.view.refresh(&self.library, &self.search);
+            self.view.refresh(
+                &self.library,
+                ViewInputs {
+                    query: &self.search,
+                    metadata: &self.metadata,
+                    names: self.engine.appearance().names,
+                    added: &self.added,
+                },
+            );
 
             let App {
                 engine,
@@ -1836,6 +2069,7 @@ impl eframe::App for App {
                         posters: &mut *posters,
                         metadata,
                         episodes,
+                        names: engine.appearance().names,
                     };
                     match page {
                         Page::Library => ui::library::show(
@@ -1846,6 +2080,7 @@ impl eframe::App for App {
                                 view,
                                 loaded: *loaded,
                                 search,
+                                tiles: engine.appearance().tiles,
                             },
                             &mut actions,
                         ),
@@ -1854,6 +2089,7 @@ impl eframe::App for App {
                             &mut art,
                             library,
                             key,
+                            view.franchises.get(key.as_str()).map(Vec::as_slice),
                             ui::title::OfflineView {
                                 downloads,
                                 files: offline_files,
@@ -1883,6 +2119,7 @@ impl eframe::App for App {
                     posters,
                     metadata,
                     episodes,
+                    names: engine.appearance().names,
                 };
                 ui::matcher::show(ctx, open, &mut art, settings.provider, &mut actions);
             }
@@ -2036,7 +2273,8 @@ fn crawl_label(progress: &std::collections::BTreeMap<String, usize>) -> String {
     }
 }
 
-/// Titles whose tile art is not what it was.
+/// Texture keys whose picture is not what it was: a title's tile art, its cover
+/// and its wide art each.
 ///
 /// Compared by URL: the same URL is the same picture, and anything else —
 /// a different one, a new one, or none any more — has to be fetched or
@@ -2045,19 +2283,27 @@ fn changed_art(
     before: &HashMap<String, MetadataRecord>,
     after: &HashMap<String, MetadataRecord>,
 ) -> Vec<String> {
-    let url = |records: &HashMap<String, MetadataRecord>, key: &str| {
-        records
-            .get(key)
-            .and_then(|record| record.metadata.as_ref())
-            .and_then(|metadata| metadata.tile_art())
-            .map(|(url, _)| url.to_owned())
+    // Every picture a title is drawn with, in the order of the keys below.
+    let urls = |records: &HashMap<String, MetadataRecord>, key: &str| {
+        let found = records.get(key).and_then(|record| record.metadata.as_ref());
+        [
+            found
+                .and_then(|metadata| metadata.tile_art())
+                .map(|(url, _)| url.to_owned()),
+            found.and_then(|metadata| metadata.poster_url.clone()),
+            found.and_then(|metadata| metadata.wide_art().map(str::to_owned)),
+        ]
     };
-    let mut keys: Vec<String> = before
-        .keys()
-        .chain(after.keys())
-        .filter(|key| url(before, key) != url(after, key))
-        .cloned()
-        .collect();
+    let mut keys: Vec<String> = Vec::new();
+    for key in before.keys().chain(after.keys()) {
+        let (old, new) = (urls(before, key), urls(after, key));
+        let texture_keys = [key.clone(), ui::poster_key(key), ui::wide_key(key)];
+        for ((old, new), texture) in old.iter().zip(&new).zip(texture_keys) {
+            if old != new {
+                keys.push(texture);
+            }
+        }
+    }
     keys.sort_unstable();
     keys.dedup();
     keys
@@ -2306,6 +2552,7 @@ mod tests {
             genres: Vec::new(),
             episodes: None,
             url: None,
+            details: None,
         });
         (
             key.into(),
@@ -2395,9 +2642,20 @@ mod tests {
             record("added", Some("w")),
         ]
         .into();
+        // The tile and the cover are both drawn from the poster here; the
+        // wide art has nothing to be.
         assert_eq!(
             changed_art(&before, &after),
-            vec!["added", "dropped", "found", "moved"]
+            vec![
+                "added",
+                "dropped",
+                "found",
+                "moved",
+                "poster:added",
+                "poster:dropped",
+                "poster:found",
+                "poster:moved"
+            ]
         );
     }
 }

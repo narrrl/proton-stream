@@ -208,6 +208,7 @@ mod tests {
                 genres: Vec::new(),
                 episodes: None,
                 url: None,
+                details: None,
             },
             aliases: std::iter::once(name)
                 .chain(aliases.iter().copied())

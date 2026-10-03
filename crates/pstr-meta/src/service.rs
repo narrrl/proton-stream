@@ -64,6 +64,20 @@ impl Source {
         }
     }
 
+    /// The entry a stored match names, fetched again by its id. `None` from a
+    /// provider that has no details to add.
+    async fn entry(&self, id: &str) -> Result<Option<TitleMetadata>> {
+        match self {
+            Self::AniList(provider) => provider.entry(id).await,
+            Self::Tmdb(_) => Ok(None),
+        }
+    }
+
+    /// Whether [`Source::entry`] has anything to give.
+    fn has_details(&self) -> bool {
+        matches!(self, Self::AniList(_))
+    }
+
     async fn enrich(&self, title: &Title, found: &TitleMetadata) -> Result<Enrichment> {
         match self {
             Self::AniList(provider) => provider.enrich(title, found).await,
@@ -247,12 +261,20 @@ pub enum Work {
     Match(Title),
     /// It is already matched; only its enrichment is missing or old.
     Enrich(Title, Box<TitleMetadata>),
+    /// It is matched, but stored before [`TitleMetadata::details`] existed:
+    /// fetch the same entry again by id — never searched for, so a match the
+    /// viewer picked by hand stays theirs — and enrich it too if `enrich`.
+    Refresh {
+        title: Title,
+        record: Box<MetadataRecord>,
+        enrich: bool,
+    },
 }
 
 impl Work {
     pub fn title(&self) -> &Title {
         match self {
-            Self::Match(title) | Self::Enrich(title, _) => title,
+            Self::Match(title) | Self::Enrich(title, _) | Self::Refresh { title, .. } => title,
         }
     }
 }
@@ -261,7 +283,8 @@ impl Work {
 #[derive(Debug)]
 pub struct Outcome {
     pub title_key: String,
-    /// The new answer, for [`Work::Match`]. Store it — misses included.
+    /// The new answer, for [`Work::Match`] and [`Work::Refresh`]. Store it —
+    /// misses included.
     pub record: Option<MetadataRecord>,
     /// What enriching the match found, when it was asked and answered. `None`
     /// after a failure, which must leave the title un-enriched so the next run
@@ -271,20 +294,26 @@ pub struct Outcome {
 
 /// Decide what a match run over `titles` has to do.
 ///
-/// Two kinds of work, and the difference is a request saved: a title that
+/// Three kinds of work, and the difference is requests saved: a title that
 /// already has a good match but has not been enriched — or was enriched longer
 /// ago than a match is trusted — needs enriching only, and searching for it
-/// again would ask the provider something it has already answered.
+/// again would ask the provider something it has already answered. One whose
+/// match predates its details is fetched again by id, which is one request
+/// and decides nothing.
 ///
 /// A hand-picked entry is never searched for again, not even when `force`d —
 /// that means "the automatic answers are wrong", and re-deciding the one title
 /// the viewer already fixed by hand is the opposite of what they asked for. It
-/// is still enriched.
+/// is still enriched and refreshed.
+///
+/// `details` is whether the provider has [`TitleMetadata::details`] to give
+/// — see [`MetadataService::has_details`].
 pub fn plan(
     titles: Vec<Title>,
     stored: &HashMap<String, MetadataRecord>,
     enriched: &HashMap<String, (ProviderId, i64)>,
     provider: ProviderId,
+    details: bool,
     force: bool,
 ) -> Vec<Work> {
     let now = now();
@@ -296,12 +325,24 @@ pub fn plan(
             work.push(Work::Match(title));
             continue;
         }
+        let Some(record) = record.filter(|record| record.metadata.is_some()) else {
+            continue;
+        };
         let fresh = enriched.get(&title.key).is_some_and(|(asked, at)| {
             *asked == provider && now.saturating_sub(*at) < MATCH_TTL_SECS
         });
-        if let Some(found) = record.and_then(|record| record.metadata.clone())
-            && !fresh
-        {
+        let stale_details = details
+            && record
+                .metadata
+                .as_ref()
+                .is_some_and(|found| found.details.is_none());
+        if stale_details {
+            work.push(Work::Refresh {
+                title,
+                record: Box::new(record.clone()),
+                enrich: !fresh,
+            });
+        } else if !fresh && let Some(found) = record.metadata.clone() {
             work.push(Work::Enrich(title, Box::new(found)));
         }
     }
@@ -309,6 +350,12 @@ pub fn plan(
 }
 
 impl MetadataService {
+    /// Whether this provider fills in [`TitleMetadata::details`], and so
+    /// whether a match stored without them is worth fetching again.
+    pub fn has_details(&self) -> bool {
+        self.source.has_details()
+    }
+
     /// Do one piece of [`Work`].
     ///
     /// A failed search is an `Err` and nothing is stored. A failed enrichment
@@ -321,11 +368,7 @@ impl MetadataService {
             Work::Match(title) => {
                 let record = self.record(title).await?;
                 let enrichment = match &record.metadata {
-                    Some(found) => self
-                        .enrich(title, found)
-                        .await
-                        .inspect_err(|error| tracing::warn!("enrich {}: {error}", title.name))
-                        .ok(),
+                    Some(found) => self.enrich_or_log(title, found).await,
                     None => None,
                 };
                 Ok(Outcome {
@@ -339,7 +382,50 @@ impl MetadataService {
                 record: None,
                 enrichment: Some(self.enrich(title, found).await?),
             }),
+            Work::Refresh {
+                title,
+                record,
+                enrich,
+            } => {
+                let Some(stored) = &record.metadata else {
+                    return Ok(Outcome {
+                        title_key: title.key.clone(),
+                        record: None,
+                        enrichment: None,
+                    });
+                };
+                // An id the provider no longer has keeps what was stored, with
+                // empty details so it is not asked about on every run.
+                let found = self
+                    .source
+                    .entry(&stored.remote_id)
+                    .await?
+                    .unwrap_or_else(|| TitleMetadata {
+                        details: Some(Default::default()),
+                        ..stored.clone()
+                    });
+                let enrichment = match enrich {
+                    true => self.enrich_or_log(title, &found).await,
+                    false => None,
+                };
+                Ok(Outcome {
+                    title_key: title.key.clone(),
+                    record: Some(MetadataRecord {
+                        metadata: Some(found),
+                        fetched_at: now(),
+                        ..(**record).clone()
+                    }),
+                    enrichment,
+                })
+            }
         }
+    }
+
+    async fn enrich_or_log(&self, title: &Title, found: &TitleMetadata) -> Option<Enrichment> {
+        self.enrich(title, found)
+            .await
+            .inspect_err(|error| tracing::warn!("enrich {}: {error}", title.name))
+            .ok()
     }
 }
 
@@ -408,6 +494,7 @@ mod tests {
                 genres: Vec::new(),
                 episodes: None,
                 url: None,
+                details: None,
             }),
             fetched_at: now(),
             manual,
@@ -419,6 +506,7 @@ mod tests {
             .map(|work| match work {
                 Work::Match(title) => (title.key.as_str(), "match"),
                 Work::Enrich(title, _) => (title.key.as_str(), "enrich"),
+                Work::Refresh { title, .. } => (title.key.as_str(), "refresh"),
             })
             .collect()
     }
@@ -441,7 +529,14 @@ mod tests {
         ]);
         let titles = ["enriched", "stale", "bare", "new"].map(title).to_vec();
 
-        let work = plan(titles, &stored, &enriched, ProviderId::AniList, false);
+        let work = plan(
+            titles,
+            &stored,
+            &enriched,
+            ProviderId::AniList,
+            false,
+            false,
+        );
         assert_eq!(
             kinds(&work),
             vec![("stale", "enrich"), ("bare", "enrich"), ("new", "match")]
@@ -458,11 +553,56 @@ mod tests {
         ]);
         let titles = ["pinned", "automatic"].map(title).to_vec();
 
-        let work = plan(titles, &stored, &HashMap::new(), ProviderId::AniList, true);
+        let work = plan(
+            titles,
+            &stored,
+            &HashMap::new(),
+            ProviderId::AniList,
+            false,
+            true,
+        );
         assert_eq!(
             kinds(&work),
             vec![("pinned", "enrich"), ("automatic", "match")]
         );
+    }
+
+    /// A match stored before details existed is fetched again by id — a
+    /// pinned one included, and without being searched for — and only by a
+    /// provider that has details to give.
+    #[test]
+    fn a_match_without_details_is_refreshed_rather_than_searched_for() {
+        let stored = HashMap::from([
+            ("pinned".to_string(), matched("pinned", true)),
+            ("automatic".to_string(), matched("automatic", false)),
+        ]);
+        let enriched = HashMap::from([("pinned".to_string(), (ProviderId::AniList, now()))]);
+        let titles = ["pinned", "automatic"].map(title).to_vec();
+
+        let work = plan(
+            titles.clone(),
+            &stored,
+            &enriched,
+            ProviderId::AniList,
+            true,
+            false,
+        );
+        assert_eq!(
+            kinds(&work),
+            vec![("pinned", "refresh"), ("automatic", "refresh")]
+        );
+        assert!(matches!(&work[0], Work::Refresh { enrich: false, .. }));
+        assert!(matches!(&work[1], Work::Refresh { enrich: true, .. }));
+
+        let work = plan(
+            titles,
+            &stored,
+            &enriched,
+            ProviderId::AniList,
+            false,
+            false,
+        );
+        assert_eq!(kinds(&work), vec![("automatic", "enrich")]);
     }
 
     /// A record from the other provider is never usable — switching provider has

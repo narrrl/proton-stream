@@ -160,6 +160,11 @@ struct PartialMarker {
 /// difference is VRAM held for every title in the library.
 const THUMBNAIL_MAX_EDGE: u32 = 640;
 
+/// The longest edge of a picture drawn across the whole window. 1920 is what
+/// a provider's fanart is, so nothing is scaled up and a 4K screen gets the
+/// best there is.
+pub const WIDE_MAX_EDGE: u32 = 1920;
+
 /// What the background side tells the UI.
 pub enum Event {
     /// The share list changed on disk.
@@ -175,8 +180,9 @@ pub enum Event {
     },
     /// Shares could not be opened at all.
     ConnectFailed(String),
-    /// The catalog was re-read.
-    LibraryLoaded(Library),
+    /// The catalog was re-read: the library, and when each title last
+    /// gained a file.
+    LibraryLoaded(Library, HashMap<String, i64>),
     /// A crawl finished for one share.
     Crawled {
         share_id: String,
@@ -739,15 +745,16 @@ impl Engine {
         self.runtime.spawn_blocking(move || {
             let result = {
                 let catalog = engine.catalog.lock();
-                catalog
-                    .all_files()
-                    .and_then(|files| Ok((files, catalog.all_watch_states()?)))
+                catalog.all_files().and_then(|files| {
+                    Ok((files, catalog.all_watch_states()?, catalog.first_seen()?))
+                })
             };
             match result {
-                Ok((files, watch)) => {
+                Ok((files, watch, first_seen)) => {
                     let library = Library::build(files, &watch);
                     let targets = download_targets(&library);
-                    engine.emit(Event::LibraryLoaded(library));
+                    let added = library.added_at(&first_seen);
+                    engine.emit(Event::LibraryLoaded(library, added));
                     engine.refresh_offline(Some(targets));
                 }
                 Err(error) => engine.fail("read the catalog", error),
@@ -1914,7 +1921,14 @@ impl Engine {
             }
         };
 
-        let pending = pstr_meta::service::plan(titles, &stored, &enriched, provider, force);
+        let pending = pstr_meta::service::plan(
+            titles,
+            &stored,
+            &enriched,
+            provider,
+            service.has_details(),
+            force,
+        );
         if pending.is_empty() {
             return self.emit(Event::Status("everything is already matched".into()));
         }
@@ -2088,15 +2102,26 @@ impl Engine {
     /// paths invalidates by itself and the same picture shared by two titles is
     /// fetched once.
     pub fn request_poster(&self, title_key: String, url: String) {
+        self.request_art(title_key, url, THUMBNAIL_MAX_EDGE);
+    }
+
+    /// [`Engine::request_poster`], for a picture drawn across the window —
+    /// the library's hero, the title page's band — kept at up to `max_edge`
+    /// pixels rather than a tile's 640. A 640 px still stretched to 1600 was
+    /// most of why those looked soft.
+    pub fn request_art(&self, title_key: String, url: String, max_edge: u32) {
         let engine = self.clone();
-        let path = self
-            .dirs
-            .poster_cache()
-            .join(format!("{}.img", digest(&url)));
+        // A size of its own on disk: the tile-sized copy of the same URL is
+        // already there under the plain name, scaled down.
+        let name = match max_edge {
+            THUMBNAIL_MAX_EDGE => format!("{}.img", digest(&url)),
+            edge => format!("{}-{edge}.img", digest(&url)),
+        };
+        let path = self.dirs.poster_cache().join(name);
 
         self.runtime.spawn(async move {
             if let Ok(bytes) = tokio::fs::read(&path).await {
-                match decode_thumbnail(&bytes) {
+                match decode_scaled(&bytes, max_edge) {
                     Ok(decoded) => {
                         if let Some(smaller) = &decoded.smaller {
                             store_image(&path, smaller).await;
@@ -2123,7 +2148,7 @@ impl Engine {
                 }
             };
 
-            match decode_thumbnail(&bytes) {
+            match decode_scaled(&bytes, max_edge) {
                 Ok(decoded) => {
                     store_image(&path, decoded.smaller.as_deref().unwrap_or(&bytes)).await;
                     engine.emit(Event::Poster {
@@ -2299,9 +2324,14 @@ struct Decoded {
 /// copy is handed back so the cache holds that instead, and the next launch
 /// decodes a picture already the size it is drawn at.
 fn decode_thumbnail(bytes: &[u8]) -> anyhow::Result<Decoded> {
+    decode_scaled(bytes, THUMBNAIL_MAX_EDGE)
+}
+
+/// [`decode_thumbnail`], to `max_edge` rather than a tile's size.
+fn decode_scaled(bytes: &[u8], max_edge: u32) -> anyhow::Result<Decoded> {
     let decoded = image::load_from_memory(bytes)?;
-    let (decoded, smaller) = if decoded.width().max(decoded.height()) > THUMBNAIL_MAX_EDGE {
-        let scaled = decoded.thumbnail(THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE);
+    let (decoded, smaller) = if decoded.width().max(decoded.height()) > max_edge {
+        let scaled = decoded.thumbnail(max_edge, max_edge);
         let encoded = encode_for_cache(&scaled);
         (scaled, encoded)
     } else {

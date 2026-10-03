@@ -123,6 +123,30 @@ impl Accent {
     }
 }
 
+/// What shape the library's grid is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Tiles {
+    /// 2:3 covers. The default, because the art a provider has for every
+    /// title is a cover; a 16:9 still exists for fewer of them, and a grid of
+    /// letterboxed covers was the desktop's weakest page.
+    #[default]
+    Posters,
+    /// 16:9 stills: the provider's fanart, else a frame from the file.
+    Stills,
+}
+
+impl Tiles {
+    pub const ALL: [Self; 2] = [Self::Posters, Self::Stills];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Posters => "Posters",
+            Self::Stills => "Stills",
+        }
+    }
+}
+
 /// The whole of the choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 // An older or hand-edited file is missing fields rather than invalid.
@@ -138,6 +162,10 @@ pub struct Appearance {
     /// slow ramp across a wide bar bands visibly, and flat is better than
     /// striped.
     pub gradients: bool,
+    /// The library grid's shape.
+    pub tiles: Tiles,
+    /// Which name a title goes by.
+    pub names: crate::metadata::TitleNames,
 }
 
 impl Default for Appearance {
@@ -146,6 +174,8 @@ impl Default for Appearance {
             flavor: Flavor::default(),
             accent: Accent::default(),
             gradients: true,
+            tiles: Tiles::default(),
+            names: crate::metadata::TitleNames::default(),
         }
     }
 }
@@ -615,6 +645,7 @@ mod tests {
             flavor: Flavor::Mocha,
             accent: Accent::PinkSky,
             gradients: false,
+            ..Appearance::default()
         };
         save(&dirs, &appearance).unwrap();
         assert_eq!(load(&dirs).unwrap(), appearance);
@@ -652,6 +683,7 @@ mod tests {
                     flavor,
                     accent,
                     gradients: true,
+                    ..Appearance::default()
                 });
                 let ratio = worst_contrast(palette.accent, palette.accent_alt, palette.on_accent);
                 assert!(
@@ -681,6 +713,7 @@ mod tests {
             flavor: Flavor::Persona5,
             accent: Accent::Red,
             gradients: false,
+            ..Appearance::default()
         });
         assert_eq!(palette.accent, PERSONA5.red);
         assert!(!palette.light);
@@ -697,6 +730,7 @@ mod tests {
                 flavor,
                 accent: Accent::Red,
                 gradients: true,
+                ..Appearance::default()
             });
             // The accent is the flavour's red — deepened on the light flavour,
             // where it would otherwise be too bright to put a label on.

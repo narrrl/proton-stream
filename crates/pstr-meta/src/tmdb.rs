@@ -102,6 +102,7 @@ impl Provider for Tmdb {
         Ok(Enrichment {
             episodes: self.episodes(found).await?,
             backdrop_url: None,
+            chain: Vec::new(),
         })
     }
 }
@@ -350,6 +351,9 @@ impl Result_ {
                     },
                     self.id
                 )),
+                // Nothing here yet: TMDB's would come from a detail request
+                // per title, and the search answer has none of it.
+                details: None,
             },
             aliases,
             // Always: `search/multi` results are filtered on `media_type`

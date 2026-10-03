@@ -18,12 +18,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::error::Result;
 use crate::library::TitleKind;
 use crate::metadata::{
-    Enrichment, EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleMetadata,
+    Enrichment, EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleDetails,
+    TitleMetadata,
 };
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -177,6 +178,33 @@ ALTER TABLE episode_metadata ADD COLUMN entry_number INTEGER;
 ALTER TABLE title_metadata ADD COLUMN enriched_at INTEGER;
 DELETE FROM episode_metadata WHERE provider = 'anilist';
 UPDATE title_metadata SET backdrop_url = NULL WHERE provider = 'anilist';
+"#;
+
+/// What the library is sorted, grouped and shelved by, and when each file
+/// first appeared.
+///
+/// `details` is [`TitleDetails`] as JSON — see there for why one column.
+/// `NULL` means it was never fetched, which a match run reads as "fetch it"
+/// rather than as "there is none"; every existing match starts that way.
+/// `chain` is the provider ids enrichment walked, newline-separated; every
+/// title is marked un-enriched so the next run records it.
+///
+/// `node_first_seen` is kept apart from `nodes` because a recrawl replaces
+/// every node row and "recently added" has to survive that. Files already in
+/// the catalog are recorded as seen at 0 — when they arrived is not known, and
+/// pretending it was today would put the whole library at the top.
+const MIGRATION_V10: &str = r#"
+ALTER TABLE title_metadata ADD COLUMN details TEXT;
+ALTER TABLE title_metadata ADD COLUMN chain TEXT;
+CREATE TABLE node_first_seen (
+    share_id  TEXT NOT NULL,
+    link_id   TEXT NOT NULL,
+    seen_at   INTEGER NOT NULL,
+    PRIMARY KEY (share_id, link_id)
+);
+INSERT OR IGNORE INTO node_first_seen (share_id, link_id, seen_at)
+    SELECT share_id, link_id, 0 FROM nodes WHERE is_folder = 0;
+UPDATE title_metadata SET enriched_at = NULL;
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,6 +392,12 @@ impl Catalog {
             tx.pragma_update(None, "user_version", 9)?;
             tx.commit()?;
         }
+        if version < 10 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V10)?;
+            tx.pragma_update(None, "user_version", 10)?;
+            tx.commit()?;
+        }
 
         Ok(())
     }
@@ -424,6 +458,13 @@ impl Catalog {
             }
         }
 
+        // Only files: a folder appearing is not something anyone watches.
+        tx.execute(
+            "INSERT OR IGNORE INTO node_first_seen (share_id, link_id, seen_at)
+             SELECT share_id, link_id, ?2 FROM nodes WHERE share_id = ?1 AND is_folder = 0",
+            params![share_id, unix_now()],
+        )?;
+
         if !retain_offline {
             tx.execute("DELETE FROM offline_files WHERE share_id = ?1 AND NOT EXISTS (SELECT 1 FROM nodes WHERE nodes.share_id = offline_files.share_id AND nodes.link_id = offline_files.link_id AND nodes.active_revision_id = offline_files.revision_id)", params![share_id])?;
         }
@@ -460,6 +501,18 @@ impl Catalog {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// When each file first appeared in a crawl, keyed `(share_id, link_id)`.
+    /// `0` for a file that was already there before this was recorded.
+    pub fn first_seen(&self) -> Result<HashMap<(String, String), i64>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT share_id, link_id, seen_at FROM node_first_seen")?;
+        let rows = statement.query_map([], |row| {
+            Ok(((row.get(0)?, row.get(1)?), row.get::<_, i64>(2)?))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Drop everything a share contributed, watch positions included.
     ///
     /// Unlike a recrawl — which replaces rows and deliberately leaves watch
@@ -475,6 +528,10 @@ impl Catalog {
         )?;
         tx.execute(
             "DELETE FROM offline_files WHERE share_id = ?1",
+            params![share_id],
+        )?;
+        tx.execute(
+            "DELETE FROM node_first_seen WHERE share_id = ?1",
             params![share_id],
         )?;
         tx.commit()?;
@@ -697,7 +754,7 @@ impl Catalog {
         let mut statement = self.conn.prepare(
             "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                     overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
-                    manual
+                    manual, details, chain
              FROM title_metadata",
         )?;
         let rows = statement.query_map([], row_to_metadata)?;
@@ -718,7 +775,7 @@ impl Catalog {
             .query_row(
                 "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                         overview, year, kind, poster_url, backdrop_url, rating, genres, episodes,
-                        url, manual
+                        url, manual, details, chain
                  FROM title_metadata WHERE title_key = ?1",
                 params![title_key],
                 row_to_metadata,
@@ -750,12 +807,22 @@ impl Catalog {
                 data.map(|data| data.remote_id.as_str()),
             ],
         )?;
+        let details = data
+            .and_then(|data| data.details.as_ref())
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| crate::error::Error::Config(error.to_string()))?;
+        // `same` below is whether the row already describes this entry. When
+        // it does, what enrichment added — the fanart, the chain, the record
+        // that it was asked — still describes it and is kept: refreshing a
+        // match's details must not cost the library its episode lists.
         self.conn.execute(
-            "INSERT INTO title_metadata (
+            &"INSERT INTO title_metadata (
                  title_key, provider, matched, fetched_at, remote_id, name, original_name,
                  overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
-                 manual
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                 manual, details
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                       ?17, ?18)
              ON CONFLICT (title_key) DO UPDATE SET
                  provider      = excluded.provider,
                  matched       = excluded.matched,
@@ -767,13 +834,23 @@ impl Catalog {
                  year          = excluded.year,
                  kind          = excluded.kind,
                  poster_url    = excluded.poster_url,
-                 backdrop_url  = excluded.backdrop_url,
+                 backdrop_url  = CASE WHEN same THEN COALESCE(excluded.backdrop_url,
+                                                              title_metadata.backdrop_url)
+                                      ELSE excluded.backdrop_url END,
                  rating        = excluded.rating,
                  genres        = excluded.genres,
                  episodes      = excluded.episodes,
                  url           = excluded.url,
                  manual        = excluded.manual,
-                 enriched_at   = NULL",
+                 details       = excluded.details,
+                 chain         = CASE WHEN same THEN title_metadata.chain END,
+                 enriched_at   = CASE WHEN same THEN title_metadata.enriched_at END"
+                .replace(
+                    "same",
+                    "(title_metadata.provider = excluded.provider
+                      AND title_metadata.remote_id IS excluded.remote_id
+                      AND excluded.matched = 1)",
+                ),
             params![
                 record.title_key,
                 record.provider.as_str(),
@@ -792,6 +869,7 @@ impl Catalog {
                 data.and_then(|data| data.episodes),
                 data.and_then(|data| data.url.as_deref()),
                 record.manual as i64,
+                details,
             ],
         )?;
         Ok(())
@@ -859,13 +937,14 @@ impl Catalog {
         replace_episodes(&tx, title_key, provider, fetched_at, &enrichment.episodes)?;
         tx.execute(
             "UPDATE title_metadata
-             SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url)
+             SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url), chain = ?5
              WHERE title_key = ?1 AND provider = ?2",
             params![
                 title_key,
                 provider.as_str(),
                 fetched_at,
                 enrichment.backdrop_url.as_deref(),
+                enrichment.chain.join("\n"),
             ],
         )?;
         tx.commit()?;
@@ -982,6 +1061,28 @@ fn replace_episodes(
     Ok(())
 }
 
+/// The `details` and `chain` columns, read back.
+///
+/// JSON that will not parse is treated as never fetched rather than failing
+/// the read: the next match run fetches it again, where an error here would
+/// take the whole grid down over one row.
+fn details_column(details: Option<String>, chain: Option<String>) -> Option<TitleDetails> {
+    let mut details: TitleDetails = serde_json::from_str(&details?).ok()?;
+    details.chain = chain
+        .unwrap_or_default()
+        .lines()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect();
+    Some(details)
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64)
+}
+
 /// `None` for a row whose provider column this build does not recognise.
 fn row_to_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MetadataRecord>> {
     let title_key: String = row.get(0)?;
@@ -1014,6 +1115,7 @@ fn row_to_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MetadataR
                 .collect(),
             episodes: row.get(14)?,
             url: row.get(15)?,
+            details: details_column(row.get(17)?, row.get(18)?),
         })
     };
 
@@ -1298,6 +1400,7 @@ mod tests {
             genres: vec!["Action".into(), "Drama".into()],
             episodes: Some(25),
             url: Some("https://anilist.co/anime/16498".into()),
+            details: None,
         }
     }
 
@@ -1651,7 +1754,7 @@ mod tests {
     /// Enrichment adds a backdrop when it found one and otherwise leaves the
     /// match's own alone; a new match makes the title un-enriched again.
     #[test]
-    fn enrichment_keeps_the_backdrop_it_did_not_replace_and_a_new_match_resets_it() {
+    fn enrichment_keeps_the_backdrop_it_did_not_replace_and_a_different_match_resets_it() {
         let mut catalog = Catalog::in_memory().expect("open");
         let record = MetadataRecord {
             title_key: "attack on titan".into(),
@@ -1691,8 +1794,120 @@ mod tests {
             .expect("enrich again");
         assert_eq!(backdrop(&catalog).as_deref(), Some("fanart.jpg"));
 
-        catalog.set_metadata(&record).expect("match again");
+        catalog
+            .set_metadata(&MetadataRecord {
+                metadata: Some(TitleMetadata {
+                    remote_id: "99147".into(),
+                    ..found()
+                }),
+                ..record
+            })
+            .expect("match something else");
         assert!(catalog.enrichment_ages().expect("ages").is_empty());
+    }
+
+    /// Details round-trip, and refreshing a match's details — the same entry
+    /// stored again — keeps what enrichment found for it.
+    #[test]
+    fn refreshing_the_same_match_keeps_its_enrichment_and_a_new_one_does_not() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let record = MetadataRecord {
+            title_key: "mushishi".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(found()),
+            fetched_at: 1,
+            manual: true,
+        };
+        catalog.set_metadata(&record).expect("store");
+        let enrichment = Enrichment {
+            episodes: vec![EpisodeMetadata {
+                season: Some(1),
+                number: 1,
+                absolute: Some(1),
+                entry_season: Some(1),
+                entry_number: Some(1),
+                name: Some("The Green Seat".into()),
+                overview: None,
+                still_url: None,
+                air_date: None,
+            }],
+            backdrop_url: Some("fanart.jpg".into()),
+            chain: vec!["457".into(), "20595".into()],
+        };
+        catalog
+            .set_enrichment("mushishi", ProviderId::AniList, 2, &enrichment)
+            .expect("enrich");
+
+        let refreshed = MetadataRecord {
+            metadata: Some(TitleMetadata {
+                details: Some(TitleDetails {
+                    studios: vec!["Artland".into()],
+                    ..TitleDetails::default()
+                }),
+                ..found()
+            }),
+            fetched_at: 3,
+            ..record.clone()
+        };
+        catalog.set_metadata(&refreshed).expect("refresh");
+        let read = catalog.metadata("mushishi").expect("read").expect("a row");
+        let data = read.metadata.expect("matched");
+        assert_eq!(data.backdrop_url.as_deref(), Some("fanart.jpg"));
+        let details = data.details.expect("details");
+        assert_eq!(details.studios, vec!["Artland"]);
+        assert_eq!(details.chain, vec!["457", "20595"]);
+        assert!(
+            catalog
+                .enrichment_ages()
+                .expect("ages")
+                .contains_key("mushishi")
+        );
+        assert_eq!(
+            catalog.all_episode_metadata().expect("read")["mushishi"].len(),
+            1
+        );
+
+        // A different entry is a different answer: nothing carries over.
+        catalog
+            .set_metadata(&MetadataRecord {
+                metadata: Some(TitleMetadata {
+                    remote_id: "20526".into(),
+                    ..found()
+                }),
+                ..record
+            })
+            .expect("repin");
+        let read = catalog.metadata("mushishi").expect("read").expect("a row");
+        assert_eq!(read.metadata.and_then(|data| data.backdrop_url), None);
+        assert!(catalog.enrichment_ages().expect("ages").is_empty());
+    }
+
+    /// A file keeps the moment it first appeared across recrawls, and one
+    /// that was there before this was recorded reads as 0.
+    #[test]
+    fn a_file_remembers_when_it_first_appeared() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .replace_share("s", &[file("s", "a", "Show S01E01.mkv")])
+            .expect("crawl");
+        let first = catalog.first_seen().expect("read")[&("s".to_string(), "a".to_string())];
+        assert!(first > 0);
+        catalog
+            .conn
+            .execute("UPDATE node_first_seen SET seen_at = 5", [])
+            .expect("age it");
+        catalog
+            .replace_share(
+                "s",
+                &[
+                    file("s", "a", "Show S01E01.mkv"),
+                    file("s", "b", "Show S01E02.mkv"),
+                ],
+            )
+            .expect("recrawl");
+        let seen = catalog.first_seen().expect("read");
+        assert_eq!(seen[&("s".to_string(), "a".to_string())], 5);
+        assert!(seen[&("s".to_string(), "b".to_string())] > 5);
     }
 
     /// Schema v9 repairs what AniList's first episode source wrote: its
