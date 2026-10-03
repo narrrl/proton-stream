@@ -36,8 +36,9 @@ import uniffi.pstr_android.TitleType
  * The screens are about to be redesigned one by one, and a layout regression —
  * a row that wraps, a button pushed off the edge — compiles and passes every
  * other test. Here it is a changed PNG in review. No artwork is loaded: the
- * bridge is not available on the host, so every tile shows its placeholder,
- * which is also what a title without metadata looks like on a phone.
+ * bridge is not available on the host, so every tile shows its generated
+ * placeholder, which is also what a title without metadata looks like on a
+ * phone.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -53,7 +54,9 @@ class ScreenshotTest {
     private fun capture(name: String, content: @Composable () -> Unit) {
         compose.setContent {
             ProtonStreamTheme {
-                Surface(color = MaterialTheme.colorScheme.background) { content() }
+                CompositionLocalProvider(LocalArtworkLoading provides false) {
+                    Surface(color = MaterialTheme.colorScheme.background) { content() }
+                }
             }
         }
         compose.onRoot().captureRoboImage("src/test/screenshots/$name.png")
@@ -83,6 +86,11 @@ class ScreenshotTest {
     @Test
     fun `an empty library`() = capture("library-empty") {
         LibraryScreen(AppUiState(loading = false), {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
+    fun `the library while the catalog loads`() = capture("library-loading") {
+        LibraryScreen(AppUiState(), {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
     }
 
     @Test

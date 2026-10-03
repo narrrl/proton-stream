@@ -6,8 +6,13 @@ import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,12 +21,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import io.narl.protonstream.native.NativeRuntime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -64,7 +76,9 @@ internal val EpisodeRecord.thumbnailSource: ThumbnailSource
  *
  * [fallback] is used only when there is no provider artwork or it fails to
  * load, which — with metadata off — is the common case rather than the rare
- * one.
+ * one. Until either answers, the box pulses as a skeleton; when neither has
+ * anything, it shows [ArtworkPlaceholder] rather than an empty card — without
+ * initials when [labelled] is false, for art with the name already over it.
  */
 @Composable
 internal fun RemoteArtwork(
@@ -72,17 +86,96 @@ internal fun RemoteArtwork(
     description: String,
     modifier: Modifier = Modifier,
     fallback: ThumbnailSource? = null,
+    labelled: Boolean = true,
 ) {
     val context = LocalContext.current
-    var image by remember(url, fallback) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(url, fallback) {
-        image = (loadArtwork(context, url) ?: loadThumbnail(fallback))?.asImageBitmap()
+    val enabled = LocalArtworkLoading.current
+    var image by remember(url, fallback) { mutableStateOf<ArtworkLoad>(ArtworkLoad.Pending) }
+    LaunchedEffect(url, fallback, enabled) {
+        if (!enabled) {
+            image = ArtworkLoad.Missing
+            return@LaunchedEffect
+        }
+        image = (loadArtwork(context, url) ?: loadThumbnail(fallback))
+            ?.let { ArtworkLoad.Loaded(it.asImageBitmap()) }
+            ?: ArtworkLoad.Missing
     }
-    Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
-        image?.let {
-            Image(it, description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        } ?: Text("▶", style = MaterialTheme.typography.displaySmall)
+    when (val loaded = image) {
+        ArtworkLoad.Pending -> Skeleton(modifier)
+        ArtworkLoad.Missing -> ArtworkPlaceholder(description, modifier, labelled)
+        is ArtworkLoad.Loaded -> Image(loaded.image, description, modifier, contentScale = ContentScale.Crop)
     }
+}
+
+private sealed interface ArtworkLoad {
+    data object Pending : ArtworkLoad
+    data object Missing : ArtworkLoad
+    data class Loaded(val image: ImageBitmap) : ArtworkLoad
+}
+
+/**
+ * Whether [RemoteArtwork] fetches anything at all.
+ *
+ * Off in the screenshot tests: there is no bridge on the host, and whether a
+ * failed fetch lands before or after the capture would decide between a
+ * skeleton and a placeholder in the committed image.
+ */
+internal val LocalArtworkLoading = staticCompositionLocalOf { true }
+
+/**
+ * Something being loaded: the surface tint, breathing.
+ *
+ * A spinner per tile is a grid of spinners; a shape where the poster will be
+ * says what is coming and where, and settles the layout before it arrives.
+ */
+@Composable
+internal fun Skeleton(modifier: Modifier = Modifier) {
+    val pulse by rememberInfiniteTransition(label = "skeleton").animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+        label = "skeleton alpha",
+    )
+    Box(modifier.graphicsLayer { alpha = pulse }.background(MaterialTheme.colorScheme.surfaceVariant))
+}
+
+/**
+ * Art for a title that has none: the accent as a gradient, and its initials.
+ *
+ * A black card with a play triangle on it said nothing about which title it
+ * was, so a grid of unmatched titles was a grid of identical cards. Each name
+ * sets where on the accent ramp its gradient starts, so neighbours differ
+ * while every one stays in the theme's colours.
+ */
+@Composable
+internal fun ArtworkPlaceholder(name: String, modifier: Modifier = Modifier, labelled: Boolean = true) {
+    val scheme = MaterialTheme.colorScheme
+    val brush = remember(name, scheme.primary, scheme.secondary) {
+        val start = lerp(scheme.primary, scheme.secondary, (name.hashCode().mod(5)) / 4f)
+        Brush.linearGradient(listOf(start, lerp(start, Color.Black, 0.55f)))
+    }
+    BoxWithConstraints(modifier.background(brush), contentAlignment = Alignment.Center) {
+        if (!labelled) return@BoxWithConstraints
+        val size = with(LocalDensity.current) { (minOf(maxWidth, maxHeight) * 0.3f).toSp() }
+        Text(
+            initials(name),
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = size,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * "Oshi no Ko" is "OK", "Akira" is "A": the first letters of up to two
+ * capitalised words, so particles and articles in a romanised name do not
+ * take a slot. A name with no capitals uses its first two words.
+ */
+internal fun initials(name: String): String {
+    val words = name.split(' ', '-', '_', '.', ':').filter { word -> word.firstOrNull()?.isLetterOrDigit() == true }
+    val picked = words.filter { it.first().isUpperCase() || it.first().isDigit() }.ifEmpty { words }
+    return picked.take(2).joinToString("") { it.first().uppercase() }
 }
 
 /**

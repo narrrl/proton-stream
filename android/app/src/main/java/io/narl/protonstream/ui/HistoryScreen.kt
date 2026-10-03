@@ -130,6 +130,7 @@ private fun HistoryRow(entry: Played, onPlay: () -> Unit, onTitle: () -> Unit, o
                 episode.label,
                 Modifier.fillMaxSize(),
                 fallback = episode.thumbnailSource,
+                labelled = false,
             )
             episode.progress?.takeIf { !episode.watched }?.let { progress ->
                 AccentProgress(

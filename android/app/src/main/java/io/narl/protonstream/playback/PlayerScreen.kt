@@ -954,6 +954,7 @@ private fun EpisodeChooser(
                             episode.label,
                             Modifier.fillMaxSize(),
                             fallback = episode.thumbnailSource,
+                            labelled = false,
                         )
                         episode.progress?.takeIf { !episode.watched && !current }?.let { progress ->
                             AccentProgress(
@@ -1048,6 +1049,7 @@ private fun UpNextCard(
                     upNext.label,
                     Modifier.fillMaxSize(),
                     fallback = upNext.thumbnailSource,
+                    labelled = false,
                 )
                 Box(Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)))
                 CircularProgressIndicator(

@@ -131,6 +131,7 @@ internal fun TitleScreen(
                     title.canonicalName ?: title.name,
                     Modifier.fillMaxSize(),
                     fallback = title.thumbnailSource,
+                    labelled = false,
                 )
                 Box(
                     Modifier.fillMaxSize().background(
@@ -386,6 +387,7 @@ private fun EpisodeRow(
                     heading,
                     Modifier.fillMaxSize(),
                     fallback = episode.thumbnailSource,
+                    labelled = false,
                 )
                 episode.progress?.takeIf { !episode.watched }?.let { progress ->
                     AccentProgress(

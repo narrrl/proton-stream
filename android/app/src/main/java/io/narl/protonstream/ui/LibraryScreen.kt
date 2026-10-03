@@ -44,7 +44,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -138,9 +137,7 @@ internal fun LibraryScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             when {
-                state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+                state.loading -> LibrarySkeleton()
                 state.titles.isEmpty() -> EmptyState(
                     "Your library is empty",
                     "Add a Proton Drive public link under Shares, then refresh.",
@@ -292,6 +289,35 @@ private fun LibraryGrid(
 }
 
 /**
+ * The grid's shape before the catalog has answered: posters and their two
+ * lines of text as blocks, so the page does not jump when the titles land.
+ */
+@Composable
+private fun LibrarySkeleton() {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(108.dp),
+        modifier = Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        userScrollEnabled = false,
+    ) {
+        items(SKELETON_TILES) {
+            Column {
+                Skeleton(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(MaterialTheme.shapes.medium))
+                Spacer(Modifier.height(8.dp))
+                Skeleton(Modifier.fillMaxWidth(0.8f).height(12.dp).clip(MaterialTheme.shapes.small))
+                Spacer(Modifier.height(6.dp))
+                Skeleton(Modifier.fillMaxWidth(0.5f).height(10.dp).clip(MaterialTheme.shapes.small))
+            }
+        }
+    }
+}
+
+/** Enough placeholder tiles to fill a tablet's first screen. */
+private const val SKELETON_TILES = 18
+
+/**
  * The title the banner shows: the one watched last, or with nothing part
  * watched, one of the titles the provider has a backdrop for, turning over
  * once a day — the desktop's `featured`.
@@ -313,6 +339,7 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
             title.canonicalName ?: title.name,
             Modifier.fillMaxSize(),
             fallback = title.thumbnailSource,
+            labelled = false,
         )
         Box(
             Modifier.fillMaxSize().background(
