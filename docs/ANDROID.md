@@ -87,11 +87,13 @@ GitHub Actions expects the keystore itself as the base64-encoded
 Keep the keystore and passwords in a durable external secret manager; losing the
 key prevents users from upgrading an installed APK.
 
-Tagged workflows currently retain signed builds as workflow artifacts only.
-Publishing them to a GitHub release or Play remains disabled until the pinned
-libmpv build and resulting APK have passed the on-device playback matrix. The
-main release workflow publishes desktop artifacts only and fails if an APK or
-AAB enters its artifact set.
+A `v*` tag runs `release.yml`, which calls `android.yml` with
+`signed_release: true` and publishes the signed APK as
+`proton-stream-<version>-android.apk` next to the desktop artifacts, together
+with the `mpv-android-source-<rev>.tar.gz` corresponding source for the bundled
+libmpv. The AAB is kept as the `android-bundle` workflow artifact only; nothing
+uploads it to Play. A manual `android.yml` run with `signed_release` builds the
+same signed files without publishing them.
 
 ## Licensing and Native Playback
 

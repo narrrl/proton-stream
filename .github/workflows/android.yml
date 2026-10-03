@@ -3,7 +3,15 @@ name: Android
 on:
   push:
     branches: [main]
-    tags: ['v*']
+  # A `v*` tag reaches this workflow through release.yml, which calls it and
+  # publishes the signed APK. Triggering on the tag here as well would build
+  # the release twice.
+  workflow_call:
+    inputs:
+      signed_release:
+        required: false
+        default: false
+        type: boolean
   pull_request:
     paths:
       - 'android/**'
@@ -188,10 +196,24 @@ jobs:
       - name: Build signed APK and AAB
         run: bash scripts/build-android.sh signed
 
+      # The APK bundles a GPL libmpv, so its corresponding source ships next to
+      # it. The AAB is for Play only and stays out of the GitHub release.
+      - name: Stage release files
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          mkdir -p dist/android
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            "dist/android/proton-stream-$version-android.apk"
+          cp android/app/build/generated/mpv/mpv-android-source-*.tar.gz dist/android/
+
       - uses: actions/upload-artifact@v7
         with:
-          name: android-signed
-          path: |
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/bundle/release/*.aab
+          name: android
+          path: dist/android/*
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-bundle
+          path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error

@@ -20,9 +20,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Android remains a workflow artifact only until the native libmpv adapter,
-  # corresponding-source bundle, and on-device verification are complete.
-  ANDROID_PUBLIC_RELEASE_ENABLED: 'false'
 
 jobs:
   verify:
@@ -59,11 +56,6 @@ jobs:
         run: |
           ! grep -q '^\[patch\.crates-io\]' Cargo.toml ||
             { echo "::error::Cargo.toml carries [patch.crates-io]; releases build against the registry"; exit 1; }
-
-      - name: Android publication remains blocked
-        run: |
-          test "$ANDROID_PUBLIC_RELEASE_ENABLED" = false
-          echo "Android APK/AAB publication is blocked until native playback is release-ready."
 
   linux:
     name: Linux artifacts
@@ -148,25 +140,38 @@ jobs:
             dist/*.msi
           if-no-files-found: error
 
+  # The signed APK plus the corresponding source of the libmpv it bundles. The
+  # keystore and its passwords come from the ANDROID_RELEASE_* secrets.
+  android:
+    name: Android
+    needs: verify
+    uses: ./.github/workflows/android.yml
+    with:
+      signed_release: true
+    secrets: inherit
+
   publish:
-    name: Publish desktop artifacts
+    name: Publish
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows]
+    needs: [linux, windows, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      # By name: the Android workflow also uploads the AAB, which is for Play
+      # and does not belong on the release.
       - uses: actions/download-artifact@v8
         with:
+          name: linux
           path: artifacts
-          merge-multiple: true
-
-      - name: Refuse mobile artifacts while Android publishing is blocked
-        run: |
-          if find artifacts -type f \( -name '*.apk' -o -name '*.aab' \) -print -quit | grep -q .; then
-            echo "::error::Android publishing is disabled while native playback remains incomplete"
-            exit 1
-          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: android
+          path: artifacts
 
       - name: Checksums
         run: |
