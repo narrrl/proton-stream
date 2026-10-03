@@ -1,7 +1,11 @@
 package io.narl.protonstream.ui
 
 import android.content.Intent
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.coroutines.cancellation.CancellationException
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -96,7 +100,19 @@ internal fun TitleScreen(
     var showMatch by remember(title.key) { mutableStateOf(false) }
     var overviewOpen by remember(title.key) { mutableStateOf(false) }
 
-    BackHandler(onBack = onBack)
+    // Predictive back: the page shrinks towards the library as the gesture
+    // is dragged, and springs back if it is let go of, so the viewer sees
+    // where back goes before committing to it.
+    var backProgress by remember { mutableFloatStateOf(0f) }
+    PredictiveBackHandler { gesture ->
+        try {
+            gesture.collect { backProgress = it.progress }
+            onBack()
+        } catch (cancelled: CancellationException) {
+            backProgress = 0f
+            throw cancelled
+        }
+    }
 
     // Display order across seasons: what previous/next and autoplay walk, and
     // the same order the desktop client uses.
@@ -123,7 +139,18 @@ internal fun TitleScreen(
     // button and synopsis lines two thousand pixels wide are read by turning
     // the head. The backdrop still spans the window, but no taller than about
     // half of it, or a landscape tablet opened on a picture and nothing else.
-    BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                val scale = 1f - 0.1f * backProgress
+                scaleX = scale
+                scaleY = scale
+                shape = RoundedCornerShape((32 * backProgress).dp)
+                clip = backProgress > 0f
+            }
+            .padding(padding),
+    ) {
         val side = ((maxWidth - READABLE_WIDTH) / 2).coerceAtLeast(0.dp)
         val backdropHeight = minOf(maxWidth * 9f / 16f, maxHeight * 0.55f)
         LazyColumn(
@@ -135,7 +162,7 @@ internal fun TitleScreen(
                 // Edge to edge, fading into the page: the art is the first thing
                 // the page says, and a framed thumbnail with a margin round it read
                 // as one card among the many below it.
-                Box(Modifier.fillMaxWidth().height(backdropHeight)) {
+                Box(Modifier.then(sharedArt(title.key)).fillMaxWidth().height(backdropHeight)) {
                     RemoteArtwork(
                         title.backdropUrl ?: title.posterUrl,
                         title.canonicalName ?: title.name,

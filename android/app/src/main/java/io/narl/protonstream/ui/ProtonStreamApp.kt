@@ -2,8 +2,13 @@ package io.narl.protonstream.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -68,6 +73,9 @@ import io.narl.protonstream.playback.LibmpvHost
 import io.narl.protonstream.playback.NativeMpvHost
 import io.narl.protonstream.playback.PlayerScreen
 
+/** From this width the library and an open title share the window. */
+private val TWO_PANE_WIDTH = 840.dp
+
 /** How much room the floating mini transport needs at the foot of a page. */
 private val MINI_TRANSPORT_INSET = 88.dp
 
@@ -86,7 +94,7 @@ private enum class Destination(val label: String, val icon: ImageVector) {
     Settings("Settings", Icons.Default.Settings),
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun ProtonStreamApp(
     playerHost: LibmpvHost? = null,
@@ -187,38 +195,66 @@ fun ProtonStreamApp(
             Box(Modifier.fillMaxSize()) {
             AnimatedContent(destination, label = "primary navigation") { target ->
                 when (target) {
-                    Destination.Library -> if (selectedTitle == null) {
-                        LibraryScreen(
-                            state,
-                            model::search,
-                            { title, index ->
-                                playingTitleKey = title.key
-                                playingIndex = index
-                                playerMinimized = false
-                            },
-                            { selectedTitleKey = it.key },
-                            model::refresh,
-                            model::setTitleWatched,
-                            model::forgetPosition,
-                            body,
-                            onMatchChanged = model::reloadAfterMetadataChange,
-                            onError = model::reportError,
-                        )
-                    } else {
-                        TitleScreen(
-                            selectedTitle,
-                            playerHost != null,
-                            { _, index ->
-                                playingTitleKey = selectedTitle.key
-                                playingIndex = index
-                                playerMinimized = false
-                            },
-                            { selectedTitleKey = null },
-                            model::reportError,
-                            model::reloadAfterMetadataChange,
-                            model::setWatched,
-                            body,
-                        )
+                    // Side by side where there is room for both: on a tablet the
+                    // library stays in view while a title is open, so moving
+                    // between titles is one tap rather than back and in again.
+                    Destination.Library -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                        val libraryPane = @Composable {
+                                LibraryScreen(
+                                state,
+                                model::search,
+                                { title, index ->
+                                    playingTitleKey = title.key
+                                    playingIndex = index
+                                    playerMinimized = false
+                                },
+                                { selectedTitleKey = it.key },
+                                model::refresh,
+                                model::setTitleWatched,
+                                model::forgetPosition,
+                                body,
+                                onMatchChanged = model::reloadAfterMetadataChange,
+                                onError = model::reportError,
+                                )
+                        }
+                        val titlePane = @Composable { selected: TitleRecord ->
+                                TitleScreen(
+                                selected,
+                                playerHost != null,
+                                { _, index ->
+                                    playingTitleKey = selected.key
+                                    playingIndex = index
+                                    playerMinimized = false
+                                },
+                                { selectedTitleKey = null },
+                                model::reportError,
+                                model::reloadAfterMetadataChange,
+                                model::setWatched,
+                                body,
+                                )
+                        }
+                        if (maxWidth >= TWO_PANE_WIDTH) {
+                            Row(Modifier.fillMaxSize()) {
+                                Box(Modifier.weight(0.45f)) { libraryPane() }
+                                VerticalDivider()
+                                Box(Modifier.weight(0.55f)) {
+                                    selectedTitle?.let { titlePane(it) } ?: Box(Modifier.padding(body)) {
+                                        EmptyState("Choose a title", "Its seasons and episodes open here.")
+                                    }
+                                }
+                            }
+                        } else {
+                            SharedTransitionLayout {
+                                AnimatedContent(selectedTitle, contentKey = { it?.key }, label = "title") { open ->
+                                    CompositionLocalProvider(
+                                        LocalSharedTransition provides this@SharedTransitionLayout,
+                                        LocalPaneVisibility provides this,
+                                    ) {
+                                        open?.let { titlePane(it) } ?: libraryPane()
+                                    }
+                                }
+                            }
+                        }
                     }
                     Destination.Shares -> SharesScreen(
                         state.shares,

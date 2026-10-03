@@ -520,7 +520,7 @@ private fun PosterTile(title: TitleRecord, onClick: () -> Unit, onLongClick: () 
         RemoteArtwork(
             title.posterUrl ?: title.backdropUrl,
             title.canonicalName ?: title.name,
-            Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(MaterialTheme.shapes.medium),
+            Modifier.then(sharedArt(title.key)).fillMaxWidth().aspectRatio(2f / 3f).clip(MaterialTheme.shapes.medium),
             fallback = title.thumbnailSource,
         )
         Spacer(Modifier.height(6.dp))
