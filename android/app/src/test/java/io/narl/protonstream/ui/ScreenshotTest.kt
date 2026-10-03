@@ -59,13 +59,13 @@ class ScreenshotTest {
 
     @Test
     fun `the library on a phone`() = capture("library-phone") {
-        LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, PaddingValues())
+        LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, PaddingValues())
     }
 
     @Test
     @Config(qualifiers = RobolectricDeviceQualifiers.MediumTablet)
     fun `the library on a tablet`() = capture("library-tablet") {
-        LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, PaddingValues())
+        LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, PaddingValues())
     }
 
     @Test
@@ -74,13 +74,13 @@ class ScreenshotTest {
         // reads it from, so the scale is set there.
         val density = LocalDensity.current
         CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.5f)) {
-            LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, PaddingValues())
+            LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, PaddingValues())
         }
     }
 
     @Test
     fun `an empty library`() = capture("library-empty") {
-        LibraryScreen(AppUiState(loading = false), {}, { _, _ -> }, {}, PaddingValues())
+        LibraryScreen(AppUiState(loading = false), {}, { _, _ -> }, {}, {}, PaddingValues())
     }
 
     @Test

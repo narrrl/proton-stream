@@ -201,6 +201,7 @@ fun ProtonStreamApp(
                                 playerMinimized = false
                             },
                             { selectedTitleKey = it.key },
+                            model::refresh,
                             body,
                         )
                     } else {
