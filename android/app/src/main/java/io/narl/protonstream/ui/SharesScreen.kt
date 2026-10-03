@@ -3,15 +3,12 @@ package io.narl.protonstream.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -34,9 +31,20 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.unit.dp
 import io.narl.protonstream.ui.theme.AccentButton
-import io.narl.protonstream.ui.theme.QuietButton
 import io.narl.protonstream.ui.theme.TonalButton
 import uniffi.pstr_android.ShareRecord
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FolderShared
+import androidx.compose.ui.graphics.Color
 
 @Composable
 internal fun SharesScreen(
@@ -51,35 +59,39 @@ internal fun SharesScreen(
 ) {
     var showAdd by remember { mutableStateOf(false) }
     var repairing by remember { mutableStateOf<ShareRecord?>(null) }
-    Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Proton Drive public links", style = MaterialTheme.typography.titleLarge)
-            AccentButton(onClick = { showAdd = true }) { Text("Add share") }
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 16.dp)) {
-            items(shares, key = { it.id }) { share ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(share.name, fontWeight = FontWeight.SemiBold)
-                            Text(if (share.hasCustomPassword) "Custom password stored securely" else "Public link")
-                        }
-                        // One share, not the library: a link that has just had
-                        // files added to it should not cost a walk of every
-                        // other one, and a link that has expired should not stop
-                        // the ones that still work from being refreshed.
-                        IconButton(onClick = { onRefresh(share.id) }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh this share")
-                        }
-                        // Not a remove: a share whose secret has become
-                        // unreadable cannot be removed either, since removal
-                        // deletes a secret the store can no longer touch.
-                        QuietButton(onClick = { repairing = share }) { Text("Re-enter link") }
-                        TonalButton(onClick = { onRemove(share.id) }) { Text("Remove") }
-                    }
+    var removing by remember { mutableStateOf<ShareRecord?>(null) }
+    Box(Modifier.fillMaxSize().padding(padding)) {
+        if (shares.isEmpty()) {
+            EmptyState("No shares yet", "Add a Proton Drive public link to build your library.")
+        } else {
+            LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp)) {
+                item(key = "heading") {
+                    Text(
+                        "Proton Drive public links",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+                items(shares, key = { it.id }) { share ->
+                    ShareRow(
+                        share = share,
+                        onRefresh = { onRefresh(share.id) },
+                        onRepair = { repairing = share },
+                        onRemove = { removing = share },
+                    )
                 }
             }
         }
+        // Where a thumb is, and the one thing this page is for. The share
+        // sheet and a tapped link land in the same form.
+        ExtendedFloatingActionButton(
+            onClick = { showAdd = true },
+            icon = { Icon(Icons.Default.Add, contentDescription = null) },
+            text = { Text("Add share") },
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        )
     }
     if (showAdd || incomingLink != null) {
         AddShareDialog(
@@ -95,6 +107,83 @@ internal fun SharesScreen(
             onRepair = { url, password -> onRepair(share.id, url, password) },
         )
     }
+    removing?.let { share ->
+        // Asked, because it cannot be undone: the link's secret, its offline
+        // files and its watch positions all go (`Catalog::remove_share`).
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("Remove ${share.name}?") },
+            text = {
+                Text(
+                    "Its titles leave the library, and its offline episodes and watch " +
+                        "progress are deleted. Adding the link again starts it fresh.",
+                )
+            },
+            confirmButton = {
+                AccentButton(onClick = { removing = null; onRemove(share.id) }) { Text("Remove") }
+            },
+            dismissButton = { TonalButton(onClick = { removing = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * One share: its name, how it is unlocked, and its actions behind a menu.
+ *
+ * Three differently styled controls beside the name squeezed it into a column
+ * a word wide; one icon leaves the row its width.
+ */
+@Composable
+private fun ShareRow(
+    share: ShareRecord,
+    onRefresh: () -> Unit,
+    onRepair: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    ListItem(
+        headlineContent = { Text(share.name, fontWeight = FontWeight.SemiBold) },
+        supportingContent = {
+            Text(if (share.hasCustomPassword) "Link and custom password, stored securely" else "Public link")
+        },
+        leadingContent = {
+            Icon(
+                Icons.Default.FolderShared,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        trailingContent = {
+            Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Actions for ${share.name}")
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    // One share, not the library: a link that has just had files
+                    // added should not cost a walk of every other one.
+                    DropdownMenuItem(
+                        text = { Text("Refresh") },
+                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                        onClick = { menu = false; onRefresh() },
+                    )
+                    // Not a remove: a share whose secret has become unreadable
+                    // cannot be removed either, since removal deletes a secret
+                    // the store can no longer touch.
+                    DropdownMenuItem(
+                        text = { Text("Re-enter link") },
+                        leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
+                        onClick = { menu = false; onRepair() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Remove") },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        onClick = { menu = false; onRemove() },
+                    )
+                }
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    )
 }
 
 /**
