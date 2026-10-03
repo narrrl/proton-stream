@@ -193,6 +193,9 @@ struct PlaybackState {
     /// Between a seek being issued and playback actually resuming. The seek bar
     /// has moved but the picture has not.
     bool seeking = false;
+    /// How far into the file the demuxer has read ahead, in seconds; what the
+    /// seek bar shades, so a jump into it is known to cost no fetch.
+    double cached_until = 0.0;
     /// True between `loadfile` being issued and mpv acknowledging it with
     /// `START_FILE`. Everything mpv reports in that window still describes the
     /// *outgoing* file — including the `END_FILE(STOP)` that stopping it emits —
@@ -248,6 +251,7 @@ class Player {
         observe("video-params/dh", 7, MPV_FORMAT_INT64);
         observe("paused-for-cache", 8, MPV_FORMAT_FLAG);
         observe("cache-buffering-state", 9, MPV_FORMAT_INT64);
+        observe("demuxer-cache-time", 10, MPV_FORMAT_DOUBLE);
         // Errors mpv reports about the file itself, rather than about the
         // request that opened it. Without these a failed demux is silent.
         mpv_request_log_messages(mpv_, "error");
@@ -598,6 +602,7 @@ class Player {
         else if (!std::strcmp(property.name, "video-params/dh")) state_.video_height = static_cast<double>(*static_cast<int64_t *>(property.data));
         else if (!std::strcmp(property.name, "paused-for-cache")) state_.buffering = *static_cast<int *>(property.data);
         else if (!std::strcmp(property.name, "cache-buffering-state")) state_.cache_percent = static_cast<double>(*static_cast<int64_t *>(property.data));
+        else if (!std::strcmp(property.name, "demuxer-cache-time")) state_.cached_until = *static_cast<double *>(property.data);
     }
 
     static void render_update(void *opaque) noexcept {
@@ -876,8 +881,8 @@ extern "C" JNIEXPORT jdoubleArray JNICALL Java_io_narl_protonstream_playback_Nat
                                   state.video_width, state.video_height,
                                   static_cast<jdouble>(state.end_reason),
                                   state.buffering ? 1.0 : 0.0, state.cache_percent,
-                                  state.seeking ? 1.0 : 0.0};
-        constexpr jsize kFields = 13;
+                                  state.seeking ? 1.0 : 0.0, state.cached_until};
+        constexpr jsize kFields = 14;
         jdoubleArray result = env->NewDoubleArray(kFields);
         if (!result) return static_cast<jdoubleArray>(nullptr);
         env->SetDoubleArrayRegion(result, 0, kFields, values);

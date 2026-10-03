@@ -640,7 +640,12 @@ private fun PlayerControls(
                         scrubbing = null
                     },
                     valueRange = 0f..duration,
-                    track = { AccentTrack(it) },
+                    track = {
+                        AccentTrack(
+                            it,
+                            buffered = if (state.duration > 0) (state.cachedUntil / state.duration).toFloat() else 0f,
+                        )
+                    },
                 )
                 ChapterMarks(chapters, state.duration, Modifier.matchParentSize())
             }

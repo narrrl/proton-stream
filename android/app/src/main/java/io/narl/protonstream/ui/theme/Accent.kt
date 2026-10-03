@@ -168,11 +168,21 @@ internal fun AccentProgress(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun AccentTrack(state: SliderState, modifier: Modifier = Modifier) {
+internal fun AccentTrack(state: SliderState, modifier: Modifier = Modifier, buffered: Float = 0f) {
     val brush = accentBrush()
     Canvas(modifier.fillMaxWidth().height(TRACK_HEIGHT.dp)) {
         val radius = CornerRadius(size.height / 2)
         drawRoundRect(color = Color.White.copy(alpha = 0.30f), cornerRadius = radius)
+        // What is already read ahead, lighter than the rest and under the
+        // played part: a jump that lands in it costs no fetch.
+        val ahead = size.width * buffered.coerceIn(0f, 1f)
+        if (ahead >= size.height) {
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.55f),
+                size = Size(ahead, size.height),
+                cornerRadius = radius,
+            )
+        }
         val done = size.width * state.coercedValueAsFraction
         if (done >= size.height) {
             drawRoundRect(brush = brush, size = Size(done, size.height), cornerRadius = radius)

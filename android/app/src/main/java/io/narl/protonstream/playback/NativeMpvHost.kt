@@ -75,6 +75,8 @@ data class MpvPlaybackState(
     val cachePercent: Double = 0.0,
     /** A seek has been issued but playback has not resumed at the new position. */
     val seeking: Boolean = false,
+    /** How far the demuxer has read ahead, in seconds into the file. */
+    val cachedUntil: Double = 0.0,
 ) {
     /** Whether the picture is stopped for a reason the viewer did not choose. */
     val stalled: Boolean get() = (buffering || seeking) && !paused && !ended
@@ -313,6 +315,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
                         buffering = values[BUFFERING] != 0.0,
                         cachePercent = values[CACHE_PERCENT],
                         seeking = values[SEEKING] != 0.0,
+                        cachedUntil = values[CACHED_UNTIL],
                     )
                     mutableState.value = next
                     // The listeners drive the media session and the player UI,
@@ -431,7 +434,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
 
     companion object {
         /** Fields `nativeState` fills, in the order `pstr_mpv.cpp` writes them. */
-        private const val FIELDS = 13
+        private const val FIELDS = 14
         private const val GENERATION = 6
         private const val WIDTH = 7
         private const val HEIGHT = 8
@@ -439,6 +442,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         private const val BUFFERING = 10
         private const val CACHE_PERCENT = 11
         private const val SEEKING = 12
+        private const val CACHED_UNTIL = 13
 
         init {
             System.loadLibrary("pstr_android")
