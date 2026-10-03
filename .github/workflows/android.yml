@@ -95,8 +95,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends \
             autoconf automake build-essential cmake curl git gperf libdbus-1-dev \
-            libtool meson nasm ninja-build pkg-config python3 unzip wget xz-utils \
-            yasm
+            libtool nasm ninja-build pkg-config python3 unzip wget xz-utils yasm
+          # Not apt's meson: noble ships 1.3.2, and the fontconfig that the pinned
+          # mpv-android revision builds requires >= 1.11.
+          pipx install meson==1.12.1
 
       - name: Install Android SDK and NDK
         run: >-
@@ -183,8 +185,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends \
             autoconf automake build-essential cmake curl git gperf libdbus-1-dev \
-            libtool meson nasm ninja-build pkg-config python3 unzip wget xz-utils \
-            yasm
+            libtool nasm ninja-build pkg-config python3 unzip wget xz-utils yasm
+          # Not apt's meson: noble ships 1.3.2, and the fontconfig that the pinned
+          # mpv-android revision builds requires >= 1.11.
+          pipx install meson==1.12.1
 
       - name: Install Android SDK and NDK
         run: >-
