@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
@@ -144,6 +145,7 @@ internal fun TitleScreen(
                 IconButton(
                     onClick = onBack,
                     modifier = Modifier
+                        .statusBarsPadding()
                         .padding(8.dp)
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.4f)),

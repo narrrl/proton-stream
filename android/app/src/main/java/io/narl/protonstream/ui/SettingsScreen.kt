@@ -106,153 +106,155 @@ internal fun SettingsScreen(
     // Rows with one line of explanation each, in groups, rather than a toggle
     // followed by a paragraph: the page read as a document to get through
     // before reaching the switch that was wanted.
-    Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
-        SettingsGroup("Playback")
-        prefs?.let { current ->
-            SettingSwitch(
-                "Autoplay next episode",
-                "Starts the next episode when the credits begin",
-                current.autoplayNext,
-            ) { on -> update { it.copy(autoplayNext = on) } }
-            // Off is the safer default: a mis-named chapter then costs a tap on
-            // Skip rather than a scene.
-            SettingSwitch(
-                "Skip openings and endings",
-                "Uses the release's chapters; off shows a Skip button instead",
-                current.autoSkip,
-            ) { on -> update { it.copy(autoSkip = on) } }
-            SettingSwitch("Subtitles", "Shown by default where a file has them", current.subtitles) { on ->
-                update { it.copy(subtitles = on) }
+    TabPage("Settings", padding) { body ->
+        Column(Modifier.fillMaxSize().padding(body).verticalScroll(rememberScrollState())) {
+            SettingsGroup("Playback")
+            prefs?.let { current ->
+                SettingSwitch(
+                    "Autoplay next episode",
+                    "Starts the next episode when the credits begin",
+                    current.autoplayNext,
+                ) { on -> update { it.copy(autoplayNext = on) } }
+                // Off is the safer default: a mis-named chapter then costs a tap on
+                // Skip rather than a scene.
+                SettingSwitch(
+                    "Skip openings and endings",
+                    "Uses the release's chapters; off shows a Skip button instead",
+                    current.autoSkip,
+                ) { on -> update { it.copy(autoSkip = on) } }
+                SettingSwitch("Subtitles", "Shown by default where a file has them", current.subtitles) { on ->
+                    update { it.copy(subtitles = on) }
+                }
+                // Language tags, not a picker: which languages exist is a property
+                // of each file, and a list built from one episode is wrong for the
+                // next. A show that has been given its own choice keeps it.
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    LanguageField("Audio language", current.audioLanguage, Modifier.weight(1f)) { tag ->
+                        update { it.copy(audioLanguage = tag) }
+                    }
+                    LanguageField("Subtitle language", current.subtitleLanguage, Modifier.weight(1f)) { tag ->
+                        update { it.copy(subtitleLanguage = tag) }
+                    }
+                }
+                Text(
+                    "Tags as they appear in the file, such as jpn or eng",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
             }
-            // Language tags, not a picker: which languages exist is a property
-            // of each file, and a list built from one episode is wrong for the
-            // next. A show that has been given its own choice keeps it.
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            SettingSwitch(
+                "Hardware decoding",
+                "Turn off if video shows green or torn frames",
+                hardwareDecoding,
             ) {
-                LanguageField("Audio language", current.audioLanguage, Modifier.weight(1f)) { tag ->
-                    update { it.copy(audioLanguage = tag) }
-                }
-                LanguageField("Subtitle language", current.subtitleLanguage, Modifier.weight(1f)) { tag ->
-                    update { it.copy(subtitleLanguage = tag) }
-                }
+                hardwareDecoding = it
+                settings.hardwareDecoding = it
             }
-            Text(
-                "Tags as they appear in the file, such as jpn or eng",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-        SettingSwitch(
-            "Hardware decoding",
-            "Turn off if video shows green or torn frames",
-            hardwareDecoding,
-        ) {
-            hardwareDecoding = it
-            settings.hardwareDecoding = it
-        }
-        SettingSwitch(
-            "Background audio",
-            "Keeps playing with the app closed, from the notification",
-            backgroundAudio,
-        ) {
-            backgroundAudio = it
-            settings.backgroundAudio = it
-        }
+            SettingSwitch(
+                "Background audio",
+                "Keeps playing with the app closed, from the notification",
+                backgroundAudio,
+            ) {
+                backgroundAudio = it
+                settings.backgroundAudio = it
+            }
 
-        SettingsGroup("Downloads and storage")
-        SettingSwitch("Download on Wi-Fi only", "Mobile data is never used for downloads", wifiOnly) {
-            wifiOnly = it
-            settings.wifiOnly = it
-            // Constraints are baked in at enqueue time, so a queue that already
-            // exists keeps the policy it was queued under until it is re-issued.
-            DownloadCoordinator.applyNetworkPolicy(context)
-        }
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Text("Streaming cache")
-            Text(
-                "${formatBytes(state.storage.cacheBytes)} of $cacheBudgetGib GiB used",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            AccentProgress(
-                progress = {
-                    (state.storage.cacheBytes.toDouble() / SettingsStore.gibToBytes(cacheBudgetGib).toDouble())
-                        .toFloat().coerceIn(0f, 1f)
-                },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            )
-            // What has been watched is kept up to this much, so going back over
-            // a scene costs no download. A lower choice frees the difference at
-            // once. Wrapping, so five chips survive a narrow phone at a large
-            // font scale.
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SettingsStore.CACHE_BUDGET_CHOICES.forEach { gib ->
-                    FilterChip(
-                        selected = gib == cacheBudgetGib,
-                        onClick = {
-                            cacheBudgetGib = gib
-                            settings.cacheBudgetGib = gib
-                            scope.launch(Dispatchers.IO) {
-                                runCatching {
-                                    NativeRuntime.engine().setStreamCacheBudget(SettingsStore.gibToBytes(gib))
+            SettingsGroup("Downloads and storage")
+            SettingSwitch("Download on Wi-Fi only", "Mobile data is never used for downloads", wifiOnly) {
+                wifiOnly = it
+                settings.wifiOnly = it
+                // Constraints are baked in at enqueue time, so a queue that already
+                // exists keeps the policy it was queued under until it is re-issued.
+                DownloadCoordinator.applyNetworkPolicy(context)
+            }
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text("Streaming cache")
+                Text(
+                    "${formatBytes(state.storage.cacheBytes)} of $cacheBudgetGib GiB used",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                AccentProgress(
+                    progress = {
+                        (state.storage.cacheBytes.toDouble() / SettingsStore.gibToBytes(cacheBudgetGib).toDouble())
+                            .toFloat().coerceIn(0f, 1f)
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                )
+                // What has been watched is kept up to this much, so going back over
+                // a scene costs no download. A lower choice frees the difference at
+                // once. Wrapping, so five chips survive a narrow phone at a large
+                // font scale.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsStore.CACHE_BUDGET_CHOICES.forEach { gib ->
+                        FilterChip(
+                            selected = gib == cacheBudgetGib,
+                            onClick = {
+                                cacheBudgetGib = gib
+                                settings.cacheBudgetGib = gib
+                                scope.launch(Dispatchers.IO) {
+                                    runCatching {
+                                        NativeRuntime.engine().setStreamCacheBudget(SettingsStore.gibToBytes(gib))
+                                    }
                                 }
-                            }
-                        },
-                        label = { Text("$gib GiB") },
-                    )
+                            },
+                            label = { Text("$gib GiB") },
+                        )
+                    }
                 }
             }
-        }
-        // The cache is rebuildable, so it goes without asking. Offline episodes
-        // are a choice the viewer made, so that one asks.
-        SettingAction("Clear streaming cache", "Frees ${formatBytes(state.storage.cacheBytes)}", onClick = onClearCache)
-        SettingAction(
-            "Delete all offline episodes",
-            "${state.storage.offlineCount} " + (if (state.storage.offlineCount == 1uL) "episode" else "episodes") +
-                " · ${formatBytes(state.storage.offlineBytes)}" +
-                (
-                    state.storage.partialBytes.takeIf { it > 0uL }
-                        ?.let { " · ${formatBytes(it)} unfinished" }
-                        .orEmpty()
-                    ),
-            enabled = state.storage.offlineCount > 0uL || state.storage.partialBytes > 0uL,
-            onClick = { confirmDelete = true },
-        )
+            // The cache is rebuildable, so it goes without asking. Offline episodes
+            // are a choice the viewer made, so that one asks.
+            SettingAction("Clear streaming cache", "Frees ${formatBytes(state.storage.cacheBytes)}", onClick = onClearCache)
+            SettingAction(
+                "Delete all offline episodes",
+                "${state.storage.offlineCount} " + (if (state.storage.offlineCount == 1uL) "episode" else "episodes") +
+                    " · ${formatBytes(state.storage.offlineBytes)}" +
+                    (
+                        state.storage.partialBytes.takeIf { it > 0uL }
+                            ?.let { " · ${formatBytes(it)} unfinished" }
+                            .orEmpty()
+                        ),
+                enabled = state.storage.offlineCount > 0uL || state.storage.partialBytes > 0uL,
+                onClick = { confirmDelete = true },
+            )
 
-        SettingsGroup("Appearance")
-        Column(Modifier.padding(horizontal = 16.dp)) { AppearancePicker() }
+            SettingsGroup("Appearance")
+            Column(Modifier.padding(horizontal = 16.dp)) { AppearancePicker() }
 
-        SettingsGroup("Metadata")
-        SettingAction(
-            "Metadata enrichment",
-            if (state.metadataSettings.enabled) {
-                "On · ${state.metadataSettings.provider.displayName()} · sends title names to it"
-            } else {
-                "Off, the privacy default"
-            },
-            onClick = { showMetadata = true },
-        )
-        // Every title looked up again, matched ones included: the way out of a
-        // library the provider answered wrong, which otherwise stays wrong for
-        // as long as the match is remembered.
-        SettingAction(
-            "Match everything again",
-            "Looks every title up again, hand-picked matches excepted",
-            enabled = state.metadataSettings.enabled && !state.refreshing,
-            onClick = onMatchAgain,
-        )
+            SettingsGroup("Metadata")
+            SettingAction(
+                "Metadata enrichment",
+                if (state.metadataSettings.enabled) {
+                    "On · ${state.metadataSettings.provider.displayName()} · sends title names to it"
+                } else {
+                    "Off, the privacy default"
+                },
+                onClick = { showMetadata = true },
+            )
+            // Every title looked up again, matched ones included: the way out of a
+            // library the provider answered wrong, which otherwise stays wrong for
+            // as long as the match is remembered.
+            SettingAction(
+                "Match everything again",
+                "Looks every title up again, hand-picked matches excepted",
+                enabled = state.metadataSettings.enabled && !state.refreshing,
+                onClick = onMatchAgain,
+            )
 
-        SettingsGroup("About")
-        SettingAction("Licence", "GPL-3.0-or-later. Comes with absolutely no warranty.") {
-            legalDocument = LegalDocument("GNU GPL v3", "licenses/GPL-3.0.txt")
+            SettingsGroup("About")
+            SettingAction("Licence", "GPL-3.0-or-later. Comes with absolutely no warranty.") {
+                legalDocument = LegalDocument("GNU GPL v3", "licenses/GPL-3.0.txt")
+            }
+            SettingAction("Third-party notices", "libmpv, Inter and the other components bundled") {
+                legalDocument = LegalDocument("Third-party notices", "licenses/THIRD_PARTY_NOTICES.md")
+            }
+            Spacer(Modifier.height(24.dp))
         }
-        SettingAction("Third-party notices", "libmpv, Inter and the other components bundled") {
-            legalDocument = LegalDocument("Third-party notices", "licenses/THIRD_PARTY_NOTICES.md")
-        }
-        Spacer(Modifier.height(24.dp))
     }
     if (confirmDelete) {
         AlertDialog(

@@ -1,6 +1,19 @@
 package io.narl.protonstream.ui
 
 import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.graphics.Brush
@@ -105,39 +118,49 @@ internal fun LibraryScreen(
                 ?.let { Resumable(title, it.value, it.index) }
         }.sortedByDescending { it.episode.lastPlayed }.take(CONTINUE_WATCHING_MAX)
     }
-    Column(Modifier.fillMaxSize().padding(padding)) {
-        // A filled pill rather than an outlined form field: search is how the
-        // page is navigated, not a value being entered.
-        TextField(
-            value = state.query,
-            onValueChange = onSearch,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            singleLine = true,
-            shape = CircleShape,
-            placeholder = { Text("Search library") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            trailingIcon = {
-                if (state.query.isNotEmpty()) {
-                    IconButton(onClick = { onSearch("") }) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+    // Search is an icon until it is wanted: a permanent field above the
+    // library spent a band of every visit on something used in few of them.
+    var searching by rememberSaveable { mutableStateOf(state.query.isNotEmpty()) }
+    val closeSearch = {
+        searching = false
+        onSearch("")
+    }
+    BackHandler(enabled = searching, onBack = closeSearch)
+    // The large title folds into the bar as the grid scrolls, and comes back
+    // only at the top: the page says what it is on arrival, then gets out of
+    // the way.
+    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    Column(Modifier.fillMaxSize().nestedScroll(scroll.nestedScrollConnection)) {
+        if (searching) {
+            SearchBar(state.query, onSearch, closeSearch)
+        } else {
+            LargeTopAppBar(
+                title = { Text("Library") },
+                actions = {
+                    IconButton(onClick = { searching = true }) {
+                        Icon(Icons.Default.Search, contentDescription = "Search library")
                     }
-                }
-            },
-            colors = TextFieldDefaults.colors(
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-            ),
-        )
-        // Pull to refresh, the gesture every list on a phone answers to; the
-        // icon in the bar stays for a viewer who does not know it.
+                    // Pull to refresh is the gesture; the icon stays for a
+                    // viewer who does not know it.
+                    IconButton(onClick = onRefresh, enabled = !state.refreshing) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
+                },
+                colors = pageBarColors(),
+                scrollBehavior = scroll,
+            )
+        }
         PullToRefreshBox(
             isRefreshing = state.refreshing,
             onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f).padding(padding),
         ) {
             when {
                 state.loading -> LibrarySkeleton()
+                state.titles.isEmpty() && state.query.isNotBlank() -> EmptyState(
+                    "Nothing matches",
+                    "No title in the library is called “${state.query.trim()}”.",
+                )
                 state.titles.isEmpty() -> EmptyState(
                     "Your library is empty",
                     "Add a Proton Drive public link under Shares, then refresh.",
@@ -181,6 +204,50 @@ internal fun LibraryScreen(
             }
         }
     }
+}
+
+/**
+ * The bar while searching: back closes the search and clears it, and the field
+ * takes the keyboard as soon as it opens, since opening it is asking to type.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchBar(query: String, onSearch: (String) -> Unit, onClose: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    TopAppBar(
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search")
+            }
+        },
+        title = {
+            // A filled pill rather than an outlined form field: search is how
+            // the page is navigated, not a value being entered.
+            TextField(
+                value = query,
+                onValueChange = onSearch,
+                modifier = Modifier.fillMaxWidth().padding(end = 8.dp).focusRequester(focus),
+                singleLine = true,
+                shape = CircleShape,
+                placeholder = { Text("Search library") },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { onSearch("") }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                colors = TextFieldDefaults.colors(
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                ),
+            )
+        },
+        colors = pageBarColors(),
+    )
 }
 
 /**
@@ -279,7 +346,7 @@ private fun LibraryGrid(
                 }
             }
             item(key = "library-heading", span = { GridItemSpan(maxLineSpan) }) {
-                Text("Library", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                Text("All titles", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
             }
         }
         items(state.titles, key = { it.key }) { title ->

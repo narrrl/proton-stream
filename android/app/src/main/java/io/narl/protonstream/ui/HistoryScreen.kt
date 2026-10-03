@@ -80,28 +80,32 @@ internal fun HistoryScreen(
         history(state.titles).groupBy { Instant.ofEpochSecond(it.episode.lastPlayed).atZone(zone).toLocalDate() }
     }
     if (days.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            EmptyState("Nothing watched yet", "Episodes you play show up here, newest first.")
+        TabPage("History", padding) { body ->
+            Box(Modifier.fillMaxSize().padding(body)) {
+                EmptyState("Nothing watched yet", "Episodes you play show up here, newest first.")
+            }
         }
         return
     }
-    LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 24.dp)) {
-        days.forEach { (day, played) ->
-            item(key = "day/$day") {
-                Text(
-                    dayHeading(day, today),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
-                )
-            }
-            items(played, key = { "${it.episode.shareId}/${it.episode.linkId}" }) { entry ->
-                HistoryRow(
-                    entry,
-                    onPlay = { onPlay(entry.title, entry.index) },
-                    onTitle = { onTitle(entry.title) },
-                    onRemove = { onRemove(entry.title, entry.episode) },
-                )
+    TabPage("History", padding) { body ->
+        LazyColumn(Modifier.fillMaxSize().padding(body), contentPadding = PaddingValues(bottom = 24.dp)) {
+            days.forEach { (day, played) ->
+                item(key = "day/$day") {
+                    Text(
+                        dayHeading(day, today),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
+                    )
+                }
+                items(played, key = { "${it.episode.shareId}/${it.episode.linkId}" }) { entry ->
+                    HistoryRow(
+                        entry,
+                        onPlay = { onPlay(entry.title, entry.index) },
+                        onTitle = { onTitle(entry.title) },
+                        onRemove = { onRemove(entry.title, entry.episode) },
+                    )
+                }
             }
         }
     }

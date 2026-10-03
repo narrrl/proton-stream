@@ -60,38 +60,33 @@ internal fun SharesScreen(
     var showAdd by remember { mutableStateOf(false) }
     var repairing by remember { mutableStateOf<ShareRecord?>(null) }
     var removing by remember { mutableStateOf<ShareRecord?>(null) }
-    Box(Modifier.fillMaxSize().padding(padding)) {
-        if (shares.isEmpty()) {
-            EmptyState("No shares yet", "Add a Proton Drive public link to build your library.")
-        } else {
-            LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp)) {
-                item(key = "heading") {
-                    Text(
-                        "Proton Drive public links",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
-                }
-                items(shares, key = { it.id }) { share ->
-                    ShareRow(
-                        share = share,
-                        onRefresh = { onRefresh(share.id) },
-                        onRepair = { repairing = share },
-                        onRemove = { removing = share },
-                    )
+    TabPage("Shares", padding) { body ->
+        Box(Modifier.fillMaxSize().padding(body)) {
+            if (shares.isEmpty()) {
+                EmptyState("No shares yet", "Add a Proton Drive public link to build your library.")
+            } else {
+                LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp)) {
+                    items(shares, key = { it.id }) { share ->
+                        ShareRow(
+                            share = share,
+                            onRefresh = { onRefresh(share.id) },
+                            onRepair = { repairing = share },
+                            onRemove = { removing = share },
+                        )
+                    }
                 }
             }
+            // Where a thumb is, and the one thing this page is for. The share
+            // sheet and a tapped link land in the same form.
+            ExtendedFloatingActionButton(
+                onClick = { showAdd = true },
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text("Add share") },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            )
         }
-        // Where a thumb is, and the one thing this page is for. The share
-        // sheet and a tapped link land in the same form.
-        ExtendedFloatingActionButton(
-            onClick = { showAdd = true },
-            icon = { Icon(Icons.Default.Add, contentDescription = null) },
-            text = { Text("Add share") },
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-        )
     }
     if (showAdd || incomingLink != null) {
         AddShareDialog(
