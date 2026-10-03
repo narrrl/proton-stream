@@ -369,7 +369,9 @@ fn metadata_form(
             "A share filled by the Proton Drive desktop client carries no thumbnails, so \
                  without this every tile is a pair of initials. Turning it on sends the titles \
                  in your library — not your files, and nothing about what you have watched — to \
-                 the provider you choose, over HTTPS, each time a new one appears.",
+                 the provider you choose, over HTTPS, each time a new one appears. With AniList, \
+                 the ids it matched — not the titles — then go to ani.zip for episode names and \
+                 wide artwork.",
         ));
         ui.add_space(theme::space::L);
 

@@ -106,26 +106,22 @@ card (`App::tick_up_next`, `ui::player::up_next_card`) with *Play now* and
 chapters, autoplay on, a next episode, and playback actually running — a paused
 episode is one somebody walked away from.
 
-Done: **per-episode metadata.** `Provider::episodes` fetches an episode list for
-a title that already matched (AniList `streamingEpisodes`, which is titles and
-thumbnails only and no synopsis; TMDB `/tv/{id}` plus every season appended onto
-one more request), stored in `episode_metadata` — schema **v4**. The reconciling
-between a release's numbering and a provider's lives in one tested place,
-`EpisodeGuide::get`: the season and number the filename states, then the
-provider's absolute numbering, then season one for a file that states no season
-at all. That last fallback is what makes `#057` line up with TMDB filing a
-64-episode anime under one season. Episode names show on the title page's rows,
-in the player's title strip and in the "next:" line autoplay prints.
+Done: **per-episode metadata.** `Provider::enrich` fetches the episode list —
+and, for AniList, the series' fanart — of a title that already matched, and
+`Catalog::set_enrichment` stores both and records that it asked (schema **v9**),
+so an empty answer is not re-asked every run. TMDB is `/tv/{id}` plus every
+season appended onto one more request. AniList walks the match's `SEQUEL`
+relations and takes each entry's episodes from ani.zip, which carries TVDB's
+season, number and absolute number — the numbering release groups use. The
+reconciling between a release's numbering and a provider's lives in one tested
+place, `EpisodeGuide::get`. [METADATA.md](METADATA.md) has the audit that drove
+this, the order `get` tries things in, and what comes next.
 
-**A season is a separate lookup on AniList.** `Provider::seasons_are_separate_entries`
-is what splits the two providers: TMDB files every season under one show and
-returns them numbered, while AniList makes each sequel its own entry numbering
-from one (`[Oshi no Ko] 2nd Season`, id 166531, is not `[Oshi no Ko]`, id
-150672). So for AniList each season past the first is searched for by name —
-`<title> 2nd Season`, then `<title> Season 2` — and its episodes are stored
-tagged with that season. The absolute fallback in `EpisodeGuide::get` stops at
-season one for the same reason: without that it answered `S02E01` with season
-one's episode one, which is not a missing caption but a wrong one.
+The first version searched AniList for `<title> 2nd Season` per season and took
+episode names from `streamingEpisodes`; both were wrong often enough to show —
+the search found the base entry again and captioned Attack on Titan's later
+seasons with season one's names, and `streamingEpisodes` is whatever a streaming
+site published. v9 deletes everything they stored.
 
 Done: **matching a title by hand.** `MATCH_FLOOR` is set where a wrong poster
 costs more than none, and the price of that is a few titles it refuses to decide
@@ -145,11 +141,11 @@ rather than storing a miss, so the next run treats the title as one it has never
 asked about. Switching provider still clears everything, hand-picked rows
 included: a `remote_id` means nothing to the other provider.
 
-Worth knowing before chasing a missing name: AniList's episode titles come from
-`streamingEpisodes`, which is what streaming sites published, and for some shows
-it is simply **empty** — all three Oshi no Ko entries have none, while Fullmetal
-Alchemist Brotherhood has 64. There is nothing to fix on our side for those;
-TMDB is the provider that has them.
+Worth knowing before chasing a missing name: ani.zip only lists what TVDB has
+placed. A file it cannot answer is usually a special (`S02E00`), an episode TVDB
+skipped, or one too new to be listed — Attack on Titan's last two files and two
+of Bleach's forty-four are the standing examples. `pstr metadata match` prints
+how many episodes each title got.
 
 Note the glyph trap: egui's bundled fonts cover the transport icons
 (`⏮ ⏭ ⏸ ▶ 🔊 🔇 ⛶`) and *not* `← 💬 ▣`, which draw as an empty box. Anything new

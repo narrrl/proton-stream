@@ -10,8 +10,8 @@
 //! better evidence than the guess, and [`crate::matching`] only nudges on kind
 //! anyway.
 
-use pstr_core::library::TitleKind;
-use pstr_core::metadata::{EpisodeMetadata, ProviderId, TitleMetadata};
+use pstr_core::library::{Title, TitleKind};
+use pstr_core::metadata::{Enrichment, EpisodeMetadata, ProviderId, TitleMetadata};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
@@ -73,12 +73,6 @@ impl Provider for Tmdb {
         ProviderId::Tmdb
     }
 
-    /// One show, every season under it — and [`Self::episodes`] already returns
-    /// them with their season numbers.
-    fn seasons_are_separate_entries(&self) -> bool {
-        false
-    }
-
     async fn search(&self, query: &Query) -> Result<Vec<Candidate>> {
         if self.api_key.trim().is_empty() {
             return Err(Error::MissingApiKey(ProviderId::Tmdb));
@@ -101,6 +95,18 @@ impl Provider for Tmdb {
             .collect())
     }
 
+    /// The episode list, and nothing else: the match already carried a proper
+    /// backdrop, and TMDB files every season under one show, so the library's
+    /// seasons need no walking.
+    async fn enrich(&self, _title: &Title, found: &TitleMetadata) -> Result<Enrichment> {
+        Ok(Enrichment {
+            episodes: self.episodes(found).await?,
+            backdrop_url: None,
+        })
+    }
+}
+
+impl Tmdb {
     /// Two requests: the show, to learn which seasons exist, and then those
     /// seasons appended onto one more.
     ///
@@ -153,6 +159,9 @@ impl Provider for Tmdb {
                 EpisodeMetadata {
                     season: Some(number),
                     number: episode.episode_number,
+                    absolute: None,
+                    entry_season: None,
+                    entry_number: None,
                     name: episode.name.clone().filter(|name| !name.is_empty()),
                     overview: episode.overview.clone().filter(|text| !text.is_empty()),
                     still_url: episode
@@ -165,9 +174,7 @@ impl Provider for Tmdb {
         }
         Ok(episodes)
     }
-}
 
-impl Tmdb {
     /// One authenticated GET, paced, with TMDB's failures named.
     ///
     /// TMDB is far more generous than AniList and a library-sized run rarely

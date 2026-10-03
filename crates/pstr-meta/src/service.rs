@@ -20,11 +20,12 @@
 //! Nothing here is requested unless [`MetadataConfig::enabled`] is set. See the
 //! note in `pstr_core::metadata` on why that is off by default.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use pstr_core::library::{Title, TitleKind, title_key};
 use pstr_core::metadata::{
-    EpisodeMetadata, MetadataConfig, MetadataRecord, ProviderId, TitleMetadata,
+    Enrichment, MATCH_TTL_SECS, MetadataConfig, MetadataRecord, ProviderId, TitleMetadata,
 };
 
 use crate::anilist::AniList;
@@ -63,17 +64,10 @@ impl Source {
         }
     }
 
-    async fn episodes(&self, title: &TitleMetadata) -> Result<Vec<EpisodeMetadata>> {
+    async fn enrich(&self, title: &Title, found: &TitleMetadata) -> Result<Enrichment> {
         match self {
-            Self::AniList(provider) => provider.episodes(title).await,
-            Self::Tmdb(provider) => provider.episodes(title).await,
-        }
-    }
-
-    fn seasons_are_separate_entries(&self) -> bool {
-        match self {
-            Self::AniList(provider) => provider.seasons_are_separate_entries(),
-            Self::Tmdb(provider) => provider.seasons_are_separate_entries(),
+            Self::AniList(provider) => provider.enrich(title, found).await,
+            Self::Tmdb(provider) => provider.enrich(title, found).await,
         }
     }
 }
@@ -101,7 +95,9 @@ impl MetadataService {
             .map_err(Error::Network)?;
 
         let source = match config.provider {
-            ProviderId::AniList => Source::AniList(AniList::new(http.clone())),
+            ProviderId::AniList => {
+                Source::AniList(AniList::new(http.clone(), config.language.clone()))
+            }
             ProviderId::Tmdb => Source::Tmdb(Tmdb::new(
                 http.clone(),
                 api_key.ok_or(Error::MissingApiKey(ProviderId::Tmdb))?,
@@ -204,136 +200,29 @@ impl MetadataService {
         }
     }
 
-    /// What the provider lists as the episodes of a title it matched.
+    /// The episodes of a matched title, and any art its match lacked.
     ///
     /// Only ever called for a title that already has a match, because the
     /// provider's own id is what it takes — there is no second search here, and
     /// nothing about the library goes out that the match did not already send.
-    /// An empty list is a real answer and belongs in the catalog: a film has no
-    /// episodes, and asking again per render is the trap `MetadataRecord`
-    /// exists to avoid.
-    pub async fn episodes(&self, title: &TitleMetadata) -> Result<Vec<EpisodeMetadata>> {
-        let episodes = self.source.episodes(title).await?;
+    ///
+    /// An `Err` is a failure to ask and must not be stored: the title stays
+    /// un-enriched and the next match run asks again. An empty answer is an
+    /// answer, and is — see `Catalog::set_enrichment`.
+    pub async fn enrich(&self, title: &Title, found: &TitleMetadata) -> Result<Enrichment> {
+        let enrichment = self.source.enrich(title, found).await?;
         tracing::debug!(
-            "{}: {} episodes from {}",
+            "{}: {} episodes from {}{}",
             title.name,
-            episodes.len(),
-            self.provider().label()
-        );
-        Ok(episodes)
-    }
-
-    /// The episode list for a whole title, with a failure treated as an empty
-    /// one.
-    ///
-    /// Deliberately not fatal to the title it belongs to: a poster and a
-    /// synopsis that arrived are worth keeping even when the episode request
-    /// was the one that hit the rate limit. The empty result is not cached as
-    /// an answer — the next match run asks again — because the only thing that
-    /// triggers one is a viewer pressing the button.
-    ///
-    /// The match itself only ever answers for *one* entry, and on a provider
-    /// that files each sequel separately — AniList — that entry is season one.
-    /// So each further season of the title is searched for by name and its
-    /// episodes are tagged with the season they came from; without that,
-    /// seasons two and three have no episode names at all. See
-    /// [`MetadataService::season_episodes`].
-    pub async fn title_episodes(
-        &self,
-        title: &Title,
-        found: &TitleMetadata,
-    ) -> Vec<EpisodeMetadata> {
-        let mut episodes = self
-            .episodes(found)
-            .await
-            .inspect_err(|error| tracing::warn!("episodes for {}: {error}", found.name))
-            .unwrap_or_default();
-
-        if !self.splits_seasons() {
-            return episodes;
-        }
-
-        // Season one is what the title's own match already answered for.
-        let later: Vec<u32> = title
-            .seasons
-            .iter()
-            .filter_map(|season| season.number)
-            .filter(|number| *number > 1)
-            .collect();
-        for season in later {
-            match self.season_episodes(title, season).await {
-                Ok(found) => episodes.extend(found),
-                Err(error) => {
-                    tracing::warn!("episodes for {} season {season}: {error}", title.name);
-                }
+            enrichment.episodes.len(),
+            self.provider().label(),
+            if enrichment.backdrop_url.is_some() {
+                ", with a backdrop"
+            } else {
+                ""
             }
-        }
-        episodes
-    }
-
-    /// Whether this provider files a sequel as its own entry, so that a title
-    /// with several seasons has to be searched for once per season.
-    pub fn splits_seasons(&self) -> bool {
-        self.source.seasons_are_separate_entries()
-    }
-
-    /// The episodes of one season of `title`, for a provider that files each
-    /// season separately.
-    ///
-    /// A second search, not a second guess: the title's own match is season
-    /// one's entry, and asking it about episode one of season two would answer
-    /// with episode one of season one. So the season is searched for by the
-    /// name the provider itself uses — `Oshi no Ko 2nd Season`, and `Oshi no Ko
-    /// Season 2` when that finds nothing, which are the two conventions between
-    /// them covering everything AniList carries.
-    ///
-    /// A miss is an empty list rather than an error: a season the provider has
-    /// never heard of is ordinary, and it leaves those rows named by their
-    /// filenames exactly as they were before.
-    pub async fn season_episodes(
-        &self,
-        title: &Title,
-        season: u32,
-    ) -> Result<Vec<EpisodeMetadata>> {
-        if !self.splits_seasons() {
-            return Ok(Vec::new());
-        }
-
-        let mut found = None;
-        for name in season_names(&title.name, season) {
-            // No year: a sequel airs years after the series the library named
-            // the folder for, so carrying the title's year over would penalise
-            // the very entry being looked for.
-            let query = Query::new(name, None, title.kind);
-            let candidates = self.source.search(&query).await?;
-            if let Some(matched) = matching::best(&query, candidates) {
-                found = Some(matched);
-                break;
-            }
-        }
-
-        let Some(found) = found else {
-            tracing::debug!("{}: no entry for season {season}", title.name);
-            return Ok(Vec::new());
-        };
-
-        let episodes = self.source.episodes(&found).await?;
-        tracing::debug!(
-            "{} season {season}: {} episodes from {:?}",
-            title.name,
-            episodes.len(),
-            found.name
         );
-        // The entry numbers its own episodes from one; what makes them season
-        // two's is which entry they came from, and that has to be recorded here
-        // or nothing can look them up again.
-        Ok(episodes
-            .into_iter()
-            .map(|episode| EpisodeMetadata {
-                season: Some(season),
-                ..episode
-            })
-            .collect())
+        Ok(enrichment)
     }
 
     /// Download one piece of artwork.
@@ -351,29 +240,107 @@ impl MetadataService {
     }
 }
 
-/// What to search for when looking for one season of a series, best first.
-///
-/// `2nd Season` is AniList's own convention and matches its romaji titles
-/// outright; `Season 2` is what its English titles and most western libraries
-/// use. Season one is never searched for this way — that is the title's own
-/// match.
-fn season_names(title: &str, season: u32) -> Vec<String> {
-    vec![
-        format!("{title} {} Season", ordinal(season)),
-        format!("{title} Season {season}"),
-    ]
+/// What one match run has to do about one title.
+#[derive(Debug, Clone)]
+pub enum Work {
+    /// Search for it, and enrich it if it matches.
+    Match(Title),
+    /// It is already matched; only its enrichment is missing or old.
+    Enrich(Title, Box<TitleMetadata>),
 }
 
-/// `2` → `2nd`. English ordinals, because that is what the provider writes.
-fn ordinal(number: u32) -> String {
-    let suffix = match (number % 10, number % 100) {
-        (_, 11..=13) => "th",
-        (1, _) => "st",
-        (2, _) => "nd",
-        (3, _) => "rd",
-        _ => "th",
-    };
-    format!("{number}{suffix}")
+impl Work {
+    pub fn title(&self) -> &Title {
+        match self {
+            Self::Match(title) | Self::Enrich(title, _) => title,
+        }
+    }
+}
+
+/// What a piece of [`Work`] found, ready to store.
+#[derive(Debug)]
+pub struct Outcome {
+    pub title_key: String,
+    /// The new answer, for [`Work::Match`]. Store it — misses included.
+    pub record: Option<MetadataRecord>,
+    /// What enriching the match found, when it was asked and answered. `None`
+    /// after a failure, which must leave the title un-enriched so the next run
+    /// asks again.
+    pub enrichment: Option<Enrichment>,
+}
+
+/// Decide what a match run over `titles` has to do.
+///
+/// Two kinds of work, and the difference is a request saved: a title that
+/// already has a good match but has not been enriched — or was enriched longer
+/// ago than a match is trusted — needs enriching only, and searching for it
+/// again would ask the provider something it has already answered.
+///
+/// A hand-picked entry is never searched for again, not even when `force`d —
+/// that means "the automatic answers are wrong", and re-deciding the one title
+/// the viewer already fixed by hand is the opposite of what they asked for. It
+/// is still enriched.
+pub fn plan(
+    titles: Vec<Title>,
+    stored: &HashMap<String, MetadataRecord>,
+    enriched: &HashMap<String, (ProviderId, i64)>,
+    provider: ProviderId,
+    force: bool,
+) -> Vec<Work> {
+    let now = now();
+    let mut work = Vec::new();
+    for title in titles {
+        let record = stored.get(&title.key);
+        let pinned = record.is_some_and(|record| record.manual && record.provider == provider);
+        if !pinned && (force || !is_usable(record, provider)) {
+            work.push(Work::Match(title));
+            continue;
+        }
+        let fresh = enriched.get(&title.key).is_some_and(|(asked, at)| {
+            *asked == provider && now.saturating_sub(*at) < MATCH_TTL_SECS
+        });
+        if let Some(found) = record.and_then(|record| record.metadata.clone())
+            && !fresh
+        {
+            work.push(Work::Enrich(title, Box::new(found)));
+        }
+    }
+    work
+}
+
+impl MetadataService {
+    /// Do one piece of [`Work`].
+    ///
+    /// A failed search is an `Err` and nothing is stored. A failed enrichment
+    /// after a successful search is not: the match is worth keeping, and the
+    /// title is simply left un-enriched — a poster and a synopsis that arrived
+    /// are worth showing even when the episode request was the one that hit the
+    /// rate limit.
+    pub async fn work(&self, work: &Work) -> Result<Outcome> {
+        match work {
+            Work::Match(title) => {
+                let record = self.record(title).await?;
+                let enrichment = match &record.metadata {
+                    Some(found) => self
+                        .enrich(title, found)
+                        .await
+                        .inspect_err(|error| tracing::warn!("enrich {}: {error}", title.name))
+                        .ok(),
+                    None => None,
+                };
+                Ok(Outcome {
+                    title_key: record.title_key.clone(),
+                    record: Some(record),
+                    enrichment,
+                })
+            }
+            Work::Enrich(title, found) => Ok(Outcome {
+                title_key: title.key.clone(),
+                record: None,
+                enrichment: Some(self.enrich(title, found).await?),
+            }),
+        }
+    }
 }
 
 /// Whether a stored answer can be used as-is.
@@ -412,22 +379,90 @@ mod tests {
         assert!(MetadataService::new(&tmdb, Some("key".into())).is_ok());
     }
 
-    /// The names a season is searched for by, in the order they are tried.
+    fn title(key: &str) -> Title {
+        Title {
+            key: key.into(),
+            name: key.into(),
+            year: None,
+            kind: TitleKind::Series,
+            seasons: Vec::new(),
+            share_ids: Vec::new(),
+        }
+    }
+
+    fn matched(key: &str, manual: bool) -> MetadataRecord {
+        MetadataRecord {
+            title_key: key.into(),
+            provider: ProviderId::AniList,
+            metadata: Some(TitleMetadata {
+                provider: ProviderId::AniList,
+                remote_id: "1".into(),
+                name: key.into(),
+                original_name: None,
+                overview: None,
+                year: None,
+                kind: TitleKind::Series,
+                poster_url: None,
+                backdrop_url: None,
+                rating: None,
+                genres: Vec::new(),
+                episodes: None,
+                url: None,
+            }),
+            fetched_at: now(),
+            manual,
+        }
+    }
+
+    fn kinds(work: &[Work]) -> Vec<(&str, &str)> {
+        work.iter()
+            .map(|work| match work {
+                Work::Match(title) => (title.key.as_str(), "match"),
+                Work::Enrich(title, _) => (title.key.as_str(), "enrich"),
+            })
+            .collect()
+    }
+
+    /// A matched title is enriched once and then left alone until its
+    /// enrichment is as old as a match is trusted; an unasked title is matched.
     #[test]
-    fn a_season_is_searched_for_the_way_the_provider_names_it() {
+    fn a_run_matches_the_unasked_and_enriches_the_unenriched() {
+        let stored = HashMap::from([
+            ("enriched".to_string(), matched("enriched", false)),
+            ("stale".to_string(), matched("stale", false)),
+            ("bare".to_string(), matched("bare", false)),
+        ]);
+        let enriched = HashMap::from([
+            ("enriched".to_string(), (ProviderId::AniList, now())),
+            (
+                "stale".to_string(),
+                (ProviderId::AniList, now() - MATCH_TTL_SECS - 1),
+            ),
+        ]);
+        let titles = ["enriched", "stale", "bare", "new"].map(title).to_vec();
+
+        let work = plan(titles, &stored, &enriched, ProviderId::AniList, false);
         assert_eq!(
-            season_names("Oshi no Ko", 2),
-            vec!["Oshi no Ko 2nd Season", "Oshi no Ko Season 2"]
+            kinds(&work),
+            vec![("stale", "enrich"), ("bare", "enrich"), ("new", "match")]
         );
-        assert_eq!(ordinal(1), "1st");
-        assert_eq!(ordinal(3), "3rd");
-        assert_eq!(ordinal(4), "4th");
-        // The teens are the ones a naive rule gets wrong, and a show does reach
-        // them: `11th` is not `11st`.
-        assert_eq!(ordinal(11), "11th");
-        assert_eq!(ordinal(12), "12th");
-        assert_eq!(ordinal(13), "13th");
-        assert_eq!(ordinal(21), "21st");
+    }
+
+    /// "Match again" re-searches everything except what the viewer pinned —
+    /// and a pinned title that was never enriched is still enriched.
+    #[test]
+    fn a_forced_run_leaves_a_pinned_match_alone_but_still_enriches_it() {
+        let stored = HashMap::from([
+            ("pinned".to_string(), matched("pinned", true)),
+            ("automatic".to_string(), matched("automatic", false)),
+        ]);
+        let titles = ["pinned", "automatic"].map(title).to_vec();
+
+        let work = plan(titles, &stored, &HashMap::new(), ProviderId::AniList, true);
+        assert_eq!(
+            kinds(&work),
+            vec![("pinned", "enrich"), ("automatic", "match")]
+        );
     }
 
     /// A record from the other provider is never usable — switching provider has

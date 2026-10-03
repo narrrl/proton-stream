@@ -10,7 +10,8 @@
 //!   Title ──▶ Query ──▶ Provider::search ──▶ [Candidate] ──▶ matching::best
 //!                        (anilist | tmdb)                        │
 //!                                                                ▼
-//!                                                        TitleMetadata
+//!   Enrichment ◀── Provider::enrich ◀──────────────────── TitleMetadata
+//!   (episodes, fanart)  (anilist relations + ani.zip | tmdb)
 //! ```
 //!
 //! Three things are worth knowing before touching any of it:
@@ -28,6 +29,7 @@
 //! without either depending on this crate.
 
 pub mod anilist;
+pub mod anizip;
 pub mod error;
 pub mod limiter;
 pub mod matching;

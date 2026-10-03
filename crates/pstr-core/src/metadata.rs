@@ -20,7 +20,7 @@
 //! thumbnails at upload time and that client attaches none. See
 //! `docs/DEVELOPMENT.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +62,10 @@ impl ProviderId {
     /// One line on what it covers and what it costs to use.
     pub fn description(self) -> &'static str {
         match self {
-            Self::AniList => "Anime, with no API key and no account.",
+            Self::AniList => {
+                "Anime, with no API key and no account. Episode names and wide art come from \
+                 ani.zip, which is sent the matched ids."
+            }
             Self::Tmdb => "Film and television. Needs a free API key from themoviedb.org.",
         }
     }
@@ -139,6 +142,23 @@ pub struct EpisodeMetadata {
     /// anime releases name their files.
     pub season: Option<u32>,
     pub number: u32,
+    /// Its place counting straight through every season, when the provider
+    /// knows it. What an absolutely-numbered file inside a season folder —
+    /// `Attack on Titan/Season 2/… - 26.mkv` — is matched on.
+    #[serde(default)]
+    pub absolute: Option<u32>,
+    /// Its season and number counting each provider *entry* as a season: the
+    /// position of the entry it belongs to among the franchise's series
+    /// entries, and its number within that entry.
+    ///
+    /// Not TVDB's season. A release that follows AniList rather than TVDB
+    /// names Mushishi's *Zoku Shou 2* `S03`, where TVDB files it as the second
+    /// half of season two; this is what that file is answered from. See
+    /// [`EpisodeGuide::get`] for when it is allowed to be.
+    #[serde(default)]
+    pub entry_season: Option<u32>,
+    #[serde(default)]
+    pub entry_number: Option<u32>,
     pub name: Option<String>,
     pub overview: Option<String>,
     /// A frame from the episode, around 16:9.
@@ -147,6 +167,20 @@ pub struct EpisodeMetadata {
     /// sorted on, and a provider that answers `2009` should not be a parse
     /// error.
     pub air_date: Option<String>,
+}
+
+/// What enriching a matched title found: its episodes, and art the search
+/// answer did not carry.
+///
+/// Stored as one unit by `Catalog::set_enrichment`, and recorded as asked even
+/// when both are empty — a film has no episode list, and without the record it
+/// would be asked again on every match run.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Enrichment {
+    pub episodes: Vec<EpisodeMetadata>,
+    /// A 16:9 picture of the whole title, when one was found. `None` leaves
+    /// whatever backdrop the match already had.
+    pub backdrop_url: Option<String>,
 }
 
 /// Every episode a provider listed for one title, ready to look up.
@@ -160,16 +194,33 @@ pub struct EpisodeGuide {
     /// Keyed `(season, number)`, where `None` is the provider's own absolute
     /// numbering.
     entries: HashMap<(Option<u32>, u32), EpisodeMetadata>,
+    /// [`EpisodeMetadata::absolute`] to the key of the entry holding it.
+    absolute: HashMap<u32, (Option<u32>, u32)>,
+    /// [`EpisodeMetadata::entry_season`] and `entry_number` to the key of the
+    /// entry holding them.
+    by_entry: HashMap<(u32, u32), (Option<u32>, u32)>,
+    /// Every season some entry is filed under, for deciding when the entry
+    /// numbering may answer.
+    stated: HashSet<u32>,
 }
 
 impl EpisodeGuide {
     pub fn new(episodes: Vec<EpisodeMetadata>) -> Self {
-        Self {
-            entries: episodes
-                .into_iter()
-                .map(|episode| ((episode.season, episode.number), episode))
-                .collect(),
+        let mut guide = Self::default();
+        for episode in episodes {
+            let key = (episode.season, episode.number);
+            if let Some(absolute) = episode.absolute {
+                guide.absolute.insert(absolute, key);
+            }
+            if let (Some(season), Some(number)) = (episode.entry_season, episode.entry_number) {
+                guide.by_entry.insert((season, number), key);
+            }
+            if let Some(season) = episode.season {
+                guide.stated.insert(season);
+            }
+            guide.entries.insert(key, episode);
         }
+        guide
     }
 
     pub fn is_empty(&self) -> bool {
@@ -182,20 +233,25 @@ impl EpisodeGuide {
 
     /// What the provider says about the file numbered like this.
     ///
-    /// Tried in order: the season and number the filename states; the
-    /// provider's absolute numbering; and, for a file with no season at all,
-    /// season one. That second fallback is what makes an absolutely-numbered
-    /// release line up with a provider that files everything under a single
-    /// season — the common case for anime on TMDB.
+    /// Tried in order:
     ///
-    /// **The absolute fallback stops at season one.** A provider that numbers
-    /// straight through is one that split nothing, so its episode seven is the
-    /// seventh of the show — which is season one's, not season two's. Answering
-    /// `S02E07` with it captions every episode of every later season with the
-    /// wrong name, and a wrong caption does not look like a bug: it looks like
-    /// the library is wrong. Season two upwards is answered from an entry that
-    /// states that season or not at all — see
-    /// `Provider::seasons_are_separate_entries`.
+    /// 1. the season and number the filename states;
+    /// 2. for a file in no season or in season one, the provider's own absolute
+    ///    list, and for a file in no season, season one — what makes `#057`
+    ///    line up with TMDB filing a 64-episode anime under one season;
+    /// 3. the absolute number, into the season the file states — what makes
+    ///    `Season 2/… - 26.mkv` the second season's first episode;
+    /// 4. the entry numbering, for a season the provider files nothing under.
+    ///
+    /// **No fallback crosses into another season.** Step 2 stops at season one
+    /// and step 3 only answers inside the season the file named, because
+    /// answering `S02E07` with season one's seventh episode captions every
+    /// episode of every later season with the wrong name — and a wrong caption
+    /// does not look like a bug, it looks like the library is wrong. Step 4
+    /// only answers a season the provider has nothing filed under, so a release
+    /// numbered the provider's way is never re-read the other way: Mushoku
+    /// Tensei's second *entry* is the second half of season one, and its
+    /// `S02E01` is season two's.
     pub fn get(&self, season: Option<u32>, number: u32) -> Option<&EpisodeMetadata> {
         if let Some(found) = self.entries.get(&(season, number)) {
             return Some(found);
@@ -205,14 +261,31 @@ impl EpisodeGuide {
         {
             return Some(found);
         }
-        season
-            .is_none()
-            .then(|| self.entries.get(&(Some(1), number)))?
+        if season.is_none()
+            && let Some(found) = self.entries.get(&(Some(1), number))
+        {
+            return Some(found);
+        }
+        if let Some(found) = self
+            .absolute
+            .get(&number)
+            .and_then(|key| self.entries.get(key))
+            && (season.is_none() || found.season == season)
+        {
+            return Some(found);
+        }
+        let season = season?;
+        if self.stated.contains(&season) {
+            return None;
+        }
+        self.by_entry
+            .get(&(season, number))
+            .and_then(|key| self.entries.get(key))
     }
 
     /// Which seasons this guide actually has answers for. `None` is the
     /// provider's own absolute numbering.
-    pub fn seasons(&self) -> std::collections::HashSet<Option<u32>> {
+    pub fn seasons(&self) -> HashSet<Option<u32>> {
         self.entries
             .values()
             .map(|episode| episode.season)
@@ -335,11 +408,97 @@ mod tests {
         EpisodeMetadata {
             season,
             number,
+            absolute: None,
+            entry_season: None,
+            entry_number: None,
             name: Some(name.into()),
             overview: None,
             still_url: None,
             air_date: None,
         }
+    }
+
+    /// An episode as ani.zip describes one: TVDB's season and number, TVDB's
+    /// absolute number, and its place in the AniList entry it came from.
+    fn numbered(
+        (season, number): (u32, u32),
+        absolute: u32,
+        (entry_season, entry_number): (u32, u32),
+        name: &str,
+    ) -> EpisodeMetadata {
+        EpisodeMetadata {
+            absolute: Some(absolute),
+            entry_season: Some(entry_season),
+            entry_number: Some(entry_number),
+            ..episode(Some(season), number, name)
+        }
+    }
+
+    fn name_of(guide: &EpisodeGuide, season: Option<u32>, number: u32) -> Option<String> {
+        guide.get(season, number).and_then(|e| e.name.clone())
+    }
+
+    /// `Attack on Titan/Season 2/[Anime Time] Attack On Titan - 26.mkv`: a
+    /// season folder full of absolutely-numbered files.
+    #[test]
+    fn an_absolute_number_in_a_season_folder_finds_that_seasons_episode() {
+        let guide = EpisodeGuide::new(vec![
+            numbered((1, 1), 1, (1, 1), "To You, in 2000 Years"),
+            numbered((2, 1), 26, (2, 1), "Beast Titan"),
+        ]);
+        assert_eq!(name_of(&guide, Some(2), 26).as_deref(), Some("Beast Titan"));
+        // And with no season at all, the absolute number is the whole answer.
+        assert_eq!(name_of(&guide, None, 26).as_deref(), Some("Beast Titan"));
+    }
+
+    /// The absolute fallback must not carry a file into a season it did not
+    /// name: `S03E13` of a show whose 13th episode is in season one is not that
+    /// episode.
+    #[test]
+    fn an_absolute_number_never_answers_for_another_season() {
+        let guide = EpisodeGuide::new(vec![
+            numbered((1, 13), 13, (1, 13), "Season one's thirteenth"),
+            numbered((3, 1), 38, (3, 1), "Smoke Signal"),
+        ]);
+        assert_eq!(guide.get(Some(3), 13), None);
+    }
+
+    /// Mushishi: TVDB files both halves of *Zoku Shou* as season two, and the
+    /// release calls the second half `S03`. Season three exists nowhere at the
+    /// provider, so the entry numbering answers it.
+    #[test]
+    fn a_season_the_provider_does_not_have_is_answered_by_entry() {
+        let guide = EpisodeGuide::new(vec![
+            numbered((1, 1), 1, (1, 1), "The Green Seat"),
+            numbered((2, 1), 28, (2, 1), "The Hand That Caresses the Night"),
+            numbered((2, 11), 39, (3, 1), "Lightning's End"),
+        ]);
+        assert_eq!(
+            name_of(&guide, Some(3), 1).as_deref(),
+            Some("Lightning's End")
+        );
+        assert_eq!(
+            name_of(&guide, Some(2), 1).as_deref(),
+            Some("The Hand That Caresses the Night")
+        );
+    }
+
+    /// Mushoku Tensei: AniList's second entry is the second half of TVDB's
+    /// season one. A release numbered TVDB's way names season two `S02`, and
+    /// the entry numbering must not answer it with that second half.
+    #[test]
+    fn the_entry_numbering_never_overrides_a_season_the_provider_has() {
+        let guide = EpisodeGuide::new(vec![
+            numbered((1, 12), 12, (2, 1), "Cour two's first"),
+            numbered((2, 1), 26, (3, 1), "Season two's first"),
+        ]);
+        assert_eq!(
+            name_of(&guide, Some(2), 1).as_deref(),
+            Some("Season two's first")
+        );
+        // A second-season episode the provider does not list is unanswered,
+        // not answered from the entry numbering.
+        assert_eq!(guide.get(Some(2), 2), None);
     }
 
     #[test]

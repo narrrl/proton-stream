@@ -17,11 +17,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Result;
 use crate::library::TitleKind;
-use crate::metadata::{EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleMetadata};
+use crate::metadata::{
+    Enrichment, EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleMetadata,
+};
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -151,6 +153,30 @@ CREATE TABLE title_track_prefs (
 const MIGRATION_V8: &str = r#"
 ALTER TABLE title_track_prefs ADD COLUMN audio_title TEXT;
 ALTER TABLE title_track_prefs ADD COLUMN subtitle_title TEXT;
+"#;
+
+/// Episodes numbered three ways, and a record of which titles were enriched.
+///
+/// A release numbers its files by TVDB season, by absolute number inside a
+/// season folder, or by AniList entry; an episode row now carries all three so
+/// `EpisodeGuide::get` can meet whichever the filename used. `enriched_at` is
+/// set once a matched title's episodes and art were asked for — empty answers
+/// included, which is what stops a film being re-asked on every run.
+///
+/// The deletes are a repair, not a reset. Every AniList episode row came from
+/// `streamingEpisodes` — partial, numbered however a streaming site numbered
+/// it, and in places a later season captioned with season one's names — and
+/// every AniList backdrop was a 4.75:1 banner drawn into a 16:9 tile. Both are
+/// wrong rather than stale, so they go; the matches stay, hand-picked ones
+/// included, and the next match run enriches them again. See
+/// `docs/METADATA.md`.
+const MIGRATION_V9: &str = r#"
+ALTER TABLE episode_metadata ADD COLUMN absolute INTEGER;
+ALTER TABLE episode_metadata ADD COLUMN entry_season INTEGER;
+ALTER TABLE episode_metadata ADD COLUMN entry_number INTEGER;
+ALTER TABLE title_metadata ADD COLUMN enriched_at INTEGER;
+DELETE FROM episode_metadata WHERE provider = 'anilist';
+UPDATE title_metadata SET backdrop_url = NULL WHERE provider = 'anilist';
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,6 +356,12 @@ impl Catalog {
             let tx = self.conn.transaction()?;
             tx.execute_batch(MIGRATION_V8)?;
             tx.pragma_update(None, "user_version", 8)?;
+            tx.commit()?;
+        }
+        if version < 9 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V9)?;
+            tx.pragma_update(None, "user_version", 9)?;
             tx.commit()?;
         }
 
@@ -699,8 +731,25 @@ impl Catalog {
     ///
     /// A miss is stored too — see [`MetadataRecord::metadata`]. Storing only
     /// matches would leave every unmatched title asking again on every render.
+    ///
+    /// Clears the title's enrichment record, so the answer is enriched again;
+    /// see [`Catalog::set_enrichment`]. And when the answer is a different
+    /// entry from the one stored — or none — the old entry's episode rows go
+    /// at once: they are not about this one, and a front end that pins a match
+    /// without enriching it must not show them in the meantime.
     pub fn set_metadata(&self, record: &MetadataRecord) -> Result<()> {
         let data = record.metadata.as_ref();
+        self.conn.execute(
+            "DELETE FROM episode_metadata WHERE title_key = ?1 AND NOT EXISTS (
+                 SELECT 1 FROM title_metadata
+                 WHERE title_key = ?1 AND provider = ?2 AND remote_id IS ?3
+             )",
+            params![
+                record.title_key,
+                record.provider.as_str(),
+                data.map(|data| data.remote_id.as_str()),
+            ],
+        )?;
         self.conn.execute(
             "INSERT INTO title_metadata (
                  title_key, provider, matched, fetched_at, remote_id, name, original_name,
@@ -723,7 +772,8 @@ impl Catalog {
                  genres        = excluded.genres,
                  episodes      = excluded.episodes,
                  url           = excluded.url,
-                 manual        = excluded.manual",
+                 manual        = excluded.manual,
+                 enriched_at   = NULL",
             params![
                 record.title_key,
                 record.provider.as_str(),
@@ -776,12 +826,7 @@ impl Catalog {
         Ok(())
     }
 
-    /// Replace everything stored about one title's episodes.
-    ///
-    /// A replace rather than an upsert per row: a provider that has *dropped*
-    /// an episode — a special that was recounted, a season renumbered — should
-    /// leave nothing behind, and an episode list is small enough that the
-    /// difference is a few hundred microseconds.
+    /// Replace everything stored about one title's episodes, and nothing else.
     pub fn set_episode_metadata(
         &mut self,
         title_key: &str,
@@ -790,31 +835,39 @@ impl Catalog {
         episodes: &[EpisodeMetadata],
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
+        replace_episodes(&tx, title_key, provider, fetched_at, episodes)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Store what enriching a matched title found, and that it was asked.
+    ///
+    /// The episode list is replaced even when the new one is empty — a title
+    /// re-pinned from a series to its film must not keep the series' episode
+    /// names. The backdrop only changes when one was found. And the title is
+    /// marked enriched either way, so a film with no episodes is not asked
+    /// about again on every run; [`Catalog::set_metadata`] clears the mark when
+    /// the match itself changes.
+    pub fn set_enrichment(
+        &mut self,
+        title_key: &str,
+        provider: ProviderId,
+        fetched_at: i64,
+        enrichment: &Enrichment,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        replace_episodes(&tx, title_key, provider, fetched_at, &enrichment.episodes)?;
         tx.execute(
-            "DELETE FROM episode_metadata WHERE title_key = ?1",
-            params![title_key],
+            "UPDATE title_metadata
+             SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url)
+             WHERE title_key = ?1 AND provider = ?2",
+            params![
+                title_key,
+                provider.as_str(),
+                fetched_at,
+                enrichment.backdrop_url.as_deref(),
+            ],
         )?;
-        {
-            let mut insert = tx.prepare(
-                "INSERT INTO episode_metadata (
-                     title_key, season, number, provider, fetched_at,
-                     name, overview, still_url, air_date
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            )?;
-            for episode in episodes {
-                insert.execute(params![
-                    title_key,
-                    episode.season.map_or(ABSOLUTE_SEASON, i64::from),
-                    episode.number,
-                    provider.as_str(),
-                    fetched_at,
-                    episode.name.as_deref(),
-                    episode.overview.as_deref(),
-                    episode.still_url.as_deref(),
-                    episode.air_date.as_deref(),
-                ])?;
-            }
-        }
         tx.commit()?;
         Ok(())
     }
@@ -825,7 +878,8 @@ impl Catalog {
     /// season drawn a row at a time must not be a SQLite round-trip per row.
     pub fn all_episode_metadata(&self) -> Result<HashMap<String, EpisodeGuide>> {
         let mut statement = self.conn.prepare(
-            "SELECT title_key, season, number, name, overview, still_url, air_date
+            "SELECT title_key, season, number, name, overview, still_url, air_date,
+                    absolute, entry_season, entry_number
              FROM episode_metadata",
         )?;
         let rows = statement.query_map([], |row| {
@@ -836,6 +890,9 @@ impl Catalog {
                 EpisodeMetadata {
                     season: (season != ABSOLUTE_SEASON).then_some(season as u32),
                     number: row.get::<_, i64>(2)? as u32,
+                    absolute: row.get(7)?,
+                    entry_season: row.get(8)?,
+                    entry_number: row.get(9)?,
                     name: row.get(3)?,
                     overview: row.get(4)?,
                     still_url: row.get(5)?,
@@ -855,13 +912,13 @@ impl Catalog {
             .collect())
     }
 
-    /// Which titles already have an episode list stored, and how fresh.
-    ///
-    /// Enough to decide whether to ask again without reading every row: the
-    /// answer is only ever compared against a TTL.
-    pub fn episode_metadata_ages(&self) -> Result<HashMap<String, (ProviderId, i64)>> {
+    /// When each matched title was last enriched, for the provider it is
+    /// matched against. A title missing here has never been, or its match has
+    /// changed since.
+    pub fn enrichment_ages(&self) -> Result<HashMap<String, (ProviderId, i64)>> {
         let mut statement = self.conn.prepare(
-            "SELECT title_key, provider, MIN(fetched_at) FROM episode_metadata GROUP BY title_key",
+            "SELECT title_key, provider, enriched_at FROM title_metadata
+             WHERE enriched_at IS NOT NULL",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -873,13 +930,56 @@ impl Catalog {
 
         let mut ages = HashMap::new();
         for row in rows {
-            let (title_key, provider, fetched_at) = row?;
+            let (title_key, provider, enriched_at) = row?;
             if let Some(provider) = ProviderId::parse(&provider) {
-                ages.insert(title_key, (provider, fetched_at));
+                ages.insert(title_key, (provider, enriched_at));
             }
         }
         Ok(ages)
     }
+}
+
+/// Replace every episode row of one title with `episodes`, inside `tx`.
+///
+/// A replace rather than an upsert per row: a provider that has *dropped* an
+/// episode — a special that was recounted, a season renumbered — should leave
+/// nothing behind, and an episode list is small enough that the difference is a
+/// few hundred microseconds.
+fn replace_episodes(
+    tx: &rusqlite::Transaction<'_>,
+    title_key: &str,
+    provider: ProviderId,
+    fetched_at: i64,
+    episodes: &[EpisodeMetadata],
+) -> Result<()> {
+    tx.execute(
+        "DELETE FROM episode_metadata WHERE title_key = ?1",
+        params![title_key],
+    )?;
+    let mut insert = tx.prepare(
+        "INSERT OR REPLACE INTO episode_metadata (
+             title_key, season, number, provider, fetched_at,
+             name, overview, still_url, air_date,
+             absolute, entry_season, entry_number
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+    )?;
+    for episode in episodes {
+        insert.execute(params![
+            title_key,
+            episode.season.map_or(ABSOLUTE_SEASON, i64::from),
+            episode.number,
+            provider.as_str(),
+            fetched_at,
+            episode.name.as_deref(),
+            episode.overview.as_deref(),
+            episode.still_url.as_deref(),
+            episode.air_date.as_deref(),
+            episode.absolute,
+            episode.entry_season,
+            episode.entry_number,
+        ])?;
+    }
+    Ok(())
 }
 
 /// `None` for a row whose provider column this build does not recognise.
@@ -1281,6 +1381,9 @@ mod tests {
                 &[EpisodeMetadata {
                     season: None,
                     number: 1,
+                    absolute: None,
+                    entry_season: None,
+                    entry_number: None,
                     name: Some("To You, in 2000 Years".into()),
                     overview: None,
                     still_url: None,
@@ -1370,6 +1473,9 @@ mod tests {
             EpisodeMetadata {
                 season: None,
                 number: 57,
+                absolute: None,
+                entry_season: None,
+                entry_number: None,
                 name: Some("The Immortal Legion".into()),
                 overview: Some("Ed and Al…".into()),
                 still_url: None,
@@ -1378,6 +1484,9 @@ mod tests {
             EpisodeMetadata {
                 season: Some(1),
                 number: 1,
+                absolute: None,
+                entry_season: None,
+                entry_number: None,
                 name: Some("Fullmetal Alchemist".into()),
                 overview: None,
                 still_url: Some("still.jpg".into()),
@@ -1407,9 +1516,235 @@ mod tests {
             .expect("store again");
         let stored = catalog.all_episode_metadata().expect("read");
         assert_eq!(stored["fma"].len(), 1);
+    }
 
-        let ages = catalog.episode_metadata_ages().expect("ages");
-        assert_eq!(ages["fma"], (ProviderId::AniList, 200));
+    /// The three numberings a release might use have to survive a restart, or
+    /// an absolutely-numbered season folder stops finding its names.
+    #[test]
+    fn every_numbering_of_an_episode_round_trips() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let episode = EpisodeMetadata {
+            season: Some(2),
+            number: 11,
+            absolute: Some(39),
+            entry_season: Some(3),
+            entry_number: Some(1),
+            name: Some("Lightning's End".into()),
+            overview: None,
+            still_url: None,
+            air_date: None,
+        };
+        catalog
+            .set_episode_metadata(
+                "mushishi",
+                ProviderId::AniList,
+                1,
+                std::slice::from_ref(&episode),
+            )
+            .expect("store");
+        let stored = catalog.all_episode_metadata().expect("read");
+        assert_eq!(stored["mushishi"].get(Some(2), 11), Some(&episode));
+        assert_eq!(stored["mushishi"].get(Some(3), 1), Some(&episode));
+    }
+
+    /// **What left Jujutsu Kaisen 0 with the TV series' episode names.** The
+    /// title was re-pinned to the film, the film had no episodes, and an empty
+    /// list was never written — so the series' list stayed.
+    #[test]
+    fn an_empty_enrichment_clears_the_episodes_the_last_match_left() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let record = MetadataRecord {
+            title_key: "jujutsu kaisen 0 movie".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(found()),
+            fetched_at: 1,
+            manual: true,
+        };
+        catalog.set_metadata(&record).expect("store");
+        catalog
+            .set_episode_metadata(
+                &record.title_key,
+                ProviderId::AniList,
+                1,
+                &[EpisodeMetadata {
+                    season: Some(1),
+                    number: 1,
+                    absolute: None,
+                    entry_season: None,
+                    entry_number: None,
+                    name: Some("Ryomen Sukuna".into()),
+                    overview: None,
+                    still_url: None,
+                    air_date: None,
+                }],
+            )
+            .expect("store episodes");
+
+        // Storing the same entry again keeps them; it is the same entry.
+        catalog.set_metadata(&record).expect("store again");
+        assert_eq!(catalog.all_episode_metadata().expect("read").len(), 1);
+
+        catalog
+            .set_enrichment(
+                &record.title_key,
+                ProviderId::AniList,
+                5,
+                &Enrichment::default(),
+            )
+            .expect("enrich");
+        assert!(catalog.all_episode_metadata().expect("read").is_empty());
+        // Asked, and the answer was nothing: that is recorded, or a film is
+        // asked again on every run.
+        assert_eq!(
+            catalog
+                .enrichment_ages()
+                .expect("ages")
+                .get(&record.title_key),
+            Some(&(ProviderId::AniList, 5))
+        );
+    }
+
+    /// Android pins a match without enriching it; until the next match run,
+    /// the title must show no episode names rather than the old entry's.
+    #[test]
+    fn pinning_a_different_entry_drops_the_old_entrys_episodes_at_once() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let series = MetadataRecord {
+            title_key: "jujutsu kaisen 0 movie".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(found()),
+            fetched_at: 1,
+            manual: false,
+        };
+        catalog.set_metadata(&series).expect("store");
+        catalog
+            .set_episode_metadata(
+                &series.title_key,
+                ProviderId::AniList,
+                1,
+                &[EpisodeMetadata {
+                    season: Some(1),
+                    number: 1,
+                    absolute: None,
+                    entry_season: None,
+                    entry_number: None,
+                    name: Some("Ryomen Sukuna".into()),
+                    overview: None,
+                    still_url: None,
+                    air_date: None,
+                }],
+            )
+            .expect("store episodes");
+
+        let film = MetadataRecord {
+            metadata: Some(TitleMetadata {
+                remote_id: "131573".into(),
+                ..found()
+            }),
+            manual: true,
+            ..series
+        };
+        catalog.set_metadata(&film).expect("pin");
+        assert!(catalog.all_episode_metadata().expect("read").is_empty());
+    }
+
+    /// Enrichment adds a backdrop when it found one and otherwise leaves the
+    /// match's own alone; a new match makes the title un-enriched again.
+    #[test]
+    fn enrichment_keeps_the_backdrop_it_did_not_replace_and_a_new_match_resets_it() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let record = MetadataRecord {
+            title_key: "attack on titan".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(TitleMetadata {
+                backdrop_url: Some("old.jpg".into()),
+                ..found()
+            }),
+            fetched_at: 1,
+            manual: false,
+        };
+        catalog.set_metadata(&record).expect("store");
+        let backdrop = |catalog: &Catalog| {
+            catalog
+                .metadata("attack on titan")
+                .expect("read")
+                .and_then(|record| record.metadata)
+                .and_then(|found| found.backdrop_url)
+        };
+
+        catalog
+            .set_enrichment(
+                "attack on titan",
+                ProviderId::AniList,
+                2,
+                &Enrichment::default(),
+            )
+            .expect("enrich");
+        assert_eq!(backdrop(&catalog).as_deref(), Some("old.jpg"));
+
+        let enrichment = Enrichment {
+            backdrop_url: Some("fanart.jpg".into()),
+            ..Enrichment::default()
+        };
+        catalog
+            .set_enrichment("attack on titan", ProviderId::AniList, 3, &enrichment)
+            .expect("enrich again");
+        assert_eq!(backdrop(&catalog).as_deref(), Some("fanart.jpg"));
+
+        catalog.set_metadata(&record).expect("match again");
+        assert!(catalog.enrichment_ages().expect("ages").is_empty());
+    }
+
+    /// Schema v9 repairs what AniList's first episode source wrote: its
+    /// episode rows and its banners go, and the matches — hand-picked ones
+    /// included — stay.
+    #[test]
+    fn upgrading_drops_anilists_episode_rows_and_banners_but_keeps_its_matches() {
+        let conn = Connection::open_in_memory().expect("open");
+        for migration in [
+            MIGRATION_V1,
+            MIGRATION_V2,
+            MIGRATION_V3,
+            MIGRATION_V4,
+            MIGRATION_V5,
+            MIGRATION_V6,
+            MIGRATION_V7,
+            MIGRATION_V8,
+        ] {
+            conn.execute_batch(migration).expect("migrate");
+        }
+        conn.pragma_update(None, "user_version", 8)
+            .expect("set version");
+        conn.execute_batch(
+            "INSERT INTO title_metadata (title_key, provider, matched, fetched_at, remote_id,
+                                         name, kind, backdrop_url, manual)
+             VALUES ('aot', 'anilist', 1, 1, '16498', 'Attack on Titan', 'series',
+                     'banner.jpg', 1),
+                    ('got', 'tmdb', 1, 1, '1399', 'Game of Thrones', 'series',
+                     'backdrop.jpg', 0);
+             INSERT INTO episode_metadata (title_key, season, number, provider, fetched_at, name)
+             VALUES ('aot', 2, 1, 'anilist', 1, 'Season one''s first, wrongly'),
+                    ('got', 1, 1, 'tmdb', 1, 'Winter Is Coming');",
+        )
+        .expect("seed");
+
+        let catalog = Catalog::from_connection(conn).expect("upgrade");
+        let records = catalog.all_metadata().expect("read");
+        let aot = records["aot"].metadata.as_ref().expect("still matched");
+        assert!(records["aot"].manual);
+        assert_eq!(aot.backdrop_url, None);
+        assert_eq!(
+            records["got"]
+                .metadata
+                .as_ref()
+                .and_then(|got| got.backdrop_url.as_deref()),
+            Some("backdrop.jpg")
+        );
+
+        let episodes = catalog.all_episode_metadata().expect("read");
+        assert!(!episodes.contains_key("aot"));
+        assert_eq!(episodes["got"].len(), 1);
+        assert!(catalog.enrichment_ages().expect("ages").is_empty());
     }
 
     #[test]
@@ -1423,6 +1758,9 @@ mod tests {
                 &[EpisodeMetadata {
                     season: None,
                     number: 1,
+                    absolute: None,
+                    entry_season: None,
+                    entry_number: None,
                     name: Some("Fullmetal Alchemist".into()),
                     overview: None,
                     still_url: None,

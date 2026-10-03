@@ -1420,44 +1420,22 @@ impl AndroidEngine {
 impl AndroidEngine {
     /// One enrichment pass over the whole library.
     ///
-    /// Two kinds of work, and the difference is a request saved: a title that
-    /// already has a good match but no episode list needs the episode request
-    /// only. Both run fanned out under a semaphore, and a provider error counts
-    /// against the run rather than ending it — one rate-limited title must not
-    /// leave the other thirty unenriched. This mirrors the desktop engine's
-    /// `run_match`, which is the reference for the behaviour.
+    /// What to do per title is decided by `pstr_meta::service::plan`, the same
+    /// as on the desktop. The work runs fanned out under a semaphore, and a
+    /// provider error counts against the run rather than ending it — one
+    /// rate-limited title must not leave the other thirty unenriched. This
+    /// mirrors the desktop engine's `run_match`, which is the reference for the
+    /// behaviour.
     async fn match_titles_inner(&self, force: bool) -> Result<MatchSummary, BridgeError> {
         let service = Arc::new(self.metadata_service()?);
         let provider = service.provider();
         let (titles, stored) = self.titles_and_metadata()?;
-        let listed = self
+        let enriched = self
             .catalog
             .lock()
-            .episode_metadata_ages()
+            .enrichment_ages()
             .map_err(BridgeError::from_display)?;
-
-        let mut pending: Vec<Work> = Vec::new();
-        for title in titles {
-            let record = stored.get(&title.key);
-            // A hand-picked entry is never searched for again, not even by
-            // "match again" — that button means "the automatic answers are
-            // wrong", and re-deciding the one title the viewer already fixed by
-            // hand is the opposite of what they asked for. Its episode list is
-            // still fetched below if it is missing.
-            let pinned = record.is_some_and(|record| record.manual && record.provider == provider);
-            if !pinned && (force || !pstr_meta::service::is_usable(record, provider)) {
-                pending.push(Work::Match(title));
-                continue;
-            }
-            let has_episodes = listed
-                .get(&title.key)
-                .is_some_and(|(asked, _)| *asked == provider);
-            if let Some(found) = record.and_then(|record| record.metadata.clone())
-                && !has_episodes
-            {
-                pending.push(Work::Episodes(title, Box::new(found)));
-            }
-        }
+        let pending = pstr_meta::service::plan(titles, &stored, &enriched, provider, force);
 
         let permits = Arc::new(tokio::sync::Semaphore::new(LOOKUP_CONCURRENCY));
         let mut lookups = tokio::task::JoinSet::new();
@@ -1466,32 +1444,15 @@ impl AndroidEngine {
             let permits = Arc::clone(&permits);
             lookups.spawn(async move {
                 let _permit = permits.acquire().await.ok()?;
-                Some(match work {
-                    Work::Match(title) => match service.record(&title).await {
-                        Ok(record) => {
-                            // Only for a title that matched: there is no id to
-                            // ask about otherwise.
-                            let episodes = match &record.metadata {
-                                Some(found) => service.title_episodes(&title, found).await,
-                                None => Vec::new(),
-                            };
-                            Ok((record.title_key.clone(), Some(record), episodes))
-                        }
-                        Err(error) => Err(error.to_string()),
-                    },
-                    Work::Episodes(title, found) => {
-                        let episodes = service.title_episodes(&title, &found).await;
-                        Ok((title.key, None, episodes))
-                    }
-                })
+                Some(service.work(&work).await.map_err(|error| error.to_string()))
             });
         }
 
         let mut summary = MatchSummary::default();
         while let Some(joined) = lookups.join_next().await {
             match joined.map_err(BridgeError::from_display)? {
-                Some(Ok((title_key, record, episodes))) => {
-                    if let Some(record) = &record {
+                Some(Ok(outcome)) => {
+                    if let Some(record) = &outcome.record {
                         if record.metadata.is_some() {
                             summary.matched += 1;
                         } else {
@@ -1502,16 +1463,16 @@ impl AndroidEngine {
                             log::warn!("store metadata for {}: {error}", record.title_key);
                         }
                     }
-                    if !episodes.is_empty() {
-                        summary.episodes += episodes.len() as u32;
-                        let stored = self.catalog.lock().set_episode_metadata(
-                            &title_key,
+                    if let Some(enrichment) = &outcome.enrichment {
+                        summary.episodes += enrichment.episodes.len() as u32;
+                        let stored = self.catalog.lock().set_enrichment(
+                            &outcome.title_key,
                             provider,
                             now(),
-                            &episodes,
+                            enrichment,
                         );
                         if let Err(error) = stored {
-                            log::warn!("store episodes for {title_key}: {error}");
+                            log::warn!("store enrichment for {}: {error}", outcome.title_key);
                         }
                     }
                 }
@@ -2338,14 +2299,6 @@ fn normalized_language(language: Option<String>) -> Option<String> {
 struct CachedLibrary {
     writes: u64,
     titles: Vec<TitleRecord>,
-}
-
-/// One title's share of an enrichment pass.
-enum Work {
-    /// Search for it, and take its episodes if it matches.
-    Match(Title),
-    /// It is already matched; only the episode list is missing.
-    Episodes(Title, Box<TitleMetadata>),
 }
 
 /// How many provider lookups may be in flight at once.

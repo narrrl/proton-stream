@@ -1903,44 +1903,18 @@ impl Engine {
         };
         let provider = service.provider();
 
-        let (stored, listed) = {
+        let (stored, enriched) = {
             let catalog = self.catalog.lock();
             match catalog
                 .all_metadata()
-                .and_then(|stored| Ok((stored, catalog.episode_metadata_ages()?)))
+                .and_then(|stored| Ok((stored, catalog.enrichment_ages()?)))
             {
                 Ok(pair) => pair,
                 Err(error) => return self.fail("read stored metadata", error),
             }
         };
 
-        // Two kinds of work, and the difference is a request saved: a title
-        // that already has a good match but no episode list needs the episode
-        // request only — searching for it again would ask the provider
-        // something it has already answered.
-        let mut pending: Vec<Work> = Vec::new();
-        for title in titles {
-            let record = stored.get(&title.key);
-            // A hand-picked entry is never searched for again, not even by
-            // "match again" — that button means "the automatic answers are
-            // wrong", and re-deciding the one title the viewer already fixed by
-            // hand is the opposite of what they asked for. Its episode list is
-            // still fetched below if it is missing.
-            let pinned = record.is_some_and(|record| record.manual && record.provider == provider);
-            if !pinned && (force || !pstr_meta::service::is_usable(record, provider)) {
-                pending.push(Work::Match(title));
-                continue;
-            }
-            let has_episodes = listed
-                .get(&title.key)
-                .is_some_and(|(asked, _)| *asked == provider);
-            if let Some(found) = record.and_then(|record| record.metadata.clone())
-                && !has_episodes
-            {
-                pending.push(Work::Episodes(title, Box::new(found)));
-            }
-        }
-
+        let pending = pstr_meta::service::plan(titles, &stored, &enriched, provider, force);
         if pending.is_empty() {
             return self.emit(Event::Status("everything is already matched".into()));
         }
@@ -1959,25 +1933,7 @@ impl Engine {
                 let Ok(_permit) = permits.acquire().await else {
                     return None;
                 };
-                Some(match work {
-                    Work::Match(title) => match service.record(title).await {
-                        Ok(record) => {
-                            // Only for a title that matched: there is no id to
-                            // ask about otherwise.
-                            let episodes = match &record.metadata {
-                                Some(found) => service.title_episodes(title, found).await,
-                                None => Vec::new(),
-                            };
-                            Ok((record.title_key.clone(), Some(record), episodes))
-                        }
-                        Err(error) => Err(error),
-                    },
-                    Work::Episodes(title, found) => Ok((
-                        title.key.clone(),
-                        None,
-                        service.title_episodes(title, found).await,
-                    )),
-                })
+                Some(service.work(work).await)
             });
         }
 
@@ -1985,8 +1941,8 @@ impl Engine {
         let mut episodes_found = 0usize;
         while let Some(result) = lookups.next().await {
             match result {
-                Some(Ok((title_key, record, episodes))) => {
-                    if let Some(record) = &record {
+                Some(Ok(outcome)) => {
+                    if let Some(record) = &outcome.record {
                         if record.metadata.is_some() {
                             matched += 1;
                         } else {
@@ -1998,16 +1954,16 @@ impl Engine {
                             tracing::warn!("store metadata for {}: {error}", record.title_key);
                         }
                     }
-                    if !episodes.is_empty() {
-                        episodes_found += episodes.len();
-                        let stored = self.catalog.lock().set_episode_metadata(
-                            &title_key,
+                    if let Some(enrichment) = &outcome.enrichment {
+                        episodes_found += enrichment.episodes.len();
+                        let stored = self.catalog.lock().set_enrichment(
+                            &outcome.title_key,
                             provider,
                             now(),
-                            &episodes,
+                            enrichment,
                         );
                         if let Err(error) = stored {
-                            tracing::warn!("store episodes for {title_key}: {error}");
+                            tracing::warn!("store enrichment for {}: {error}", outcome.title_key);
                         }
                     }
                 }
@@ -2078,17 +2034,21 @@ impl Engine {
                 return engine.fail("store the match", error);
             }
 
-            let episodes = service.title_episodes(&title, &found).await;
-            if !episodes.is_empty() {
-                let stored = engine.catalog.lock().set_episode_metadata(
-                    &title.key,
-                    service.provider(),
-                    now(),
-                    &episodes,
-                );
-                if let Err(error) = stored {
-                    tracing::warn!("store episodes for {}: {error}", title.key);
+            // A failure leaves the title un-enriched, and the next match run
+            // asks again.
+            match service.enrich(&title, &found).await {
+                Ok(enrichment) => {
+                    let stored = engine.catalog.lock().set_enrichment(
+                        &title.key,
+                        service.provider(),
+                        now(),
+                        &enrichment,
+                    );
+                    if let Err(error) = stored {
+                        tracing::warn!("store enrichment for {}: {error}", title.key);
+                    }
                 }
+                Err(error) => tracing::warn!("enrich {}: {error}", title.key),
             }
 
             engine.emit(Event::Status(format!("{} is now {name}", title.name)));
@@ -2200,15 +2160,6 @@ fn digest(url: &str) -> String {
         .take(16)
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-/// The cache and texture key for a file's poster.
-/// One title's worth of work in a match run.
-enum Work {
-    /// Search for it, and take its episodes if it matches.
-    Match(Title),
-    /// It is already matched; only the episode list is missing.
-    Episodes(Title, Box<pstr_core::metadata::TitleMetadata>),
 }
 
 /// Unix seconds, for the "when was this asked" columns.

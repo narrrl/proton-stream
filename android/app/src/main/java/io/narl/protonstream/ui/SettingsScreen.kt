@@ -420,7 +420,7 @@ private fun MetadataSettingsDialog(
         title = { Text("Metadata enrichment") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Off by default: enabling sends the titles in your library to a third party, associated with your IP address and subject to their privacy policy.")
+                Text("Off by default: enabling sends the titles in your library to a third party, associated with your IP address and subject to their privacy policy. With AniList, the matched ids also go to ani.zip for episode names and wide artwork.")
                 SettingToggle("Enable enrichment", enabled) { enabled = it }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetadataProvider.entries.forEach { option ->

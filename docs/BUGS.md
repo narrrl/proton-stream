@@ -146,6 +146,51 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B61 — later seasons were captioned with season one's episode names
+
+**Symptom.** On a 42-title AniList library, Attack on Titan seasons 2–4 and
+Jigokuraku season 2 showed season one's episode names. Dan Da Dan, Kaiju No. 8
+and The Apothecary Diaries had a handful of names numbered past the end of the
+season. Bleach's had 20 rows called `Untitled`. Bleach `S17` (the Thousand-Year
+Blood War) and Mushishi `S02`/`S03` had none at all. Jujutsu Kaisen 0 kept the
+TV series' names after it was re-pinned to the film. Every desktop tile drew a
+blurred strip of AniList banner.
+
+**Cause.** Four, independent.
+
+- `season_episodes` searched for `<title> 2nd Season`, and the scorer, seeing
+  the base entry's alias inside the query, picked the base entry again. That
+  search was [B11](#b11--seasons-past-the-first-had-no-episode-names-and-were-one-query-from-having-the-wrong-ones)'s
+  fix, and it only worked where the sequel's name scored higher than the base's.
+- `streamingEpisodes` is what a streaming site published: partial, and
+  numbered however that site counted.
+- A release's season is not an AniList entry. `S17` is four entries, and
+  Mushoku Tensei's `S01` is two.
+- An empty episode list was never written, so a re-match kept the old one.
+  `bannerImage`, a 4.75:1 strip, was stored as the 16:9 backdrop.
+
+**Fix.** AniList walks `SEQUEL` relations from the match. Each entry's episodes
+come from ani.zip with TVDB's season, number and absolute number, plus the
+entry's own numbering. `EpisodeGuide::get` meets whichever of those a filename
+used without ever crossing seasons. Enrichment is stored as one unit,
+replaced even when empty and recorded as asked. A changed match drops the old
+entry's rows at once. The backdrop is ani.zip's 1920×1080 fanart, and the
+banner is no longer stored. Schema v9 deletes the bad rows. See
+[METADATA.md](METADATA.md).
+
+**Verified.** `EpisodeGuide` tests in `pstr_core::metadata` (absolute numbers
+in a season folder, by-entry seasons, no season crossing), and the catalog's
+`an_empty_enrichment_clears_the_episodes_the_last_match_left`,
+`pinning_a_different_entry_drops_the_old_entrys_episodes_at_once` and
+`upgrading_drops_anilists_episode_rows_and_banners_but_keeps_its_matches`.
+Live, against a copy of the same library through `pstr metadata match`:
+
+- 0 lookups failed.
+- Every numbered file is answered except 2 Attack on Titan files, 2 Bleach
+  files and one Mushoku Tensei special, which TVDB does not list.
+- 29 of 44 matched titles have fanart, and none has a banner.
+- A second run asks nothing.
+
 ### B60 — a failed "Add and crawl" left the crawl spinner running forever
 
 **Symptom.** Pasting a link without its `#` fragment, or one already added,

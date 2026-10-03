@@ -483,18 +483,18 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
             )
             .context("build the metadata provider")?;
 
-            let catalog = Catalog::open(&dirs.catalog_db()).context("open catalog")?;
+            let mut catalog = Catalog::open(&dirs.catalog_db()).context("open catalog")?;
             let library = Library::build(catalog.all_files()?, &catalog.all_watch_states()?);
             let stored = catalog.all_metadata()?;
+            let enriched = catalog.enrichment_ages()?;
 
-            let mut pending: Vec<_> = library
-                .titles
-                .iter()
-                .filter(|title| {
-                    force
-                        || !pstr_meta::service::is_usable(stored.get(&title.key), settings.provider)
-                })
-                .collect();
+            let mut pending = pstr_meta::service::plan(
+                library.titles,
+                &stored,
+                &enriched,
+                settings.provider,
+                force,
+            );
             if let Some(limit) = limit {
                 pending.truncate(limit);
             }
@@ -504,7 +504,7 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                 return Ok(());
             }
             println!(
-                "matching {} titles against {}…",
+                "looking up {} titles against {}…",
                 pending.len(),
                 settings.provider.label()
             );
@@ -513,32 +513,65 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
             // and the GUI already has the parallel path. What this command is
             // for is reading the output.
             let (mut matched, mut failed) = (0usize, 0usize);
-            for title in pending {
-                match service.record(title).await {
-                    Ok(record) => {
-                        match &record.metadata {
-                            Some(found) => {
-                                matched += 1;
-                                println!(
-                                    "  {:<40} → {} ({})",
-                                    title.name,
-                                    found.name,
-                                    found
-                                        .year
-                                        .map(|year| year.to_string())
-                                        .unwrap_or_else(|| "-".into())
-                                );
-                            }
-                            None => println!("  {:<40} → no match", title.name),
-                        }
-                        catalog.set_metadata(&record)?;
-                    }
+            for work in pending {
+                let name = &work.title().name;
+                let outcome = match service.work(&work).await {
+                    Ok(outcome) => outcome,
                     Err(error) => {
                         failed += 1;
                         // Not stored: a failure to ask is not an answer, and the
                         // title has to stay askable. See `pstr_meta::service`.
-                        println!("  {:<40} ! {error}", title.name);
+                        println!("  {name:<40} ! {error}");
+                        continue;
                     }
+                };
+
+                if let Some(record) = &outcome.record {
+                    match &record.metadata {
+                        Some(found) => {
+                            matched += 1;
+                            println!(
+                                "  {name:<40} → {} ({})",
+                                found.name,
+                                found
+                                    .year
+                                    .map(|year| year.to_string())
+                                    .unwrap_or_else(|| "-".into())
+                            );
+                        }
+                        None => println!("  {name:<40} → no match"),
+                    }
+                    catalog.set_metadata(record)?;
+                }
+                match &outcome.enrichment {
+                    Some(enrichment) => {
+                        println!(
+                            "  {:<40}   {} episodes{}",
+                            "",
+                            enrichment.episodes.len(),
+                            if enrichment.backdrop_url.is_some() {
+                                ", fanart"
+                            } else {
+                                ""
+                            }
+                        );
+                        catalog.set_enrichment(
+                            &outcome.title_key,
+                            settings.provider,
+                            unix_now(),
+                            enrichment,
+                        )?;
+                    }
+                    // Matched, but the episodes could not be asked for; the
+                    // next run asks again.
+                    None if outcome
+                        .record
+                        .as_ref()
+                        .is_some_and(|r| r.metadata.is_some()) =>
+                    {
+                        println!("  {:<40}   ! episodes not fetched", "");
+                    }
+                    None => {}
                 }
             }
             println!("{matched} matched, {failed} could not be looked up");
@@ -925,4 +958,11 @@ async fn play(
     opened.source.close(&opened.share_id, &opened.uid);
     drop(opened.library);
     Ok(())
+}
+
+/// Unix seconds, for the "when was this asked" columns.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64)
 }

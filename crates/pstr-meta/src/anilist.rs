@@ -5,14 +5,22 @@
 //! also cost them a signup. The trade is coverage — AniList is anime and nothing
 //! else, so a library of films wants [`crate::tmdb`].
 //!
-//! One query shape is used for everything: a `Page` of `media` matching the
+//! One query shape is used for every search: a `Page` of `media` matching the
 //! search string, with every name AniList knows the show by. The alias list is
 //! the whole reason this works — see [`crate::matching`].
+//!
+//! AniList identifies a title and keeps nothing worth having about its
+//! episodes, so enriching a match leans on [`crate::anizip`] for those, walking
+//! AniList's own `SEQUEL` relations to find every entry the library's seasons
+//! are spread across.
 
-use pstr_core::library::TitleKind;
-use pstr_core::metadata::{EpisodeMetadata, ProviderId, TitleMetadata};
+use std::collections::HashSet;
+
+use pstr_core::library::{self, TitleKind};
+use pstr_core::metadata::{Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleMetadata};
 use serde::Deserialize;
 
+use crate::anizip::AniZip;
 use crate::error::{Error, Result};
 use crate::limiter::RateLimiter;
 use crate::matching::{Candidate, Query};
@@ -56,7 +64,6 @@ query ($search: String, $perPage: Int) {
       description(asHtml: false)
       startDate { year }
       coverImage { extraLarge large }
-      bannerImage
       averageScore
       genres
       episodes
@@ -67,31 +74,40 @@ query ($search: String, $perPage: Int) {
 }
 "#;
 
-/// Episode titles, such as AniList has them.
+/// The entries an entry leads on to.
 ///
-/// `streamingEpisodes` is the only place AniList keeps them — there is no
-/// per-episode overview in its API at all — and the entries are what the
-/// streaming sites published: `"Episode 57 - The Immortal Legion"`, in airing
-/// order, occasionally with a gap. So the number is read out of the title where
-/// it says one, and only falls back to the position in the list.
-const EPISODES: &str = r#"
+/// One hop at a time rather than a nested query several levels deep: most
+/// titles need no hop at all, and the ones that do stop as soon as the
+/// library's files are answered.
+const RELATIONS: &str = r#"
 query ($id: Int) {
   Media(id: $id, type: ANIME) {
-    episodes
-    streamingEpisodes { title thumbnail }
+    relations { edges { relationType node { id type format } } }
   }
 }
 "#;
+
+/// How many entries of one franchise to read before giving up on files that
+/// still have no answer.
+///
+/// Attack on Titan's four seasons are seven entries and Bleach's seventeen are
+/// five, so twelve covers every long run in a real library while bounding what
+/// a file no entry will ever answer — a special, a recap — can cost.
+const MAX_CHAIN_ENTRIES: usize = 12;
 
 pub struct AniList {
     http: reqwest::Client,
     /// Shared by every lookup in flight — see [`crate::limiter`].
     limiter: RateLimiter,
+    anizip: AniZip,
 }
 
 impl AniList {
-    pub fn new(http: reqwest::Client) -> Self {
+    /// `language` is the one episode names are wanted in, where ani.zip has
+    /// them in it.
+    pub fn new(http: reqwest::Client, language: String) -> Self {
         Self {
+            anizip: AniZip::new(http.clone(), language),
             http,
             limiter: RateLimiter::per_minute(REQUESTS_PER_MINUTE),
         }
@@ -101,11 +117,6 @@ impl AniList {
 impl Provider for AniList {
     fn id(&self) -> ProviderId {
         ProviderId::AniList
-    }
-
-    /// A sequel is its own entry here, numbering its episodes from one.
-    fn seasons_are_separate_entries(&self) -> bool {
-        true
     }
 
     async fn search(&self, query: &Query) -> Result<Vec<Candidate>> {
@@ -133,29 +144,92 @@ impl Provider for AniList {
         Ok(Vec::new())
     }
 
-    async fn episodes(&self, title: &TitleMetadata) -> Result<Vec<EpisodeMetadata>> {
+    /// The episodes of every entry the library's files are spread across, and
+    /// the series' fanart.
+    ///
+    /// AniList files a sequel as its own entry — Bleach's seventeenth season is
+    /// four of them, Mushoku Tensei's first is two — so a title's match is
+    /// only where its episodes *start*. From there the `SEQUEL` relations are
+    /// followed one entry at a time, each entry's episodes taken from ani.zip,
+    /// until every numbered file in `title` has an answer, the franchise ends,
+    /// or [`MAX_CHAIN_ENTRIES`] is reached. A one-season show is one ani.zip
+    /// request and no relations query at all.
+    ///
+    /// Following relations rather than searching for `<title> 2nd Season` is
+    /// the point: that search found the base entry again for Attack on Titan,
+    /// whose seasons two to four were then captioned with season one's names.
+    async fn enrich(&self, title: &library::Title, found: &TitleMetadata) -> Result<Enrichment> {
         // The id came from our own search response, so a non-numeric one is a
         // record written by some other version — not worth an error, and there
         // is nothing to ask about.
-        let Ok(id) = title.remote_id.parse::<i64>() else {
-            return Ok(Vec::new());
+        let Ok(first) = found.remote_id.parse::<i64>() else {
+            return Ok(Enrichment::default());
         };
+        let wanted: Vec<(Option<u32>, u32)> = title
+            .episodes()
+            .filter_map(|episode| Some((episode.node.parsed.season, episode.node.parsed.episode?)))
+            .collect();
 
-        let data: Option<MediaData> = self
-            .query(serde_json::json!({
-                "query": EPISODES,
-                "variables": { "id": id },
-            }))
-            .await?;
+        let mut enrichment = Enrichment::default();
+        let mut taken = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut series_entries = 0;
+        let mut next = Some(Link {
+            id: first,
+            series: found.kind == TitleKind::Series,
+        });
+        while let Some(link) = next.take() {
+            visited.insert(link.id);
+            let entry_season = link.series.then(|| {
+                series_entries += 1;
+                series_entries
+            });
+            let mapping = self.anizip.mapping(link.id, entry_season).await?;
+            if enrichment.backdrop_url.is_none() {
+                enrichment.backdrop_url = mapping.fanart;
+            }
+            // Where two entries both list an episode, the earlier one — the
+            // one closer to the match — keeps it.
+            enrichment.episodes.extend(
+                mapping
+                    .episodes
+                    .into_iter()
+                    .filter(|episode| taken.insert((episode.season, episode.number))),
+            );
 
-        Ok(data
-            .and_then(|data| data.media)
-            .map(|media| media.into_episodes())
-            .unwrap_or_default())
+            if answers_all(&enrichment.episodes, &wanted) || visited.len() >= MAX_CHAIN_ENTRIES {
+                break;
+            }
+            next = self.sequel(link.id, &visited).await?;
+        }
+
+        tracing::debug!(
+            "{}: {} episodes over {} entries",
+            found.name,
+            enrichment.episodes.len(),
+            visited.len()
+        );
+        Ok(enrichment)
     }
 }
 
 impl AniList {
+    /// The entry `id` continues into, if any.
+    async fn sequel(&self, id: i64, visited: &HashSet<i64>) -> Result<Option<Link>> {
+        let data: Option<RelationsData> = self
+            .query(serde_json::json!({
+                "query": RELATIONS,
+                "variables": { "id": id },
+            }))
+            .await?;
+        let edges = data
+            .and_then(|data| data.media)
+            .map(|media| media.relations.edges)
+            .unwrap_or_default();
+        Ok(next_in_chain(edges, visited))
+    }
+
+    /// One GraphQL requestimpl AniList {
     /// One GraphQL request, paced, with AniList's two ways of failing — an HTTP
     /// status and an `errors` array under a 200 — folded into one.
     ///
@@ -278,78 +352,78 @@ struct SearchData {
     page: Page,
 }
 
-#[derive(Deserialize)]
-struct MediaData {
-    #[serde(rename = "Media")]
-    media: Option<EpisodeMedia>,
+/// One step along a franchise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Link {
+    id: i64,
+    /// Whether the entry is part of the series proper — TV, a short or a web
+    /// series — rather than a film or a special, which no release counts as a
+    /// season.
+    series: bool,
 }
 
-#[derive(Deserialize)]
-struct EpisodeMedia {
-    #[serde(rename = "streamingEpisodes", default)]
-    streaming_episodes: Vec<StreamingEpisode>,
-}
-
-#[derive(Deserialize)]
-struct StreamingEpisode {
-    title: Option<String>,
-    thumbnail: Option<String>,
-}
-
-impl EpisodeMedia {
-    fn into_episodes(self) -> Vec<EpisodeMetadata> {
-        self.streaming_episodes
-            .into_iter()
-            .enumerate()
-            .map(|(index, episode)| {
-                let raw = episode.title.unwrap_or_default();
-                let (number, name) = split_numbering(&raw);
-                EpisodeMetadata {
-                    // AniList counts straight through, with no seasons: a
-                    // sequel is a separate entry, not a second season.
-                    season: None,
-                    // The position is the fallback and not the answer: the
-                    // lists have gaps, and an off-by-one here would caption
-                    // every episode of a show with the next one's name.
-                    number: number.unwrap_or(index as u32 + 1),
-                    name: name.filter(|name| !name.is_empty()),
-                    // AniList has no per-episode synopsis to give.
-                    overview: None,
-                    still_url: episode.thumbnail,
-                    air_date: None,
-                }
-            })
-            .collect()
-    }
-}
-
-/// Split `"Episode 57 - The Immortal Legion"` into its number and its name.
+/// Which of an entry's relations the franchise continues through.
 ///
-/// Both parts are optional: plenty of entries are just `"Episode 12"`, and a
-/// few are only a name.
-fn split_numbering(title: &str) -> (Option<u32>, Option<String>) {
-    let trimmed = title.trim();
-    let rest = trimmed
-        .strip_prefix("Episode ")
-        .or_else(|| trimmed.strip_prefix("episode "))
-        .or_else(|| trimmed.strip_prefix("EP"))
-        .or_else(|| trimmed.strip_prefix("E"));
+/// A sequel that is itself a series wins over one that is a film or a
+/// special, but a special is still followed when it is the only way on:
+/// Mushishi's first series leads to its second only through an OVA.
+fn next_in_chain(edges: Vec<RelationEdge>, visited: &HashSet<i64>) -> Option<Link> {
+    edges
+        .into_iter()
+        .filter(|edge| edge.relation_type.as_deref() == Some("SEQUEL"))
+        .filter_map(|edge| edge.node)
+        // A sequel can be the manga it was adapted into; only anime has
+        // episodes to number.
+        .filter(|node| node.kind.as_deref() == Some("ANIME") && !visited.contains(&node.id))
+        .map(|node| Link {
+            id: node.id,
+            series: is_series_format(node.format.as_deref()),
+        })
+        .min_by_key(|link| !link.series)
+}
 
-    let Some(rest) = rest else {
-        return (None, Some(trimmed.to_string()).filter(|t| !t.is_empty()));
-    };
+fn is_series_format(format: Option<&str>) -> bool {
+    matches!(format, Some("TV" | "TV_SHORT" | "ONA"))
+}
 
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return (None, Some(trimmed.to_string()));
-    }
+/// Whether every numbered file has an answer in `episodes`.
+fn answers_all(episodes: &[EpisodeMetadata], wanted: &[(Option<u32>, u32)]) -> bool {
+    let guide = EpisodeGuide::new(episodes.to_vec());
+    wanted
+        .iter()
+        .all(|&(season, number)| guide.get(season, number).is_some())
+}
 
-    let name = rest[digits.len()..]
-        .trim_start()
-        .trim_start_matches(['-', '–', ':'])
-        .trim()
-        .to_string();
-    (digits.parse().ok(), Some(name).filter(|n| !n.is_empty()))
+#[derive(Deserialize)]
+struct RelationsData {
+    #[serde(rename = "Media")]
+    media: Option<RelationsMedia>,
+}
+
+#[derive(Deserialize)]
+struct RelationsMedia {
+    relations: Relations,
+}
+
+#[derive(Deserialize)]
+struct Relations {
+    #[serde(default)]
+    edges: Vec<RelationEdge>,
+}
+
+#[derive(Deserialize)]
+struct RelationEdge {
+    #[serde(rename = "relationType")]
+    relation_type: Option<String>,
+    node: Option<RelationNode>,
+}
+
+#[derive(Deserialize)]
+struct RelationNode {
+    id: i64,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -369,8 +443,6 @@ struct Media {
     start_date: Option<FuzzyDate>,
     #[serde(rename = "coverImage")]
     cover_image: Option<CoverImage>,
-    #[serde(rename = "bannerImage")]
-    banner_image: Option<String>,
     #[serde(rename = "averageScore")]
     average_score: Option<f32>,
     #[serde(default)]
@@ -444,9 +516,11 @@ impl Media {
                 year: self.start_date.and_then(|date| date.year),
                 kind: kind_of(self.format.as_deref()),
                 poster_url: cover,
-                // Usually `null`. AniList only has banners for the better-known
-                // shows, which is why a tile has to cope with a poster's shape.
-                backdrop_url: self.banner_image,
+                // Not `bannerImage`: that is a 4.75:1 strip, and drawn into a
+                // 16:9 tile it is a blurred sliver of its own middle. The
+                // backdrop is ani.zip's fanart, found when the match is
+                // enriched.
+                backdrop_url: None,
                 rating: self.average_score.map(|score| score / SCORE_SCALE),
                 genres: self.genres,
                 episodes: self.episodes,
@@ -594,60 +668,95 @@ mod tests {
         assert_eq!(candidate.metadata.poster_url.as_deref(), Some("big.jpg"));
     }
 
-    #[test]
-    fn an_episode_title_gives_up_its_number_and_its_name() {
-        assert_eq!(
-            split_numbering("Episode 57 - The Immortal Legion"),
-            (Some(57), Some("The Immortal Legion".to_string()))
-        );
-        assert_eq!(split_numbering("Episode 12"), (Some(12), None));
-        // Some entries are only a name, and some sites write it differently.
-        assert_eq!(
-            split_numbering("The Day of the Beginning"),
-            (None, Some("The Day of the Beginning".to_string()))
-        );
-        assert_eq!(
-            split_numbering("E3 – Whatever"),
-            (Some(3), Some("Whatever".to_string()))
-        );
-        assert_eq!(split_numbering(""), (None, None));
+    fn edge(relation: &str, id: i64, kind: &str, format: &str) -> RelationEdge {
+        RelationEdge {
+            relation_type: Some(relation.into()),
+            node: Some(RelationNode {
+                id,
+                kind: Some(kind.into()),
+                format: Some(format.into()),
+            }),
+        }
     }
 
+    /// Attack on Titan's relations: an adaptation, two compilation films, a
+    /// prequel OVA and a spin-off around the one sequel that is the next season.
     #[test]
-    fn episode_numbers_come_from_the_titles_and_not_from_the_order() {
-        // AniList lists what streaming sites published, and those lists have
-        // gaps. Numbering by position would caption episode 4 as episode 3.
-        let media: EpisodeMedia = serde_json::from_str(
-            r#"{"streamingEpisodes": [
-                   {"title": "Episode 1 - Fullmetal Alchemist", "thumbnail": "one.jpg"},
-                   {"title": "Episode 3 - City of Heresy", "thumbnail": null}
-               ]}"#,
-        )
-        .expect("parse");
-
-        let episodes = media.into_episodes();
-        assert_eq!(episodes[0].number, 1);
-        assert_eq!(episodes[0].name.as_deref(), Some("Fullmetal Alchemist"));
-        assert_eq!(episodes[0].still_url.as_deref(), Some("one.jpg"));
-        assert_eq!(episodes[1].number, 3);
-        // AniList counts straight through; nothing here is a season.
-        assert!(episodes.iter().all(|episode| episode.season.is_none()));
+    fn the_chain_continues_through_the_sequel_and_nothing_else() {
+        let edges = vec![
+            edge("ADAPTATION", 53390, "MANGA", "MANGA"),
+            edge("ALTERNATIVE", 20691, "ANIME", "MOVIE"),
+            edge("PREQUEL", 20811, "ANIME", "OVA"),
+            edge("SPIN_OFF", 21281, "ANIME", "TV"),
+            edge("SEQUEL", 20958, "ANIME", "TV"),
+        ];
+        assert_eq!(
+            next_in_chain(edges, &HashSet::new()),
+            Some(Link {
+                id: 20958,
+                series: true
+            })
+        );
     }
 
+    /// Mushishi's first series leads on only through an OVA, which is followed
+    /// — but not counted as a season of the series.
     #[test]
-    fn an_untitled_list_still_numbers_its_episodes() {
-        let media: EpisodeMedia = serde_json::from_str(
-            r#"{"streamingEpisodes": [{"title": null, "thumbnail": null},
-                                      {"title": "", "thumbnail": null}]}"#,
-        )
-        .expect("parse");
-        let episodes = media.into_episodes();
-        assert_eq!(episodes[0].number, 1);
-        assert_eq!(episodes[1].number, 2);
-        assert!(episodes.iter().all(|episode| episode.name.is_none()));
+    fn a_special_is_followed_when_it_is_the_only_way_on() {
+        let edges = vec![edge("SEQUEL", 20526, "ANIME", "SPECIAL")];
+        assert_eq!(
+            next_in_chain(edges, &HashSet::new()),
+            Some(Link {
+                id: 20526,
+                series: false
+            })
+        );
+        // With a series beside it, the series wins.
+        let edges = vec![
+            edge("SEQUEL", 20752, "ANIME", "SPECIAL"),
+            edge("SEQUEL", 20751, "ANIME", "TV"),
+        ];
+        assert_eq!(
+            next_in_chain(edges, &HashSet::new()).map(|link| link.id),
+            Some(20751)
+        );
     }
 
-    /// Missing fields are the normal case for a recently added entry, and must
+    /// A franchise whose relations loop must end rather than walk forever.
+    #[test]
+    fn an_entry_already_read_is_not_read_again() {
+        let edges = vec![edge("SEQUEL", 1, "ANIME", "TV")];
+        assert_eq!(next_in_chain(edges, &HashSet::from([1])), None);
+        let manga = vec![edge("SEQUEL", 2, "MANGA", "MANGA")];
+        assert_eq!(next_in_chain(manga, &HashSet::new()), None);
+    }
+
+    /// The walk stops once every file is answered and not before: a season
+    /// folder of absolute numbers counts as answered by its own season.
+    #[test]
+    fn the_walk_stops_when_every_numbered_file_has_an_answer() {
+        let episode = |season, number, absolute| EpisodeMetadata {
+            season: Some(season),
+            number,
+            absolute: Some(absolute),
+            entry_season: None,
+            entry_number: None,
+            name: None,
+            overview: None,
+            still_url: None,
+            air_date: None,
+        };
+        let season_one = vec![episode(1, 1, 1), episode(1, 2, 2)];
+        assert!(answers_all(&season_one, &[(Some(1), 1), (None, 2)]));
+        assert!(!answers_all(&season_one, &[(Some(1), 1), (Some(2), 26)]));
+
+        let both = vec![episode(1, 1, 1), episode(2, 1, 26)];
+        assert!(answers_all(&both, &[(Some(1), 1), (Some(2), 26)]));
+        // A film: nothing numbered, nothing to walk for.
+        assert!(answers_all(&[], &[]));
+    }
+
+    /// Missing fields are the normal case    /// Missing fields are the normal case for a recently added entry, and must
     /// not fail the whole page of results.
     #[test]
     fn an_entry_with_almost_nothing_in_it_still_parses() {
