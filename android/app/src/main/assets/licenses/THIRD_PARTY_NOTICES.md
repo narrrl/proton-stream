@@ -11,6 +11,7 @@ complete GNU GPL version 3 text is packaged beside this file as `GPL-3.0.txt`.
 | Kotlin | Apache-2.0 |
 | JNA | Apache-2.0 or LGPL-2.1-or-later |
 | UniFFI | MPL-2.0 |
+| Inter typeface (bundled, `Inter-OFL.txt`) | OFL-1.1 |
 | proton-stream reusable Rust crates | MIT |
 
 Before release, replace this dependency summary with an inventory generated

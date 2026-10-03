@@ -2,8 +2,27 @@ package io.narl.protonstream.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import io.narl.protonstream.R
 import androidx.compose.ui.unit.sp
+
+/**
+ * Inter, the desktop client's face, from the same two files.
+ *
+ * Only Regular and SemiBold ship, as on the desktop. A `Medium` role resolves
+ * to Regular by the usual weight matching rather than to a synthesised bold,
+ * which is how the desktop draws it too.
+ *
+ * Above [ProtonTypography] on purpose: top-level properties initialise in
+ * file order, and a ramp built first would capture this as null and fall back
+ * to the system face without a word.
+ */
+internal val Inter = FontFamily(
+    Font(R.font.inter_regular, FontWeight.Normal),
+    Font(R.font.inter_semibold, FontWeight.SemiBold),
+)
 
 /**
  * The type ramp, which is the desktop client's type ramp.
@@ -72,4 +91,5 @@ private fun role(size: Float, weight: FontWeight) = TextStyle(
     fontSize = size.sp,
     lineHeight = (size * 1.35f).sp,
     fontWeight = weight,
+    fontFamily = Inter,
 )
