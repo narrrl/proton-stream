@@ -1,6 +1,12 @@
 package io.narl.protonstream.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.graphics.Brush
+import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.TonalButton
+import java.time.LocalDate
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
@@ -246,6 +252,17 @@ private fun LibraryGrid(
         // opening the app wants is almost always the thing they were part way
         // through. Inside the grid rather than pinned over it, so the shelf
         // scrolls away with the rest.
+        val featured = if (state.query.isBlank()) featured(state.titles, resumable) else null
+        featured?.let { title ->
+            item(key = "featured", span = { GridItemSpan(maxLineSpan) }) {
+                FeaturedBanner(
+                    title,
+                    resume = resumable.firstOrNull { it.title.key == title.key },
+                    onPlay = { onResume(title, it) },
+                    onOpen = { onTitle(title) },
+                )
+            }
+        }
         if (state.query.isBlank() && resumable.isNotEmpty()) {
             item(key = "continue-watching", span = { GridItemSpan(maxLineSpan) }) {
                 Column {
@@ -270,6 +287,72 @@ private fun LibraryGrid(
         }
         items(state.titles, key = { it.key }) { title ->
             PosterTile(title, onClick = { onTitle(title) }, onLongClick = { onTitleMenu(title) })
+        }
+    }
+}
+
+/**
+ * The title the banner shows: the one watched last, or with nothing part
+ * watched, one of the titles the provider has a backdrop for, turning over
+ * once a day — the desktop's `featured`.
+ */
+private fun featured(titles: List<TitleRecord>, resumable: List<Resumable>): TitleRecord? {
+    resumable.firstOrNull()?.let { return it.title }
+    val pictured = titles.filter { it.backdropUrl != null }
+    if (pictured.isEmpty()) return null
+    return pictured[(LocalDate.now().toEpochDay() % pictured.size).toInt()]
+}
+
+/** Large art behind the name, rating, genres and three lines of synopsis. */
+@Composable
+private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int) -> Unit, onOpen: () -> Unit) {
+    val playlist = remember(title) { title.seasons.flatMap(SeasonRecord::episodes) }
+    Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(MaterialTheme.shapes.large)) {
+        RemoteArtwork(
+            title.backdropUrl ?: title.posterUrl,
+            title.canonicalName ?: title.name,
+            Modifier.fillMaxSize(),
+            fallback = title.thumbnailSource,
+        )
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(0.35f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.85f)),
+            ),
+        )
+        Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+            Text(
+                title.canonicalName ?: title.name,
+                style = MaterialTheme.typography.headlineMedium,
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                listOfNotNull(
+                    title.rating?.let { "★ %.1f".format(it) },
+                    title.genres.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
+                ).joinToString("  ·  ").ifEmpty { title.caption() },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.8f),
+            )
+            title.overview?.let {
+                Text(
+                    it.trim(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.8f),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
+                AccentButton(onClick = { onPlay(resume?.index ?: nextUpIndex(playlist)) }) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (resume != null) "Resume" else "Play")
+                }
+                TonalButton(onClick = onOpen) { Text("More info") }
+            }
         }
     }
 }
