@@ -84,6 +84,13 @@ import io.narl.protonstream.ui.theme.EdgedButton
 import io.narl.protonstream.ui.theme.QuietButton
 import io.narl.protonstream.ui.theme.TonalButton
 import io.narl.protonstream.ui.thumbnailSource
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import io.narl.protonstream.ui.RemoteArtwork
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -905,26 +912,64 @@ private fun UpNextCard(
     }
     // `showing` already implies a non-null episode, and the compiler knows it.
     if (!showing) return
+    // Eased between ticks, so the ring runs down rather than stepping once a
+    // second.
+    val ring by animateFloatAsState(
+        targetValue = remaining.toFloat() / UP_NEXT_SECONDS,
+        animationSpec = tween(durationMillis = 1_000, easing = LinearEasing),
+        label = "up-next countdown",
+    )
     Column(
         modifier
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.small)
+            .width(280.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.medium)
             .padding(12.dp),
     ) {
-        Text(
-            "Up next in ${remaining}s",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelMedium,
-        )
-        Text(
-            upNext.label,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-            AccentButton(onClick = onPlayNow) { Text("Play now") }
-            QuietButton(onClick = { held = true }) { Text("Watch till the end") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // The next episode's still, so the card says which episode
+            // without being read; the ring over it is both the countdown and
+            // the button that skips it.
+            Box(
+                Modifier
+                    .width(112.dp)
+                    .aspectRatio(16f / 9f)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(onClick = onPlayNow),
+                contentAlignment = Alignment.Center,
+            ) {
+                RemoteArtwork(
+                    upNext.stillUrl,
+                    upNext.label,
+                    Modifier.fillMaxSize(),
+                    fallback = upNext.thumbnailSource,
+                )
+                Box(Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)))
+                CircularProgressIndicator(
+                    progress = { ring },
+                    modifier = Modifier.size(40.dp),
+                    color = Color.White,
+                    trackColor = Color.White.copy(alpha = 0.25f),
+                    strokeWidth = 3.dp,
+                )
+                Icon(Icons.Default.PlayArrow, contentDescription = "Play now", tint = Color.White)
+            }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(
+                    "Up next in ${remaining}s",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Text(
+                    upNext.providerName ?: upNext.label,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
+        }
+        QuietButton(onClick = { held = true }, modifier = Modifier.padding(top = 4.dp)) {
+            Text("Watch till the end")
         }
     }
 }
