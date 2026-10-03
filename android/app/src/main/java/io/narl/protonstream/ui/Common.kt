@@ -83,11 +83,11 @@ internal val LocalPaneVisibility = staticCompositionLocalOf<AnimatedVisibilitySc
  */
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-internal fun sharedArt(key: String): Modifier {
-    val transition = LocalSharedTransition.current ?: return Modifier
-    val visibility = LocalPaneVisibility.current ?: return Modifier
+internal fun Modifier.sharedArt(key: String): Modifier {
+    val transition = LocalSharedTransition.current ?: return this
+    val visibility = LocalPaneVisibility.current ?: return this
     return with(transition) {
-        Modifier.sharedBounds(rememberSharedContentState("art/$key"), visibility)
+        this@sharedArt.sharedBounds(rememberSharedContentState("art/$key"), visibility)
     }
 }
 

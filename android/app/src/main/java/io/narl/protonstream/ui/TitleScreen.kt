@@ -162,7 +162,7 @@ internal fun TitleScreen(
                 // Edge to edge, fading into the page: the art is the first thing
                 // the page says, and a framed thumbnail with a margin round it read
                 // as one card among the many below it.
-                Box(Modifier.then(sharedArt(title.key)).fillMaxWidth().height(backdropHeight)) {
+                Box(Modifier.sharedArt(title.key).fillMaxWidth().height(backdropHeight)) {
                     RemoteArtwork(
                         title.backdropUrl ?: title.posterUrl,
                         title.canonicalName ?: title.name,
