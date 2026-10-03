@@ -231,6 +231,19 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }
     }
 
+    /**
+     * Off the history page: the position and the watched mark both go, which
+     * is "never played", with an Undo.
+     */
+    fun removeFromHistory(title: TitleRecord, episode: EpisodeRecord) {
+        changeWatch(
+            listOf(episode),
+            "${episode.label} of ${title.canonicalName ?: title.name} removed from history",
+        ) { engine, target, before ->
+            engine.saveWatchState(target.shareId, target.linkId, 0.0, before?.durationSecs, false)
+        }
+    }
+
     /** Put back what the last undoable change replaced. */
     fun undo() {
         val snapshots = mutableState.value.undo ?: return

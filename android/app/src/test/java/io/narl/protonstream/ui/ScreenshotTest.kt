@@ -14,6 +14,8 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
+import java.time.LocalDate
+import java.time.ZoneOffset
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -99,6 +101,13 @@ class ScreenshotTest {
     }
 
     @Test
+    fun `the history page`() = capture("history-phone") {
+        // Fixed day and zone: "Today" and "Yesterday" are relative, and an
+        // image that changes with the date is no baseline.
+        HistoryScreen(LIBRARY, { _, _ -> }, {}, { _, _ -> }, PaddingValues(), ZoneOffset.UTC, LocalDate.of(2026, 9, 21))
+    }
+
+    @Test
     fun `the downloads page with nothing offline`() = capture("downloads-empty") {
         DownloadsScreen(LIBRARY, {}, {}, {}, {}, PaddingValues())
     }
@@ -129,7 +138,12 @@ class ScreenshotTest {
             providerOverview = null,
             stillUrl = null,
             airDate = null,
-            lastPlayed = if (progress != null) 1_790_000_000L else 0L,
+            // 2026-09-21 for the part-watched one, the day before for the rest.
+            lastPlayed = when {
+                progress != null -> 1_790_000_000L
+                watched -> 1_789_900_000L - number.toLong() * 600
+                else -> 0L
+            },
         )
 
         fun title(key: String, name: String, seasons: List<SeasonRecord>, overview: String? = null) = TitleRecord(

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Close
@@ -79,6 +80,7 @@ private data class PlayRequest(
 
 private enum class Destination(val label: String, val icon: ImageVector) {
     Library("Library", Icons.Default.VideoLibrary),
+    History("History", Icons.Default.History),
     Shares("Shares", Icons.Default.Share),
     Downloads("Downloads", Icons.Default.Download),
     Settings("Settings", Icons.Default.Settings),
@@ -237,6 +239,17 @@ fun ProtonStreamApp(
                         model::removeShare,
                         shareLink,
                         onShareLinkTaken,
+                        body,
+                    )
+                    Destination.History -> HistoryScreen(
+                        state,
+                        { title, index ->
+                            playingTitleKey = title.key
+                            playingIndex = index
+                            playerMinimized = false
+                        },
+                        { destination = Destination.Library; selectedTitleKey = it.key },
+                        model::removeFromHistory,
                         body,
                     )
                     Destination.Downloads -> DownloadsScreen(

@@ -213,7 +213,7 @@ across fails here rather than being noticed in a screenshot.
 
 **Screenshot tests** (`ScreenshotTest`, Roborazzi) draw each screen from fixed
 records — Library on a phone, a tablet and at font scale 1.5, an empty library,
-a title, Shares, Settings and Downloads — and `check` compares them with the
+a title, History, Shares, Settings and Downloads — and `check` compares them with the
 images in `app/src/test/screenshots`. A layout regression compiles and passes
 everything else; here it fails, and the review shows the changed image. After a
 deliberate change, `gradlew recordRoborazziDebug` rewrites the images and they
