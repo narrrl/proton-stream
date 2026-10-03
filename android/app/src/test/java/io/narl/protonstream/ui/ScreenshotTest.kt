@@ -13,6 +13,8 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
+import io.narl.protonstream.ui.theme.AppearanceState
+import io.narl.protonstream.ui.theme.ProtonFallback
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -25,6 +27,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.OfflineRecord
+import uniffi.pstr_android.PaletteRecord
 import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.StorageUsageRecord
@@ -50,6 +53,14 @@ class ScreenshotTest {
     @Before
     fun setUp() {
         WorkManagerTestInitHelper.initializeTestWorkManager(ApplicationProvider.getApplicationContext())
+        // The palette is process-wide and the sandbox outlives a test, so a
+        // light capture would otherwise repaint every one after it.
+        AppearanceState.apply(ProtonFallback)
+    }
+
+    private fun captureLight(name: String, content: @Composable () -> Unit) {
+        AppearanceState.apply(LATTE)
+        capture(name, content)
     }
 
     private fun capture(name: String, content: @Composable () -> Unit) {
@@ -72,6 +83,28 @@ class ScreenshotTest {
     @Config(qualifiers = RobolectricDeviceQualifiers.MediumTablet)
     fun `the library on a tablet`() = capture("library-tablet") {
         LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
+    fun `the library in the light palette`() = captureLight("library-phone-light") {
+        LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
+    fun `a title in the light palette`() = captureLight("title-phone-light") {
+        TitleScreen(SERIES, true, { _, _ -> }, {}, {}, {}, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
+    @Config(qualifiers = RobolectricDeviceQualifiers.MediumTablet)
+    fun `a title on a tablet`() = capture("title-tablet") {
+        TitleScreen(SERIES, true, { _, _ -> }, {}, {}, {}, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
+    @Config(qualifiers = RobolectricDeviceQualifiers.MediumTablet)
+    fun `the history page on a tablet`() = capture("history-tablet") {
+        HistoryScreen(LIBRARY, { _, _ -> }, {}, { _, _ -> }, PaddingValues(), ZoneOffset.UTC, LocalDate.of(2026, 9, 21))
     }
 
     @Test
@@ -142,6 +175,26 @@ class ScreenshotTest {
     }
 
     private companion object {
+        /** Catppuccin Latte with the default accent, as `Palette::resolve` gives it. */
+        val LATTE = PaletteRecord(
+            background = 0xFFEFF1F5u,
+            surface = 0xFFE6E9EFu,
+            sunken = 0xFFDCE0E8u,
+            card = 0xFFCCD0DAu,
+            cardHover = 0xFFBCC0CCu,
+            border = 0xFFBCC0CCu,
+            text = 0xFF4C4F69u,
+            muted = 0xFF6C6F85u,
+            accent = 0xFF732FCCu,
+            accentAlt = 0xFF1856D1u,
+            accentDim = 0xFFC4BBE4u,
+            onAccent = 0xFFEFF1F5u,
+            danger = 0xFFD20F39u,
+            elevated = 0xFFAAAEBDu,
+            dangerDim = 0xFFE7D1D5u,
+            light = true,
+        )
+
         fun episode(season: UInt, number: UInt, watched: Boolean = false, progress: Double? = null): EpisodeRecord {
             // `detail` is the filename unless the filename named the episode,
             // which is what the bridge sends.

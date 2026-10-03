@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -117,173 +119,183 @@ internal fun TitleScreen(
         .getWorkInfosByTagLiveData(DownloadCoordinator.TAG).observeAsState(emptyList())
     val downloads = remember(work) { DownloadStateStore(context).records() }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(padding),
-        contentPadding = PaddingValues(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item(key = "backdrop") {
-            // Edge to edge, fading into the page: the art is the first thing
-            // the page says, and a framed thumbnail with a margin round it read
-            // as one card among the many below it.
-            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
-                RemoteArtwork(
-                    title.backdropUrl ?: title.posterUrl,
-                    title.canonicalName ?: title.name,
-                    Modifier.fillMaxSize(),
-                    fallback = title.thumbnailSource,
-                    labelled = false,
-                )
-                Box(
-                    Modifier.fillMaxSize().background(
-                        Brush.verticalGradient(
-                            0.45f to Color.Transparent,
-                            1f to MaterialTheme.colorScheme.background,
+    // On a tablet the page keeps a phone's reading width, centred: a Play
+    // button and synopsis lines two thousand pixels wide are read by turning
+    // the head. The backdrop still spans the window, but no taller than about
+    // half of it, or a landscape tablet opened on a picture and nothing else.
+    BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
+        val side = ((maxWidth - READABLE_WIDTH) / 2).coerceAtLeast(0.dp)
+        val backdropHeight = minOf(maxWidth * 9f / 16f, maxHeight * 0.55f)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item(key = "backdrop") {
+                // Edge to edge, fading into the page: the art is the first thing
+                // the page says, and a framed thumbnail with a margin round it read
+                // as one card among the many below it.
+                Box(Modifier.fillMaxWidth().height(backdropHeight)) {
+                    RemoteArtwork(
+                        title.backdropUrl ?: title.posterUrl,
+                        title.canonicalName ?: title.name,
+                        Modifier.fillMaxSize(),
+                        fallback = title.thumbnailSource,
+                        labelled = false,
+                    )
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.verticalGradient(
+                                0.45f to Color.Transparent,
+                                1f to MaterialTheme.colorScheme.background,
+                            ),
                         ),
-                    ),
-                )
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .statusBarsPadding()
-                        .padding(8.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.4f)),
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to library", tint = Color.White)
-                }
-            }
-        }
-        item(key = "heading") {
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                Text(title.canonicalName ?: title.name, style = MaterialTheme.typography.headlineMedium)
-                title.originalName?.takeIf { it != title.canonicalName }?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(
-                    listOfNotNull(
-                        (title.metadataYear ?: title.year)?.toString(),
-                        title.rating?.let { "★ %.1f".format(it) },
-                        title.genres.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
-                        "${title.watchedCount} of ${title.episodeCount} watched".takeIf { title.episodeCount > 1uL },
-                    ).joinToString("  ·  "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-                // The one thing the page is for, full width and naming what it
-                // will play: "Resume" alone left the viewer guessing which
-                // episode of forty it meant.
-                AccentButton(
-                    onClick = { onPlay(playlist, nextUp) },
-                    enabled = playerReady && playlist.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        when {
-                            !playerReady -> "Player loading…"
-                            upNext == null -> "Play"
-                            upNext.resumeAt != null -> "Resume ${upNext.label}"
-                            title.watchedCount > 0uL -> "Continue with ${upNext.label}"
-                            playlist.size == 1 -> "Play"
-                            else -> "Play ${upNext.label}"
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
-                }
-                // Everything else as labelled icons in one row: four actions of
-                // three button styles used to wrap over three lines and bury
-                // the episodes under them.
-                Row(Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                    // Only where it would do something different: an unstarted
-                    // show already starts at the beginning.
-                    if (upNext?.resumeAt != null || title.watchedCount > 0uL) {
-                        TitleAction(Icons.Default.Replay, "Start over", Modifier.weight(1f), enabled = playerReady) {
-                            onPlay(playlist, 0)
-                        }
-                    }
-                    TitleAction(Icons.Default.Download, "Download", Modifier.weight(1f)) {
-                        DownloadCoordinator.enqueue(context, playlist)
-                    }
-                    TitleAction(Icons.Default.Edit, "Match", Modifier.weight(1f)) { showMatch = true }
-                    // The provider's own page for this title: where a viewer goes
-                    // to check that the thing the app matched is what they have.
-                    title.externalUrl?.let { url ->
-                        TitleAction(
-                            Icons.AutoMirrored.Filled.OpenInNew,
-                            title.metadataProvider?.displayName() ?: "Provider",
-                            Modifier.weight(1f),
-                        ) {
-                            runCatching {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
-                            }.onFailure(onPreferenceError)
-                        }
-                    }
-                }
-                title.overview?.let { overview ->
-                    // Three lines, then a tap for the rest: a synopsis with its
-                    // source notes ran to a screen and a half on a phone.
-                    Text(
-                        overview.trim(),
-                        maxLines = if (overviewOpen) Int.MAX_VALUE else 3,
-                        overflow = TextOverflow.Ellipsis,
+                    IconButton(
+                        onClick = onBack,
                         modifier = Modifier
-                            .padding(top = 12.dp)
-                            .clickable { overviewOpen = !overviewOpen },
-                    )
-                }
-                // Said plainly, because it changes what a re-match will do: a
-                // hand-picked match is not overwritten by an automatic pass.
-                if (title.manualMatch) {
-                    Text(
-                        "Matched by hand",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
+                            .statusBarsPadding()
+                            .padding(8.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.4f)),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to library", tint = Color.White)
+                    }
                 }
             }
-        }
-        item(key = "seasons") {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(title.seasons, key = { _, it -> it.label }) { index, entry ->
-                        FilterChip(
-                            selected = index == seasonIndex,
-                            onClick = { seasonIndex = index },
-                            label = { Text(entry.label) },
+            item(key = "heading") {
+                Column(Modifier.padding(horizontal = side + 16.dp)) {
+                    Text(title.canonicalName ?: title.name, style = MaterialTheme.typography.headlineMedium)
+                    title.originalName?.takeIf { it != title.canonicalName }?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(
+                        listOfNotNull(
+                            (title.metadataYear ?: title.year)?.toString(),
+                            title.rating?.let { "★ %.1f".format(it) },
+                            title.genres.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
+                            "${title.watchedCount} of ${title.episodeCount} watched".takeIf { title.episodeCount > 1uL },
+                        ).joinToString("  ·  "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    // The one thing the page is for, full width and naming what it
+                    // will play: "Resume" alone left the viewer guessing which
+                    // episode of forty it meant.
+                    AccentButton(
+                        onClick = { onPlay(playlist, nextUp) },
+                        enabled = playerReady && playlist.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            when {
+                                !playerReady -> "Player loading…"
+                                upNext == null -> "Play"
+                                upNext.resumeAt != null -> "Resume ${upNext.label}"
+                                title.watchedCount > 0uL -> "Continue with ${upNext.label}"
+                                playlist.size == 1 -> "Play"
+                                else -> "Play ${upNext.label}"
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    // Everything else as labelled icons in one row: four actions of
+                    // three button styles used to wrap over three lines and bury
+                    // the episodes under them.
+                    Row(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                        // Only where it would do something different: an unstarted
+                        // show already starts at the beginning.
+                        if (upNext?.resumeAt != null || title.watchedCount > 0uL) {
+                            TitleAction(Icons.Default.Replay, "Start over", Modifier.weight(1f), enabled = playerReady) {
+                                onPlay(playlist, 0)
+                            }
+                        }
+                        TitleAction(Icons.Default.Download, "Download", Modifier.weight(1f)) {
+                            DownloadCoordinator.enqueue(context, playlist)
+                        }
+                        TitleAction(Icons.Default.Edit, "Match", Modifier.weight(1f)) { showMatch = true }
+                        // The provider's own page for this title: where a viewer goes
+                        // to check that the thing the app matched is what they have.
+                        title.externalUrl?.let { url ->
+                            TitleAction(
+                                Icons.AutoMirrored.Filled.OpenInNew,
+                                title.metadataProvider?.displayName() ?: "Provider",
+                                Modifier.weight(1f),
+                            ) {
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+                                }.onFailure(onPreferenceError)
+                            }
+                        }
+                    }
+                    title.overview?.let { overview ->
+                        // Three lines, then a tap for the rest: a synopsis with its
+                        // source notes ran to a screen and a half on a phone.
+                        Text(
+                            overview.trim(),
+                            maxLines = if (overviewOpen) Int.MAX_VALUE else 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .padding(top = 12.dp)
+                                .clickable { overviewOpen = !overviewOpen },
+                        )
+                    }
+                    // Said plainly, because it changes what a re-match will do: a
+                    // hand-picked match is not overwritten by an automatic pass.
+                    if (title.manualMatch) {
+                        Text(
+                            "Matched by hand",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
                         )
                     }
                 }
-                season?.let {
-                    IconButton(onClick = { DownloadCoordinator.enqueue(context, it.episodes) }) {
-                        Icon(Icons.Default.Download, contentDescription = "Download ${it.label}")
+            }
+            item(key = "seasons") {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = side + 16.dp, end = side + 4.dp, top = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(title.seasons, key = { _, it -> it.label }) { index, entry ->
+                            FilterChip(
+                                selected = index == seasonIndex,
+                                onClick = { seasonIndex = index },
+                                label = { Text(entry.label) },
+                            )
+                        }
+                    }
+                    season?.let {
+                        IconButton(onClick = { DownloadCoordinator.enqueue(context, it.episodes) }) {
+                            Icon(Icons.Default.Download, contentDescription = "Download ${it.label}")
+                        }
                     }
                 }
             }
-        }
-        season?.let { shown ->
-            itemsIndexed(shown.episodes, key = { _, it -> it.linkId }) { position, episode ->
-                EpisodeRow(
-                    episode = episode,
-                    numbering = episode.numbering(shown.number, position),
-                    position = position,
-                    download = downloads.firstOrNull {
-                        it.shareId == episode.shareId && it.linkId == episode.linkId
-                    },
-                    playerReady = playerReady,
-                    onPlay = { onPlay(playlist, playlist.indexOfFirst { it.linkId == episode.linkId }) },
-                    onDownload = { DownloadCoordinator.enqueue(context, episode) },
-                    onPause = { DownloadCoordinator.pause(context, it) },
-                    onResume = { DownloadCoordinator.resume(context, it) },
-                    onSetWatched = { onSetWatched(episode, it) },
-                )
+            season?.let { shown ->
+                itemsIndexed(shown.episodes, key = { _, it -> it.linkId }) { position, episode ->
+                    Box(Modifier.padding(horizontal = side)) {
+                        EpisodeRow(
+                            episode = episode,
+                            numbering = episode.numbering(shown.number, position),
+                            position = position,
+                            download = downloads.firstOrNull {
+                                it.shareId == episode.shareId && it.linkId == episode.linkId
+                            },
+                            playerReady = playerReady,
+                            onPlay = { onPlay(playlist, playlist.indexOfFirst { it.linkId == episode.linkId }) },
+                            onDownload = { DownloadCoordinator.enqueue(context, episode) },
+                            onPause = { DownloadCoordinator.pause(context, it) },
+                            onResume = { DownloadCoordinator.resume(context, it) },
+                            onSetWatched = { onSetWatched(episode, it) },
+                        )
+                    }
+                }
             }
         }
     }
@@ -296,6 +308,9 @@ internal fun TitleScreen(
         )
     }
 }
+
+/** How wide the page's text and controls run on a window wider than a phone. */
+private val READABLE_WIDTH = 720.dp
 
 /** One of the title's secondary actions: an icon with its name under it. */
 @Composable
