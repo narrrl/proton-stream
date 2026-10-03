@@ -94,8 +94,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends \
-            autoconf automake build-essential cmake curl git gperf libtool \
-            meson nasm ninja-build pkg-config python3 unzip wget xz-utils yasm
+            autoconf automake build-essential cmake curl git gperf libdbus-1-dev \
+            libtool meson nasm ninja-build pkg-config python3 unzip wget xz-utils \
+            yasm
 
       - name: Install Android SDK and NDK
         run: >-
@@ -109,7 +110,21 @@ jobs:
           toolchain: '1.96'
           targets: aarch64-linux-android,x86_64-linux-android
 
+      # One cache for both jobs: the signed build compiles the same crates for
+      # the same targets. Saved on failure too, so a run that breaks late does
+      # not throw away everything it compiled before the break.
       - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: android
+          cache-on-failure: true
+
+      # libmpv and its dependency tree are the slowest part of the build, and
+      # depend only on the pinned revision and the build script, which stamps
+      # its output with both and skips the build when the stamp matches.
+      - uses: actions/cache@v6
+        with:
+          path: android/app/build/generated/mpv
+          key: libmpv-${{ hashFiles('scripts/build-libmpv-android.sh') }}
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -167,8 +182,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends \
-            autoconf automake build-essential cmake curl git gperf libtool \
-            meson nasm ninja-build pkg-config python3 unzip wget xz-utils yasm
+            autoconf automake build-essential cmake curl git gperf libdbus-1-dev \
+            libtool meson nasm ninja-build pkg-config python3 unzip wget xz-utils \
+            yasm
 
       - name: Install Android SDK and NDK
         run: >-
@@ -182,7 +198,21 @@ jobs:
           toolchain: '1.96'
           targets: aarch64-linux-android,x86_64-linux-android
 
+      # One cache for both jobs: the signed build compiles the same crates for
+      # the same targets. Saved on failure too, so a run that breaks late does
+      # not throw away everything it compiled before the break.
       - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: android
+          cache-on-failure: true
+
+      # libmpv and its dependency tree are the slowest part of the build, and
+      # depend only on the pinned revision and the build script, which stamps
+      # its output with both and skips the build when the stamp matches.
+      - uses: actions/cache@v6
+        with:
+          path: android/app/build/generated/mpv
+          key: libmpv-${{ hashFiles('scripts/build-libmpv-android.sh') }}
 
       - uses: gradle/actions/setup-gradle@v4
         with:

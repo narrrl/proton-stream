@@ -7,6 +7,20 @@ source_dir="${PSTR_MPV_SOURCE_DIR:-$repo_root/.build/mpv-android}"
 revision=20a3fa526fac6d3fe267aee0d4c349893fee65a3
 destination="$repo_root/android/app/build/generated/mpv"
 
+# The staged tree depends only on the pinned revision and on this script, which
+# also pins the NDK. A tree stamped with both is reused as is: that is what lets
+# CI restore it from a cache instead of rebuilding FFmpeg and every other
+# dependency from source on each run.
+stamp="$revision $(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)"
+if [[ "$(cat "$destination/STAMP" 2>/dev/null)" == "$stamp" &&
+      -f "$destination/jniLibs/arm64-v8a/libmpv.so" &&
+      -f "$destination/jniLibs/x86_64/libmpv.so" &&
+      -f "$destination/mpv-android-source-$revision.tar.gz" ]]; then
+  echo "libmpv $revision is already staged in $destination"
+  exit 0
+fi
+rm -f -- "$destination/STAMP"
+
 if [[ ! -d "$source_dir/.git" ]]; then
   git clone https://github.com/mpv-android/mpv-android.git "$source_dir"
 fi
@@ -191,3 +205,5 @@ tar \
   -czf "$destination/mpv-android-source-$revision.tar.gz" \
   .
 printf '%s\n' "$revision" > "$destination/REVISION"
+# Last, so an interrupted run never leaves a stamp over a partial tree.
+printf '%s\n' "$stamp" > "$destination/STAMP"
