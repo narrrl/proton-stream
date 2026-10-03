@@ -201,6 +201,8 @@ fun ProtonStreamApp(
                             model::setTitleWatched,
                             model::forgetPosition,
                             body,
+                            onMatchChanged = model::reloadAfterMetadataChange,
+                            onError = model::reportError,
                         )
                     } else {
                         TitleScreen(

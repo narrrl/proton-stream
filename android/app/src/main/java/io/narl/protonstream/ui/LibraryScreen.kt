@@ -23,6 +23,7 @@ import java.time.LocalDate
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveCircleOutline
@@ -102,11 +103,14 @@ internal fun LibraryScreen(
     onSetTitleWatched: (TitleRecord, Boolean) -> Unit,
     onForgetPosition: (TitleRecord, EpisodeRecord) -> Unit,
     padding: PaddingValues,
+    onMatchChanged: () -> Unit = {},
+    onError: (Throwable) -> Unit = {},
 ) {
     val context = LocalContext.current
     // What a long press opened a menu for: a title, or a Continue watching card.
     var menuFor by remember { mutableStateOf<TitleRecord?>(null) }
     var menuResume by remember { mutableStateOf<Resumable?>(null) }
+    var matching by remember { mutableStateOf<TitleRecord?>(null) }
     // Most recently played first, one episode per show: a shelf that lists four
     // episodes of the same series is a shelf with room for nothing else.
     val resumable = remember(state.titles) {
@@ -189,7 +193,21 @@ internal fun LibraryScreen(
                 if (allWatched) Icons.Outlined.CheckCircle else Icons.Default.CheckCircle,
                 if (allWatched) "Mark unwatched" else "Mark watched",
             ) { onSetTitleWatched(title, !allWatched) }
+            // The same search the title page offers, for the tile that is
+            // plainly wrong — the wrong poster is what the grid shows.
+            MenuRow(Icons.Default.Edit, "Change match") { matching = title }
         }
+    }
+    matching?.let { title ->
+        ChangeMatchDialog(
+            title = title,
+            onDismiss = { matching = null },
+            onChanged = {
+                matching = null
+                onMatchChanged()
+            },
+            onError = onError,
+        )
     }
     menuResume?.let { entry ->
         TileMenu(

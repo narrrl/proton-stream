@@ -488,7 +488,7 @@ private fun EpisodeRow(
 }
 
 @Composable
-private fun ChangeMatchDialog(
+internal fun ChangeMatchDialog(
     title: TitleRecord,
     onDismiss: () -> Unit,
     onChanged: () -> Unit,
