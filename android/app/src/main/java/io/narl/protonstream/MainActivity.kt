@@ -48,6 +48,9 @@ import uniffi.pstr_android.PaletteRecord
 class MainActivity : ComponentActivity() {
     private val playerHost = mutableStateOf<NativeMpvHost?>(null)
     private val inPictureInPicture = mutableStateOf(false)
+
+    /** A share link handed over by a browser or the share sheet, until the Add form takes it. */
+    private val incomingShareLink = mutableStateOf<String?>(null)
     /**
      * Whether a bind is outstanding, which is what has to be unbound.
      *
@@ -97,6 +100,9 @@ class MainActivity : ComponentActivity() {
         // Infallible by construction — an unreadable theme file resolves to the
         // shipped default rather than throwing.
         runCatching { NativeRuntime.storedPalette() }.onSuccess(AppearanceState::seed)
+        // Only on a fresh start: a recreated activity is handed the intent it
+        // was launched with again, and would offer to add the same share twice.
+        if (savedInstanceState == null) incomingShareLink.value = intent.shareLink()
         enableEdgeToEdge()
         // Re-applied on every change, not just at startup: picking Latte from
         // the settings page has to turn the status bar's icons dark in the same
@@ -134,7 +140,12 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             ProtonStreamTheme {
-                ProtonStreamApp(playerHost.value, inPictureInPicture.value)
+                ProtonStreamApp(
+                    playerHost.value,
+                    inPictureInPicture.value,
+                    shareLink = incomingShareLink.value,
+                    onShareLinkTaken = { incomingShareLink.value = null },
+                )
             }
         }
     }
@@ -157,6 +168,13 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightStatusBars = palette.light
             isAppearanceLightNavigationBars = palette.light
         }
+    }
+
+    // singleTask: a link opened while the app is running arrives here, not in
+    // a second activity.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.shareLink()?.let { incomingShareLink.value = it }
     }
 
     override fun onUserLeaveHint() {

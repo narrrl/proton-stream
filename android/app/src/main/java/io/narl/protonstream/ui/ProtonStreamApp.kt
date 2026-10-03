@@ -87,6 +87,8 @@ private enum class Destination(val label: String, val icon: ImageVector) {
 fun ProtonStreamApp(
     playerHost: LibmpvHost? = null,
     inPictureInPicture: Boolean = false,
+    shareLink: String? = null,
+    onShareLinkTaken: () -> Unit = {},
     model: AppViewModel = viewModel(
         factory = AppViewModel.Factory(
             LocalContext.current,
@@ -118,6 +120,16 @@ fun ProtonStreamApp(
             PlayRequest(title, episodes, playingIndex.coerceIn(0, (episodes.size - 1).coerceAtLeast(0)))
         }
 
+    // A link opened from a browser or shared from another app: show the Add
+    // form with it filled in. A playing episode keeps going in the mini
+    // transport rather than covering the form.
+    LaunchedEffect(shareLink) {
+        if (shareLink != null) {
+            destination = Destination.Shares
+            selectedTitleKey = null
+            if (playingTitleKey != null) playerMinimized = true
+        }
+    }
     LaunchedEffect(state.message) {
         state.message?.let {
             snackbars.showSnackbar(it)
@@ -213,6 +225,8 @@ fun ProtonStreamApp(
                         model::repairShare,
                         model::refreshShare,
                         model::removeShare,
+                        shareLink,
+                        onShareLinkTaken,
                         body,
                     )
                     Destination.Downloads -> DownloadsScreen(

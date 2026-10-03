@@ -45,6 +45,8 @@ internal fun SharesScreen(
     onRepair: (String, String, String?) -> Unit,
     onRefresh: (String) -> Unit,
     onRemove: (String) -> Unit,
+    incomingLink: String?,
+    onIncomingLinkTaken: () -> Unit,
     padding: PaddingValues,
 ) {
     var showAdd by remember { mutableStateOf(false) }
@@ -79,7 +81,13 @@ internal fun SharesScreen(
             }
         }
     }
-    if (showAdd) AddShareDialog(onDismiss = { showAdd = false }, onAdd = onAdd)
+    if (showAdd || incomingLink != null) {
+        AddShareDialog(
+            initialUrl = incomingLink.orEmpty(),
+            onDismiss = { showAdd = false; onIncomingLinkTaken() },
+            onAdd = onAdd,
+        )
+    }
     repairing?.let { share ->
         RepairShareDialog(
             share = share,
@@ -145,9 +153,13 @@ private fun RepairShareDialog(
 }
 
 @Composable
-private fun AddShareDialog(onDismiss: () -> Unit, onAdd: (String, String, String?) -> Unit) {
+private fun AddShareDialog(
+    initialUrl: String,
+    onDismiss: () -> Unit,
+    onAdd: (String, String, String?) -> Unit,
+) {
     var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
+    var url by remember(initialUrl) { mutableStateOf(initialUrl) }
     var password by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
