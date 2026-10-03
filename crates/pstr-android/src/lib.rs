@@ -717,7 +717,6 @@ struct Connection {
     generation: u64,
     library: Arc<SharedLibrary>,
     open_failures: Vec<String>,
-    #[allow(dead_code)]
     source: StreamSource,
 }
 
@@ -754,6 +753,9 @@ pub struct AndroidEngine {
     /// between one episode and the next, so age — not just a share-store
     /// mutation — is a reason to reauthenticate before opening anything.
     session_refreshed: Mutex<HashMap<String, std::time::Instant>>,
+    /// The streaming cache's budget in bytes, for the next connection and,
+    /// through [`AndroidEngine::set_stream_cache_budget`], the open one.
+    cache_budget: AtomicU64,
 }
 
 /// How long a visitor session is assumed good for without a refresh.
@@ -798,6 +800,7 @@ impl AndroidEngine {
             share_generation: AtomicU64::new(0),
             thumbnails: tokio::sync::Semaphore::new(THUMBNAIL_CONCURRENCY),
             session_refreshed: Mutex::new(HashMap::new()),
+            cache_budget: AtomicU64::new(DiskCacheConfig::DEFAULT_BUDGET_BYTES),
         }))
     }
 
@@ -1279,6 +1282,22 @@ impl AndroidEngine {
         .map_err(BridgeError::from_display)?
     }
 
+    /// Set how much the streaming cache may hold. An open connection's cache
+    /// evicts down to it at once; a lower budget is a request for the space
+    /// back, not only a limit on what comes next.
+    pub fn set_stream_cache_budget(&self, bytes: u64) {
+        self.cache_budget.store(bytes, Ordering::Release);
+        let source = self
+            .connection
+            .lock()
+            .as_ref()
+            .map(|open| open.source.clone());
+        if let Some(source) = source {
+            self.runtime
+                .spawn(async move { source.set_disk_budget(bytes).await });
+        }
+    }
+
     /// Drop the cached blocks. Rebuildable by definition: this is the one thing
     /// here that can be reclaimed without losing something the viewer chose.
     pub fn clear_block_cache(&self) -> Result<u64, BridgeError> {
@@ -1723,8 +1742,10 @@ impl AndroidEngine {
             let opener = Arc::new(LibraryOpener::new(Arc::clone(&library)));
             let source = StreamSource::new(
                 opener,
-                StreamConfig::default()
-                    .with_disk_cache(DiskCacheConfig::new(self.dirs.block_cache())),
+                StreamConfig::default().with_disk_cache(
+                    DiskCacheConfig::new(self.dirs.block_cache())
+                        .with_budget(self.cache_budget.load(Ordering::Acquire)),
+                ),
             )
             .await
             .map_err(BridgeError::from_display)?;

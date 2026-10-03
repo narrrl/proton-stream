@@ -31,6 +31,8 @@ extern "C" {
 namespace {
 
 constexpr const char *kProtocol = "pstr";
+/// mpv's `hwdec` when hardware decoding is on. Why this value: `Player()`.
+constexpr const char *kHardwareDecoding = "auto-copy-safe";
 
 struct StreamCookie {
     uint64_t handle;
@@ -216,6 +218,7 @@ class Player {
         option("vo", "libmpv");
         option("force-window", "no");
         option("video-timing-offset", "0");
+        // The default; `load` sets it per file from the viewer's setting.
         // `-copy-safe`, not `-safe`. The direct MediaCodec decoders render into
         // an `ANativeWindow` the decoder is handed at init, and this player has
         // none to give: the picture goes through `vo_libmpv` and an EGL pbuffer,
@@ -224,7 +227,7 @@ class Player {
         // `hevc_mediacodec: Both surface and native_window are NULL` before
         // falling back. The copy variants decode in hardware and hand back
         // ordinary frames, which is what this render path can actually use.
-        option("hwdec", "auto-copy-safe");
+        option("hwdec", kHardwareDecoding);
         option("cache", "yes");
         option("cache-secs", "30");
         option("demuxer-readahead-secs", "30");
@@ -294,8 +297,12 @@ class Player {
     }
 
     bool load(uint64_t handle, double start, const std::string &audio,
-              const std::string &subtitle, bool subtitles) {
+              const std::string &subtitle, bool subtitles,
+              bool hardware_decoding) {
         if (!mpv_) return false;
+        // Per file, before `loadfile`: a device whose decoder shows green
+        // frames is fixed from the next episode without restarting the core.
+        set_string("hwdec", hardware_decoding ? kHardwareDecoding : "no");
         // No wait for a render context. It is created with the render thread and
         // needs no window, and a load that cannot get one plays audio anyway —
         // waiting for a surface here is what made background playback fail after
@@ -822,7 +829,7 @@ extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHo
 extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeDetachSurface(JNIEnv *, jobject, jlong handle) noexcept {
     c_boundary([=] { if (auto *p = from(handle)) p->detach(); });
 }
-extern "C" JNIEXPORT jboolean JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeLoad(JNIEnv *env, jobject, jlong handle, jlong stream, jdouble start, jstring audio, jstring subtitle, jboolean subtitles) noexcept {
+extern "C" JNIEXPORT jboolean JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeLoad(JNIEnv *env, jobject, jlong handle, jlong stream, jdouble start, jstring audio, jstring subtitle, jboolean subtitles, jboolean hardware_decoding) noexcept {
     return c_boundary<jboolean>(JNI_FALSE, [=] {
         std::string audio_text;
         std::string subtitle_text;
@@ -832,7 +839,8 @@ extern "C" JNIEXPORT jboolean JNICALL Java_io_narl_protonstream_playback_NativeM
         auto *p = from(handle);
         return static_cast<jboolean>(
             p && p->load(static_cast<uint64_t>(stream), start, audio_text,
-                         subtitle_text, subtitles == JNI_TRUE)
+                         subtitle_text, subtitles == JNI_TRUE,
+                         hardware_decoding == JNI_TRUE)
                 ? JNI_TRUE
                 : JNI_FALSE);
     });

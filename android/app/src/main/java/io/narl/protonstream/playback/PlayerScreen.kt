@@ -76,6 +76,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.AccentTrack
@@ -207,6 +208,7 @@ fun PlayerScreen(
             nativeHost.play(
                 key, startup.nativeHandle, startup.size, startup.startPosition,
                 startup.audioLanguage, startup.subtitleLanguage, startup.subtitles,
+                SettingsStore(context).hardwareDecoding,
             )
             // After the load, because mpv keeps none of the three across one.
             nativeHost.setVolume(startup.volume)

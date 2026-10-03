@@ -184,12 +184,16 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         audioLanguage: String?,
         subtitleLanguage: String?,
         subtitles: Boolean,
+        hardwareDecoding: Boolean,
     ) {
         check(size > 0uL) { "Cannot play an empty stream" }
         try {
             withContext(Dispatchers.IO) {
                 val loaded = withOpenHandle {
-                    nativeLoad(it, nativeHandle.toLong(), startPosition, audioLanguage, subtitleLanguage, subtitles).also { loaded ->
+                    nativeLoad(
+                        it, nativeHandle.toLong(), startPosition, audioLanguage, subtitleLanguage, subtitles,
+                        hardwareDecoding,
+                    ).also { loaded ->
                         if (loaded) {
                             // The outgoing stream is released by mpv closing it,
                             // not from here: `loadfile` is asynchronous and its
@@ -398,7 +402,15 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
     private external fun nativeDestroy(handle: Long)
     private external fun nativeAttachSurface(handle: Long, surface: Surface)
     private external fun nativeDetachSurface(handle: Long)
-    private external fun nativeLoad(handle: Long, stream: Long, start: Double, audio: String?, subtitle: String?, subtitles: Boolean): Boolean
+    private external fun nativeLoad(
+        handle: Long,
+        stream: Long,
+        start: Double,
+        audio: String?,
+        subtitle: String?,
+        subtitles: Boolean,
+        hardwareDecoding: Boolean,
+    ): Boolean
     private external fun nativePause(handle: Long, paused: Boolean)
     private external fun nativeSeek(handle: Long, position: Double)
     private external fun nativeVolume(handle: Long, volume: Double)

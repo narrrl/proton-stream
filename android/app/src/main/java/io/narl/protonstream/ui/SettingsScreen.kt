@@ -74,6 +74,8 @@ internal fun SettingsScreen(
     val settings = remember { SettingsStore(context) }
     var wifiOnly by remember { mutableStateOf(settings.wifiOnly) }
     var backgroundAudio by remember { mutableStateOf(settings.backgroundAudio) }
+    var hardwareDecoding by remember { mutableStateOf(settings.hardwareDecoding) }
+    var cacheBudgetGib by remember { mutableStateOf(settings.cacheBudgetGib) }
     // Playback preferences are the shared store's, not this app's: they are the
     // same file the desktop client reads, so a language chosen on one is the
     // language the other starts in.
@@ -114,6 +116,16 @@ internal fun SettingsScreen(
         )
         HorizontalDivider()
         Text("Playback", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
+        SettingToggle("Hardware decoding", hardwareDecoding) {
+            hardwareDecoding = it
+            settings.hardwareDecoding = it
+        }
+        Text(
+            "Turn off if video shows green or torn frames. Decoding in software uses more " +
+                "battery. Applies from the next episode.",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 14.dp),
+        )
         prefs?.let { current ->
             SettingToggle("Play the next episode automatically", current.autoplayNext) { on ->
                 update { it.copy(autoplayNext = on) }
@@ -184,9 +196,28 @@ internal fun SettingsScreen(
             )
         }
         Text(
-            "Streaming cache · ${formatBytes(state.storage.cacheBytes)}",
+            "Streaming cache · ${formatBytes(state.storage.cacheBytes)} of $cacheBudgetGib GiB",
             style = MaterialTheme.typography.bodySmall,
         )
+        // What has been watched is kept up to this much, so going back over a
+        // scene costs no download. A lower choice frees the difference at once.
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+            items(SettingsStore.CACHE_BUDGET_CHOICES, key = { it }) { gib ->
+                if (gib == cacheBudgetGib) {
+                    AccentButton(onClick = {}) { Text("$gib GiB") }
+                } else {
+                    EdgedButton(onClick = {
+                        cacheBudgetGib = gib
+                        settings.cacheBudgetGib = gib
+                        scope.launch(Dispatchers.IO) {
+                            runCatching {
+                                NativeRuntime.engine().setStreamCacheBudget(SettingsStore.gibToBytes(gib))
+                            }
+                        }
+                    }) { Text("$gib GiB") }
+                }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
             // The cache is rebuildable, so it goes without asking. Offline
             // episodes are a choice the viewer made, so that one asks.

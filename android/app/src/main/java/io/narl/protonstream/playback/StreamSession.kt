@@ -92,6 +92,7 @@ interface LibmpvHost {
         audioLanguage: String? = null,
         subtitleLanguage: String? = null,
         subtitles: Boolean = true,
+        hardwareDecoding: Boolean = true,
     )
 
     /** Calls pstr_android_stream_release exactly once for a published handle. */

@@ -1,6 +1,7 @@
 package io.narl.protonstream.native
 
 import android.content.Context
+import io.narl.protonstream.settings.SettingsStore
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -56,5 +57,9 @@ object NativeRuntime {
     }
 
     private fun createEngine(): AndroidEngine =
-        AndroidEngine(paths(), KeystoreSecretStore(appContext))
+        AndroidEngine(paths(), KeystoreSecretStore(appContext)).apply {
+            // The budget is Android's setting, so the engine starts on the
+            // default and is told the chosen one before anything streams.
+            setStreamCacheBudget(SettingsStore.gibToBytes(SettingsStore(appContext).cacheBudgetGib))
+        }
 }
