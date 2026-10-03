@@ -91,6 +91,9 @@ internal fun SettingsScreen(
     onRemoveAllOffline: () -> Unit,
     padding: PaddingValues,
     initialPage: SettingsPage? = null,
+    // A parameter so the screenshot tests can pin it: read from the package,
+    // every version bump changed the committed image of this page.
+    version: String = appVersion(),
 ) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
@@ -145,7 +148,7 @@ internal fun SettingsScreen(
                                     } else {
                                         "Off"
                                     }
-                                    SettingsPage.About -> "Version ${appVersion()} · licences"
+                                    SettingsPage.About -> "Version $version · licences"
                                 },
                             )
                         },
@@ -286,7 +289,7 @@ internal fun SettingsScreen(
         SettingsPage.About -> SettingsSubPage(SettingsPage.About, padding, back) {
             ListItem(
                 headlineContent = { Text("Proton Stream") },
-                supportingContent = { Text("Version ${appVersion()}") },
+                supportingContent = { Text("Version $version") },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             )
             SettingAction("Licence", "GPL-3.0-or-later. Comes with absolutely no warranty.") {

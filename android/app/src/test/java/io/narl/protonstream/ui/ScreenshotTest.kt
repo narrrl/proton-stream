@@ -139,7 +139,7 @@ class ScreenshotTest {
 
     @Test
     fun `the settings page`() = capture("settings-phone") {
-        SettingsScreen(LIBRARY, { _, _, _, _ -> }, {}, {}, {}, PaddingValues())
+        SettingsScreen(LIBRARY, { _, _, _, _ -> }, {}, {}, {}, PaddingValues(), version = "1.0.0")
     }
 
     @Test
