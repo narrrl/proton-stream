@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,7 +23,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -60,6 +60,14 @@ import uniffi.pstr_android.FlavorChoice
 import uniffi.pstr_android.AppearanceRecord
 import uniffi.pstr_android.AccentChoice
 import uniffi.pstr_android.PlaybackPrefsRecord
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import io.narl.protonstream.ui.theme.AccentProgress
 
 @Composable
 internal fun SettingsScreen(
@@ -95,152 +103,156 @@ internal fun SettingsScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var showMetadata by remember { mutableStateOf(false) }
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
-    Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
-        Text("Settings", style = MaterialTheme.typography.titleLarge)
-        SettingToggle("Download on Wi-Fi only", wifiOnly) {
+    // Rows with one line of explanation each, in groups, rather than a toggle
+    // followed by a paragraph: the page read as a document to get through
+    // before reaching the switch that was wanted.
+    Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
+        SettingsGroup("Playback")
+        prefs?.let { current ->
+            SettingSwitch(
+                "Autoplay next episode",
+                "Starts the next episode when the credits begin",
+                current.autoplayNext,
+            ) { on -> update { it.copy(autoplayNext = on) } }
+            // Off is the safer default: a mis-named chapter then costs a tap on
+            // Skip rather than a scene.
+            SettingSwitch(
+                "Skip openings and endings",
+                "Uses the release's chapters; off shows a Skip button instead",
+                current.autoSkip,
+            ) { on -> update { it.copy(autoSkip = on) } }
+            SettingSwitch("Subtitles", "Shown by default where a file has them", current.subtitles) { on ->
+                update { it.copy(subtitles = on) }
+            }
+            // Language tags, not a picker: which languages exist is a property
+            // of each file, and a list built from one episode is wrong for the
+            // next. A show that has been given its own choice keeps it.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                LanguageField("Audio language", current.audioLanguage, Modifier.weight(1f)) { tag ->
+                    update { it.copy(audioLanguage = tag) }
+                }
+                LanguageField("Subtitle language", current.subtitleLanguage, Modifier.weight(1f)) { tag ->
+                    update { it.copy(subtitleLanguage = tag) }
+                }
+            }
+            Text(
+                "Tags as they appear in the file, such as jpn or eng",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        SettingSwitch(
+            "Hardware decoding",
+            "Turn off if video shows green or torn frames",
+            hardwareDecoding,
+        ) {
+            hardwareDecoding = it
+            settings.hardwareDecoding = it
+        }
+        SettingSwitch(
+            "Background audio",
+            "Keeps playing with the app closed, from the notification",
+            backgroundAudio,
+        ) {
+            backgroundAudio = it
+            settings.backgroundAudio = it
+        }
+
+        SettingsGroup("Downloads and storage")
+        SettingSwitch("Download on Wi-Fi only", "Mobile data is never used for downloads", wifiOnly) {
             wifiOnly = it
             settings.wifiOnly = it
             // Constraints are baked in at enqueue time, so a queue that already
             // exists keeps the policy it was queued under until it is re-issued.
             DownloadCoordinator.applyNetworkPolicy(context)
         }
-        HorizontalDivider()
-        SettingToggle("Continue audio in the background", backgroundAudio) {
-            backgroundAudio = it
-            settings.backgroundAudio = it
-        }
-        Text(
-            "When disabled, leaving playback stops the player instead of keeping a media notification active.",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(bottom = 14.dp),
-        )
-        HorizontalDivider()
-        Text("Playback", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
-        SettingToggle("Hardware decoding", hardwareDecoding) {
-            hardwareDecoding = it
-            settings.hardwareDecoding = it
-        }
-        Text(
-            "Turn off if video shows green or torn frames. Decoding in software uses more " +
-                "battery. Applies from the next episode.",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(bottom = 14.dp),
-        )
-        prefs?.let { current ->
-            SettingToggle("Play the next episode automatically", current.autoplayNext) { on ->
-                update { it.copy(autoplayNext = on) }
-            }
-            SettingToggle("Skip openings and endings automatically", current.autoSkip) { on ->
-                update { it.copy(autoSkip = on) }
-            }
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text("Streaming cache")
             Text(
-                "Openings and endings are read from the chapters a release was muxed with. " +
-                    "With this off you get a Skip button instead, which is the safer default: " +
-                    "a mis-named chapter then costs a tap rather than a scene.",
+                "${formatBytes(state.storage.cacheBytes)} of $cacheBudgetGib GiB used",
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(bottom = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            SettingToggle("Show subtitles", current.subtitles) { on ->
-                update { it.copy(subtitles = on) }
-            }
-            // Language tags, not a picker: which languages exist is a property
-            // of each file, and a list built from one episode is wrong for the
-            // next. A show that has been given its own choice keeps it.
-            LanguageField("Preferred audio language", current.audioLanguage) { tag ->
-                update { it.copy(audioLanguage = tag) }
-            }
-            LanguageField("Preferred subtitle language", current.subtitleLanguage) { tag ->
-                update { it.copy(subtitleLanguage = tag) }
-            }
-            Text(
-                "Three-letter tags as they appear in the file — \"jpn\", \"eng\". Used for every " +
-                    "title that has not been given a track choice of its own.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(bottom = 14.dp),
+            AccentProgress(
+                progress = {
+                    (state.storage.cacheBytes.toDouble() / SettingsStore.gibToBytes(cacheBudgetGib).toDouble())
+                        .toFloat().coerceIn(0f, 1f)
+                },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             )
-        }
-        HorizontalDivider()
-        Text("Appearance", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
-        AppearancePicker()
-        HorizontalDivider()
-        Text("Metadata enrichment", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
-        Text(
-            if (state.metadataSettings.enabled) "On · ${state.metadataSettings.provider.displayName()}"
-            else "Off (privacy default)",
-        )
-        Text(
-            "Enabling this sends library title names to the selected third-party provider over HTTPS.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 10.dp)) {
-            TonalButton(onClick = { showMetadata = true }) { Text("Configure metadata") }
-            // Every title looked up again, matched ones included: the way out of
-            // a library the provider answered wrong, which otherwise stays wrong
-            // for as long as the match is remembered.
-            TonalButton(
-                onClick = { onMatchAgain() },
-                enabled = state.metadataSettings.enabled && !state.refreshing,
-            ) { Text("Match everything again") }
-        }
-        HorizontalDivider()
-        Text("Storage", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp))
-        Text("Offline media is encrypted at rest by Android and kept in app-private storage.")
-        Text(
-            "${state.storage.offlineCount} episodes offline · ${formatBytes(state.storage.offlineBytes)}",
-            modifier = Modifier.padding(top = 8.dp),
-        )
-        if (state.storage.partialBytes > 0uL) {
-            Text(
-                "Unfinished downloads · ${formatBytes(state.storage.partialBytes)}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        Text(
-            "Streaming cache · ${formatBytes(state.storage.cacheBytes)} of $cacheBudgetGib GiB",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        // What has been watched is kept up to this much, so going back over a
-        // scene costs no download. A lower choice frees the difference at once.
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-            items(SettingsStore.CACHE_BUDGET_CHOICES, key = { it }) { gib ->
-                if (gib == cacheBudgetGib) {
-                    AccentButton(onClick = {}) { Text("$gib GiB") }
-                } else {
-                    EdgedButton(onClick = {
-                        cacheBudgetGib = gib
-                        settings.cacheBudgetGib = gib
-                        scope.launch(Dispatchers.IO) {
-                            runCatching {
-                                NativeRuntime.engine().setStreamCacheBudget(SettingsStore.gibToBytes(gib))
+            // What has been watched is kept up to this much, so going back over
+            // a scene costs no download. A lower choice frees the difference at
+            // once. Wrapping, so five chips survive a narrow phone at a large
+            // font scale.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingsStore.CACHE_BUDGET_CHOICES.forEach { gib ->
+                    FilterChip(
+                        selected = gib == cacheBudgetGib,
+                        onClick = {
+                            cacheBudgetGib = gib
+                            settings.cacheBudgetGib = gib
+                            scope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    NativeRuntime.engine().setStreamCacheBudget(SettingsStore.gibToBytes(gib))
+                                }
                             }
-                        }
-                    }) { Text("$gib GiB") }
+                        },
+                        label = { Text("$gib GiB") },
+                    )
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
-            // The cache is rebuildable, so it goes without asking. Offline
-            // episodes are a choice the viewer made, so that one asks.
-            TonalButton(onClick = onClearCache) { Text("Clear cache") }
-            TonalButton(
-                onClick = { confirmDelete = true },
-                enabled = state.storage.offlineCount > 0uL,
-            ) { Text("Delete all offline") }
-        }
-        Text("proton-stream Android · GPL-3.0-or-later", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 24.dp))
-        Text(
-            "This program comes with absolutely no warranty. You may redistribute it under the GNU GPL.",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 8.dp),
+        // The cache is rebuildable, so it goes without asking. Offline episodes
+        // are a choice the viewer made, so that one asks.
+        SettingAction("Clear streaming cache", "Frees ${formatBytes(state.storage.cacheBytes)}", onClick = onClearCache)
+        SettingAction(
+            "Delete all offline episodes",
+            "${state.storage.offlineCount} " + (if (state.storage.offlineCount == 1uL) "episode" else "episodes") +
+                " · ${formatBytes(state.storage.offlineBytes)}" +
+                (
+                    state.storage.partialBytes.takeIf { it > 0uL }
+                        ?.let { " · ${formatBytes(it)} unfinished" }
+                        .orEmpty()
+                    ),
+            enabled = state.storage.offlineCount > 0uL || state.storage.partialBytes > 0uL,
+            onClick = { confirmDelete = true },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
-            TonalButton(onClick = {
-                legalDocument = LegalDocument("GNU GPL v3", "licenses/GPL-3.0.txt")
-            }) { Text("View license") }
-            TonalButton(onClick = {
-                legalDocument = LegalDocument("Third-party notices", "licenses/THIRD_PARTY_NOTICES.md")
-            }) { Text("View notices") }
+
+        SettingsGroup("Appearance")
+        Column(Modifier.padding(horizontal = 16.dp)) { AppearancePicker() }
+
+        SettingsGroup("Metadata")
+        SettingAction(
+            "Metadata enrichment",
+            if (state.metadataSettings.enabled) {
+                "On · ${state.metadataSettings.provider.displayName()} · sends title names to it"
+            } else {
+                "Off, the privacy default"
+            },
+            onClick = { showMetadata = true },
+        )
+        // Every title looked up again, matched ones included: the way out of a
+        // library the provider answered wrong, which otherwise stays wrong for
+        // as long as the match is remembered.
+        SettingAction(
+            "Match everything again",
+            "Looks every title up again, hand-picked matches excepted",
+            enabled = state.metadataSettings.enabled && !state.refreshing,
+            onClick = onMatchAgain,
+        )
+
+        SettingsGroup("About")
+        SettingAction("Licence", "GPL-3.0-or-later. Comes with absolutely no warranty.") {
+            legalDocument = LegalDocument("GNU GPL v3", "licenses/GPL-3.0.txt")
         }
+        SettingAction("Third-party notices", "libmpv, Inter and the other components bundled") {
+            legalDocument = LegalDocument("Third-party notices", "licenses/THIRD_PARTY_NOTICES.md")
+        }
+        Spacer(Modifier.height(24.dp))
     }
     if (confirmDelete) {
         AlertDialog(
@@ -272,6 +284,54 @@ internal fun SettingsScreen(
             },
         )
     }
+}
+
+/** A group's heading, in the accent, the way Android's own settings mark them. */
+@Composable
+private fun SettingsGroup(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 4.dp),
+    )
+}
+
+/** A switch with its one line of explanation; the whole row toggles it. */
+@Composable
+private fun SettingSwitch(headline: String, supporting: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
+    ListItem(
+        headlineContent = { Text(headline) },
+        supportingContent = { Text(supporting) },
+        trailingContent = { Switch(checked = checked, onCheckedChange = null) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onChecked),
+    )
+}
+
+/** A row that does something when tapped: opens a dialog, clears a cache. */
+@Composable
+private fun SettingAction(
+    headline: String,
+    supporting: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    ListItem(
+        headlineContent = { Text(headline) },
+        supportingContent = { Text(supporting) },
+        colors = if (enabled) {
+            colors
+        } else {
+            ListItemDefaults.colors(
+                containerColor = Color.Transparent,
+                headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                supportingColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+            )
+        },
+        modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
+    )
 }
 
 @Composable
@@ -469,12 +529,12 @@ private fun FlavorChoice.label() = when (this) {
  * absent, which is what leaves the choice to the container's own default track.
  */
 @Composable
-private fun LanguageField(label: String, value: String?, onChange: (String?) -> Unit) {
+private fun LanguageField(label: String, value: String?, modifier: Modifier = Modifier, onChange: (String?) -> Unit) {
     OutlinedTextField(
         value = value.orEmpty(),
         onValueChange = { onChange(it.trim().takeIf(String::isNotEmpty)) },
         label = { Text(label) },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = modifier,
     )
 }
