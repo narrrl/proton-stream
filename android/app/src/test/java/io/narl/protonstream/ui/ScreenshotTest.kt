@@ -109,6 +109,16 @@ class ScreenshotTest {
     }
 
     @Test
+    fun `the playback settings`() = capture("settings-playback") {
+        SettingsScreen(LIBRARY, { _, _, _, _ -> }, {}, {}, {}, PaddingValues(), SettingsPage.Playback)
+    }
+
+    @Test
+    fun `the storage settings`() = capture("settings-storage") {
+        SettingsScreen(LIBRARY, { _, _, _, _ -> }, {}, {}, {}, PaddingValues(), SettingsPage.Storage)
+    }
+
+    @Test
     fun `the history page`() = capture("history-phone") {
         // Fixed day and zone: "Today" and "Yesterday" are relative, and an
         // image that changes with the date is no baseline.

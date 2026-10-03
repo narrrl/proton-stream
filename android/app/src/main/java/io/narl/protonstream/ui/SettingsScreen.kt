@@ -1,6 +1,19 @@
 package io.narl.protonstream.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ManageSearch
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -77,6 +90,7 @@ internal fun SettingsScreen(
     onClearCache: () -> Unit,
     onRemoveAllOffline: () -> Unit,
     padding: PaddingValues,
+    initialPage: SettingsPage? = null,
 ) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
@@ -103,12 +117,46 @@ internal fun SettingsScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var showMetadata by remember { mutableStateOf(false) }
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
-    // Rows with one line of explanation each, in groups, rather than a toggle
-    // followed by a paragraph: the page read as a document to get through
-    // before reaching the switch that was wanted.
-    TabPage("Settings", padding) { body ->
-        Column(Modifier.fillMaxSize().padding(body).verticalScroll(rememberScrollState())) {
-            SettingsGroup("Playback")
+    // One row per area on the first page, each opening its own page: grouped
+    // on one page, the storage controls sat a long scroll below playback, and
+    // every setting added made the rest harder to find.
+    var page by rememberSaveable { mutableStateOf(initialPage) }
+    BackHandler(enabled = page != null) { page = null }
+    val back: @Composable () -> Unit = {
+        IconButton(onClick = { page = null }) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to settings")
+        }
+    }
+    when (page) {
+        null -> TabPage("Settings", padding) { body ->
+            Column(Modifier.fillMaxSize().padding(body).verticalScroll(rememberScrollState())) {
+                SettingsPage.entries.forEach { entry ->
+                    ListItem(
+                        headlineContent = { Text(entry.title) },
+                        supportingContent = {
+                            Text(
+                                when (entry) {
+                                    SettingsPage.Playback -> "Autoplay, languages and decoding"
+                                    SettingsPage.Storage -> "${formatBytes(state.storage.cacheBytes)} cached · " +
+                                        "${state.storage.offlineCount} offline"
+                                    SettingsPage.Appearance -> "Palette, accent and gradient"
+                                    SettingsPage.Metadata -> if (state.metadataSettings.enabled) {
+                                        "On · ${state.metadataSettings.provider.displayName()}"
+                                    } else {
+                                        "Off"
+                                    }
+                                    SettingsPage.About -> "Version ${appVersion()} · licences"
+                                },
+                            )
+                        },
+                        leadingContent = { Icon(entry.icon, contentDescription = null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        modifier = Modifier.clickable { page = entry },
+                    )
+                }
+            }
+        }
+        SettingsPage.Playback -> SettingsSubPage(SettingsPage.Playback, padding, back) {
             prefs?.let { current ->
                 SettingSwitch(
                     "Autoplay next episode",
@@ -125,26 +173,15 @@ internal fun SettingsScreen(
                 SettingSwitch("Subtitles", "Shown by default where a file has them", current.subtitles) { on ->
                     update { it.copy(subtitles = on) }
                 }
-                // Language tags, not a picker: which languages exist is a property
-                // of each file, and a list built from one episode is wrong for the
-                // next. A show that has been given its own choice keeps it.
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    LanguageField("Audio language", current.audioLanguage, Modifier.weight(1f)) { tag ->
-                        update { it.copy(audioLanguage = tag) }
-                    }
-                    LanguageField("Subtitle language", current.subtitleLanguage, Modifier.weight(1f)) { tag ->
-                        update { it.copy(subtitleLanguage = tag) }
-                    }
+                // Preferences, not filters: a file with nothing in the language
+                // plays its own default track. A show that has been given its
+                // own choice keeps it.
+                LanguageSetting("Audio language", current.audioLanguage) { tag ->
+                    update { it.copy(audioLanguage = tag) }
                 }
-                Text(
-                    "Tags as they appear in the file, such as jpn or eng",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                LanguageSetting("Subtitle language", current.subtitleLanguage) { tag ->
+                    update { it.copy(subtitleLanguage = tag) }
+                }
             }
             SettingSwitch(
                 "Hardware decoding",
@@ -162,8 +199,8 @@ internal fun SettingsScreen(
                 backgroundAudio = it
                 settings.backgroundAudio = it
             }
-
-            SettingsGroup("Downloads and storage")
+        }
+        SettingsPage.Storage -> SettingsSubPage(SettingsPage.Storage, padding, back) {
             SettingSwitch("Download on Wi-Fi only", "Mobile data is never used for downloads", wifiOnly) {
                 wifiOnly = it
                 settings.wifiOnly = it
@@ -222,11 +259,11 @@ internal fun SettingsScreen(
                 enabled = state.storage.offlineCount > 0uL || state.storage.partialBytes > 0uL,
                 onClick = { confirmDelete = true },
             )
-
-            SettingsGroup("Appearance")
+        }
+        SettingsPage.Appearance -> SettingsSubPage(SettingsPage.Appearance, padding, back) {
             Column(Modifier.padding(horizontal = 16.dp)) { AppearancePicker() }
-
-            SettingsGroup("Metadata")
+        }
+        SettingsPage.Metadata -> SettingsSubPage(SettingsPage.Metadata, padding, back) {
             SettingAction(
                 "Metadata enrichment",
                 if (state.metadataSettings.enabled) {
@@ -245,15 +282,19 @@ internal fun SettingsScreen(
                 enabled = state.metadataSettings.enabled && !state.refreshing,
                 onClick = onMatchAgain,
             )
-
-            SettingsGroup("About")
+        }
+        SettingsPage.About -> SettingsSubPage(SettingsPage.About, padding, back) {
+            ListItem(
+                headlineContent = { Text("Proton Stream") },
+                supportingContent = { Text("Version ${appVersion()}") },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
             SettingAction("Licence", "GPL-3.0-or-later. Comes with absolutely no warranty.") {
                 legalDocument = LegalDocument("GNU GPL v3", "licenses/GPL-3.0.txt")
             }
             SettingAction("Third-party notices", "libmpv, Inter and the other components bundled") {
                 legalDocument = LegalDocument("Third-party notices", "licenses/THIRD_PARTY_NOTICES.md")
             }
-            Spacer(Modifier.height(24.dp))
         }
     }
     if (confirmDelete) {
@@ -288,15 +329,39 @@ internal fun SettingsScreen(
     }
 }
 
-/** A group's heading, in the accent, the way Android's own settings mark them. */
+/** The areas the first page lists, each a page of its own. */
+internal enum class SettingsPage(val title: String, val icon: ImageVector) {
+    Playback("Playback", Icons.Default.PlayCircle),
+    Storage("Downloads and storage", Icons.Default.Storage),
+    Appearance("Appearance", Icons.Default.Palette),
+    Metadata("Metadata", Icons.AutoMirrored.Filled.ManageSearch),
+    About("About", Icons.Default.Info),
+}
+
+/** One area's page: its name, a way back, and its rows. */
 @Composable
-private fun SettingsGroup(label: String) {
-    Text(
-        label,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 4.dp),
-    )
+private fun SettingsSubPage(
+    page: SettingsPage,
+    padding: PaddingValues,
+    back: @Composable () -> Unit,
+    rows: @Composable ColumnScope.() -> Unit,
+) {
+    TabPage(page.title, padding, navigationIcon = back) { body ->
+        Column(Modifier.fillMaxSize().padding(body).verticalScroll(rememberScrollState())) {
+            rows()
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** The installed version, as the launcher and the store show it. */
+@Composable
+private fun appVersion(): String {
+    val context = LocalContext.current
+    return remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+            .getOrNull() ?: "unknown"
+    }
 }
 
 /** A switch with its one line of explanation; the whole row toggles it. */
@@ -522,21 +587,4 @@ private fun FlavorChoice.label() = when (this) {
     FlavorChoice.MACCHIATO -> "Catppuccin Macchiato"
     FlavorChoice.MOCHA -> "Catppuccin Mocha"
     FlavorChoice.PERSONA5 -> "Persona 5"
-}
-
-/**
- * One language tag, committed as it is typed.
- *
- * Blank is a real answer and means "no preference" — the bridge stores it as
- * absent, which is what leaves the choice to the container's own default track.
- */
-@Composable
-private fun LanguageField(label: String, value: String?, modifier: Modifier = Modifier, onChange: (String?) -> Unit) {
-    OutlinedTextField(
-        value = value.orEmpty(),
-        onValueChange = { onChange(it.trim().takeIf(String::isNotEmpty)) },
-        label = { Text(label) },
-        singleLine = true,
-        modifier = modifier,
-    )
 }
