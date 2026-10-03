@@ -82,7 +82,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # The action's default `packages` includes `tools`, which cmdline-tools
+      # 16.0 no longer offers, so sdkmanager exits 1. The SDK pieces this
+      # build needs are installed explicitly below.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Install native build prerequisites
         run: |
@@ -149,7 +155,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # The action's default `packages` includes `tools`, which cmdline-tools
+      # 16.0 no longer offers, so sdkmanager exits 1. The SDK pieces this
+      # build needs are installed explicitly below.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Install native build prerequisites
         run: |
