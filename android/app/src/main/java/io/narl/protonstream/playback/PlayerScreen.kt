@@ -84,6 +84,12 @@ import io.narl.protonstream.ui.theme.EdgedButton
 import io.narl.protonstream.ui.theme.QuietButton
 import io.narl.protonstream.ui.theme.TonalButton
 import io.narl.protonstream.ui.thumbnailSource
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.foundation.layout.PaddingValues
+import io.narl.protonstream.ui.theme.AccentProgress
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -281,6 +287,12 @@ fun PlayerScreen(
         nativeHost.beginTransition()
         onIndexChange(index - 1)
     }
+    fun jumpTo(target: Int) {
+        if (target == index || target !in episodes.indices) return
+        save()
+        nativeHost.beginTransition()
+        onIndexChange(target)
+    }
 
     // What the media notification, the lock screen and Picture-in-Picture show.
     // None of them can reach this composition, and all three have to name the
@@ -453,6 +465,9 @@ fun PlayerScreen(
                 hasNext = next != null,
                 onPrevious = { retreat() },
                 onNext = { advance() },
+                episodes = episodes,
+                playing = index,
+                onEpisode = { jumpTo(it) },
                 onRotate = { landscapeLocked = activity?.toggleLandscape() ?: false },
                 landscapeLocked = landscapeLocked,
             )
@@ -600,11 +615,15 @@ private fun PlayerControls(
     hasNext: Boolean,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    episodes: List<EpisodeRecord>,
+    playing: Int,
+    onEpisode: (Int) -> Unit,
     onRotate: () -> Unit,
     landscapeLocked: Boolean,
 ) {
     val scope = rememberCoroutineScope()
     var choosing by remember { mutableStateOf<String?>(null) }
+    var showEpisodes by remember { mutableStateOf(false) }
     var showChapters by remember { mutableStateOf(false) }
     var showSpeeds by remember { mutableStateOf(false) }
     // What the store says, so the dialog opens on the rate that is playing.
@@ -678,6 +697,9 @@ private fun PlayerControls(
                 CompactIcon(Icons.Default.SkipNext, "Next episode", enabled = hasNext, onClick = onNext)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (episodes.size > 1) {
+                    CompactIcon(Icons.Default.VideoLibrary, "Episodes") { showEpisodes = true }
+                }
                 if (chapters.size > 1) {
                     CompactIcon(Icons.AutoMirrored.Filled.Toc, "Chapters") { showChapters = true }
                 }
@@ -728,6 +750,14 @@ private fun PlayerControls(
                 showSpeeds = false
                 scope.launch(Dispatchers.IO) { rememberSpeed(chosen) }
             },
+        )
+    }
+    if (showEpisodes) {
+        EpisodeChooser(
+            episodes = episodes,
+            playing = playing,
+            onDismiss = { showEpisodes = false },
+            onSelect = { showEpisodes = false; onEpisode(it) },
         )
     }
     if (showChapters) {
@@ -882,6 +912,82 @@ private fun ChapterChooser(
         },
         confirmButton = { AccentButton(onClick = onDismiss) { Text("Close") } },
     )
+}
+
+/**
+ * The title's episodes, from the player: a sheet rather than a dialog, opened
+ * scrolled to the one playing so the next few are in view without a search.
+ * Each row has its still, its name, and whether it is playing, watched or
+ * part way.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EpisodeChooser(
+    episodes: List<EpisodeRecord>,
+    playing: Int,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit,
+) {
+    val list = rememberLazyListState(initialFirstVisibleItemIndex = (playing - 1).coerceAtLeast(0))
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            "Episodes",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        LazyColumn(state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
+            itemsIndexed(episodes, key = { _, it -> it.linkId }) { position, episode ->
+                val current = position == playing
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(position) }
+                        .background(
+                            if (current) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        )
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.width(112.dp).aspectRatio(16f / 9f).clip(MaterialTheme.shapes.small)) {
+                        RemoteArtwork(
+                            episode.stillUrl,
+                            episode.label,
+                            Modifier.fillMaxSize(),
+                            fallback = episode.thumbnailSource,
+                        )
+                        episode.progress?.takeIf { !episode.watched && !current }?.let { progress ->
+                            AccentProgress(
+                                progress = { progress.toFloat().coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
+                            )
+                        }
+                    }
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text(
+                            episode.providerName ?: episode.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            when {
+                                current -> "Playing"
+                                episode.watched -> "${episode.label} · Watched"
+                                episode.resumeAt != null -> "${episode.label} · Part way"
+                                else -> episode.label
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (current) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
