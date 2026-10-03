@@ -178,7 +178,7 @@ that needs a viewer's eyes is a scripted case rather than a paragraph in a
 checklist.
 
 ```bash
-bash scripts/build-android.sh check            # ktlint, Android lint, host tests
+bash scripts/build-android.sh check            # ktlint, Android lint, host and screenshot tests
 bash scripts/android-acceptance.sh --list      # what the device suite covers
 bash scripts/android-acceptance.sh             # debug APK, one attached device
 bash scripts/android-acceptance.sh --release   # the signed minified APK that ships
@@ -210,6 +210,15 @@ fifteen Material text styles against the shared ramp and fails on a sixteenth,
 and checks the corner radius the desktop draws at. Both are lists of the *other*
 client's decisions, so a change to `pstr_app::theme::Role` that nobody carried
 across fails here rather than being noticed in a screenshot.
+
+**Screenshot tests** (`ScreenshotTest`, Roborazzi) draw each screen from fixed
+records — Library on a phone, a tablet and at font scale 1.5, an empty library,
+a title, Shares, Settings and Downloads — and `check` compares them with the
+images in `app/src/test/screenshots`. A layout regression compiles and passes
+everything else; here it fails, and the review shows the changed image. After a
+deliberate change, `gradlew recordRoborazziDebug` rewrites the images and they
+are committed with it. No artwork loads on the host, so tiles show their
+placeholder, and the palette is the shipped default.
 
 **Instrumentation tests** (`app/src/androidTest`) are the things with no host
 equivalent:

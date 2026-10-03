@@ -8,13 +8,17 @@ android_dir="$repo_root/android"
 usage() {
   echo "usage: $0 {debug|check|release|signed|all}"
   echo
-  echo "  check  ktlint, Android lint and host unit tests — no device needed."
+  echo "  check  ktlint, Android lint, host unit tests and screenshot comparison —"
+  echo "         no device needed. Re-record changed screens with"
+  echo "         'gradlew recordRoborazziDebug' and commit the images."
   echo "         On-device coverage is scripts/android-acceptance.sh."
 }
 
 case "${1:-}" in
   debug) tasks=(assembleDebug) ;;
-  check) tasks=(ktlintCheck lintDebug testDebugUnitTest) ;;
+  # verifyRoborazziDebug *is* testDebugUnitTest, with the screenshots compared
+  # against src/test/screenshots instead of skipped.
+  check) tasks=(ktlintCheck lintDebug verifyRoborazziDebug) ;;
   release) tasks=(assembleRelease bundleRelease) ;;
   signed)
     required=(
@@ -31,7 +35,7 @@ case "${1:-}" in
     done
     tasks=(assembleRelease bundleRelease)
     ;;
-  all) tasks=(ktlintCheck lintDebug testDebugUnitTest assembleDebug assembleRelease bundleRelease) ;;
+  all) tasks=(ktlintCheck lintDebug verifyRoborazziDebug assembleDebug assembleRelease bundleRelease) ;;
   *) usage >&2; exit 2 ;;
 esac
 

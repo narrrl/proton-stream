@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ktlint)
+    alias(libs.plugins.roborazzi)
 }
 
 val repositoryRoot = rootProject.projectDir.parentFile
@@ -272,6 +273,11 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.work.testing)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
 
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.core)
@@ -293,6 +299,13 @@ ktlint {
         // next sync with upstream a merge conflict for no benefit.
         exclude { it.file.path.contains("${File.separator}org${File.separator}rustls${File.separator}") }
     }
+}
+
+// Screenshot baselines live beside the tests that draw them, so a change to how
+// a screen looks shows up in review as a changed image. `recordRoborazziDebug`
+// rewrites them; `verifyRoborazziDebug` fails on any difference.
+roborazzi {
+    outputDir.set(file("src/test/screenshots"))
 }
 
 // The generated UniFFI directory is a main source dir, so ktlint reads it even

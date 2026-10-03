@@ -46,7 +46,7 @@ Before submitting Android work, run the Rust workspace gate from the repository
 root, then:
 
 ```bash
-bash scripts/build-android.sh check          # ktlint, Android lint, host tests
+bash scripts/build-android.sh check          # ktlint, Android lint, host and screenshot tests
 bash scripts/android-acceptance.sh --release # the on-device matrix, minified APK
 ```
 
