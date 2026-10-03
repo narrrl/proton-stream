@@ -142,6 +142,9 @@ android {
             "GradleDependency",
             "NewerVersionAvailable",
             "AndroidGradlePluginVersion",
+            // The same for the platform: raising targetSdk opts into new
+            // behaviour and needs its own pass on a device.
+            "OldTargetApi",
         )
         sarifReport = true
     }

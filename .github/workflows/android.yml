@@ -122,11 +122,23 @@ jobs:
 
       # libmpv and its dependency tree are the slowest part of the build, and
       # depend only on the pinned revision and the build script, which stamps
-      # its output with both and skips the build when the stamp matches.
-      - uses: actions/cache@v6
+      # its output with both and skips the build when the stamp matches. Built
+      # and saved in steps of its own, so a later failure in Gradle does not
+      # discard it the way a post-job cache save would.
+      - id: libmpv
+        uses: actions/cache/restore@v6
         with:
           path: android/app/build/generated/mpv
           key: libmpv-${{ hashFiles('scripts/build-libmpv-android.sh') }}
+
+      - name: Build libmpv
+        run: bash scripts/build-libmpv-android.sh
+
+      - if: steps.libmpv.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: android/app/build/generated/mpv
+          key: ${{ steps.libmpv.outputs.cache-primary-key }}
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -212,11 +224,23 @@ jobs:
 
       # libmpv and its dependency tree are the slowest part of the build, and
       # depend only on the pinned revision and the build script, which stamps
-      # its output with both and skips the build when the stamp matches.
-      - uses: actions/cache@v6
+      # its output with both and skips the build when the stamp matches. Built
+      # and saved in steps of its own, so a later failure in Gradle does not
+      # discard it the way a post-job cache save would.
+      - id: libmpv
+        uses: actions/cache/restore@v6
         with:
           path: android/app/build/generated/mpv
           key: libmpv-${{ hashFiles('scripts/build-libmpv-android.sh') }}
+
+      - name: Build libmpv
+        run: bash scripts/build-libmpv-android.sh
+
+      - if: steps.libmpv.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: android/app/build/generated/mpv
+          key: ${{ steps.libmpv.outputs.cache-primary-key }}
 
       - uses: gradle/actions/setup-gradle@v4
         with:
