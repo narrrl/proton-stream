@@ -487,24 +487,6 @@ private fun EpisodeRow(
     }
 }
 
-/**
- * What an episode row is headed with: "1. Mother and Children".
- *
- * The provider's name for the episode, else the name the filename gave it,
- * else "Episode 1". The bare filename only when none of those exist — a column
- * of `[Group] Show - S01E01.mkv` is forty rows that differ in two characters.
- */
-private fun EpisodeRecord.heading(position: Int): String {
-    val named = providerName ?: detail.takeIf { it != name }
-    val number = number?.toInt()
-    return when {
-        named != null && number != null -> "$number. $named"
-        named != null -> named
-        number != null -> "Episode $number"
-        else -> name.substringBeforeLast('.').ifBlank { "Episode ${position + 1}" }
-    }
-}
-
 @Composable
 private fun ChangeMatchDialog(
     title: TitleRecord,

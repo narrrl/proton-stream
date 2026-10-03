@@ -24,6 +24,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import uniffi.pstr_android.EpisodeRecord
+import uniffi.pstr_android.OfflineRecord
 import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.StorageUsageRecord
@@ -123,6 +124,16 @@ class ScreenshotTest {
         // Fixed day and zone: "Today" and "Yesterday" are relative, and an
         // image that changes with the date is no baseline.
         HistoryScreen(LIBRARY, { _, _ -> }, {}, { _, _ -> }, PaddingValues(), ZoneOffset.UTC, LocalDate.of(2026, 9, 21))
+    }
+
+    @Test
+    fun `the downloads page with a season saved`() = capture("downloads-phone") {
+        val saved = SERIES.seasons.first().episodes.take(2).map {
+            OfflineRecord(it.shareId, it.linkId, "revision", 1_300_000_000uL, it)
+        }
+        // One title: the fixtures reuse link ids across titles, so with the
+        // whole library the episodes would be filed under whichever came last.
+        DownloadsScreen(LIBRARY.copy(titles = listOf(SERIES), offline = saved), {}, {}, {}, {}, PaddingValues())
     }
 
     @Test
