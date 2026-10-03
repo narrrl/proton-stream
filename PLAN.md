@@ -8,7 +8,20 @@ player attached. Written 2026-10-03 from a source review and four screenshots
 Android last caught up with the desktop on 2026-08-10 (`4ef6225`); the desktop
 gained about twenty features on 2026-10-02 that Android does not have.
 
-## 0. CI (done, unverified)
+## Status (2026-10-03)
+
+Done: section 0, every parity item, the Library, Title, Shares and Settings
+redesigns, Inter, and screenshot tests. Not yet verified on a device; the
+host gate (ktlint, lint, unit and screenshot tests) and CI's build job pass.
+
+Open, from section 2: per-screen app bars and edge-to-edge under the status
+bar, skeleton loading and generated placeholder art, a search icon that
+expands, a language picker, Settings sub-pages, the Downloads page, light
+theme and tablet screenshots, `ListDetailPaneScaffold` on tablets, shared
+element transitions and predictive back, and a long-press Change match (the
+title page has it).
+
+## 0. CI (done)
 
 Every `Android` workflow run since August failed in `:app:buildRustHost`:
 `pstr-core` pulls `keyring` → `dbus-secret-service` → `libdbus-sys`, which needs
@@ -21,8 +34,10 @@ saved, so each run started from nothing.
   `scripts/build-libmpv-android.sh`; the script writes a `STAMP` (revision plus
   its own hash) last and skips the whole libmpv build when the stamp matches.
 
-Verify with `gh workflow run android.yml -f signed_release=true`, then run it a
-second time and check that the libmpv step finishes in seconds.
+Later runs also needed meson 1.12.1 from PyPI (noble's 1.3.2 is too old for
+the pinned fontconfig), libmpv built and cached in its own steps so a later
+failure keeps it, and lint's `OldTargetApi` made informational. A cached run
+restores libmpv in under a minute.
 
 ## 1. Desktop parity
 
