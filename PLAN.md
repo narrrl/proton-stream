@@ -10,16 +10,21 @@ gained about twenty features on 2026-10-02 that Android does not have.
 
 ## Status (2026-10-03)
 
-Done: section 0, every parity item, the Library, Title, Shares and Settings
-redesigns, Inter, and screenshot tests. Not yet verified on a device; the
-host gate (ktlint, lint, unit and screenshot tests) and CI's build job pass.
+Done: section 0, every parity item, and every recommendation in section 2 —
+the Library, Title, Shares, Settings and Downloads redesigns, per-page app
+bars drawn edge to edge, search behind an icon, skeleton loading and
+generated placeholder art, Settings sub-pages and a language picker, a
+long-press Change match, Inter, light and tablet screenshots, the library
+and a title side by side from 840 dp, a poster-to-backdrop shared element
+transition, and predictive back on the title page.
 
-Open, from section 2: per-screen app bars and edge-to-edge under the status
-bar, skeleton loading and generated placeholder art, a search icon that
-expands, a language picker, Settings sub-pages, the Downloads page, light
-theme and tablet screenshots, `ListDetailPaneScaffold` on tablets, shared
-element transitions and predictive back, and a long-press Change match (the
-title page has it).
+Two departures from the text below. The tablet layout is a two-pane `Row`
+rather than `ListDetailPaneScaffold`, which would have added the
+`adaptive-layout` artifact for one split. Pull to refresh shows the
+indicator while a crawl runs, but not the crawl's progress.
+
+Not yet verified on a device; the host gate (ktlint, unit and screenshot
+tests) passes, and Android lint runs in CI.
 
 ## 0. CI (done)
 

@@ -212,13 +212,17 @@ client's decisions, so a change to `pstr_app::theme::Role` that nobody carried
 across fails here rather than being noticed in a screenshot.
 
 **Screenshot tests** (`ScreenshotTest`, Roborazzi) draw each screen from fixed
-records — Library on a phone, a tablet and at font scale 1.5, an empty library,
-a title, History, Shares, Settings and Downloads — and `check` compares them with the
-images in `app/src/test/screenshots`. A layout regression compiles and passes
-everything else; here it fails, and the review shows the changed image. After a
-deliberate change, `gradlew recordRoborazziDebug` rewrites the images and they
-are committed with it. No artwork loads on the host, so tiles show their
-placeholder, and the palette is the shipped default.
+records — Library on a phone, a tablet, at font scale 1.5, while loading and
+empty; a title on a phone and a tablet; History on a phone and a tablet; Shares;
+the Settings index and its Playback and Storage pages; Downloads with a season
+saved and empty; and the library and a title again in Catppuccin Latte — and
+`check` compares them with the images in `app/src/test/screenshots`. A layout
+regression compiles and passes everything else; here it fails, and the review
+shows the changed image. After a deliberate change, `gradlew
+recordRoborazziDebug` rewrites the images and they are committed with it.
+Artwork loading is switched off (`LocalArtworkLoading`), so every tile shows
+its generated placeholder whatever the timing, and the palette is the shipped
+default except in the Latte captures.
 
 **Instrumentation tests** (`app/src/androidTest`) are the things with no host
 equivalent:
