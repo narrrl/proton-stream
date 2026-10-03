@@ -180,20 +180,16 @@ val uniffiSourceDir = layout.buildDirectory.dir("generated/source/uniffi")
 val hostRustLibrary = repositoryRoot.resolve(
     "target/debug/${System.mapLibraryName("pstr_android")}",
 )
-val stagedMpvDir = layout.buildDirectory.dir("generated/mpv")
 
 val buildLibmpvAndroid by tasks.registering(Exec::class) {
     group = "native"
     description = "Builds the pinned GPL libmpv and stages both Android ABIs."
     workingDir(repositoryRoot)
     commandLine("bash", repositoryRoot.resolve("scripts/build-libmpv-android.sh").absolutePath)
-    inputs.file(repositoryRoot.resolve("scripts/build-libmpv-android.sh"))
-    outputs.files(
-        stagedMpvDir.map { it.file("jniLibs/arm64-v8a/libmpv.so") },
-        stagedMpvDir.map { it.file("jniLibs/x86_64/libmpv.so") },
-        stagedMpvDir.map { it.file("include/mpv/client.h") },
-        stagedMpvDir.map { it.file("REVISION") },
-    )
+    // No declared outputs: the script's STAMP is the up-to-date check. Gradle
+    // deletes the declared outputs of a task it has no history for, which on a
+    // fresh CI checkout threw away the tree just restored from the cache and
+    // rebuilt libmpv from source on every run.
 }
 
 val buildRustHost by tasks.registering(Exec::class) {
