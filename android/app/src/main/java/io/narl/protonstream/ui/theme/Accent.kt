@@ -2,18 +2,15 @@ package io.narl.protonstream.ui.theme
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationDrawerItemDefaults
@@ -23,7 +20,9 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaul
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItemColors
 import androidx.compose.material3.SliderState
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +31,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -73,29 +73,30 @@ internal fun AccentButton(
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
-    // The ramp is painted inside the container, not on `modifier`: the button
-    // pads itself out to the 48dp minimum touch target, and a background on
-    // the outer modifier fills that whole target — 8dp taller than the 40dp
-    // container every other button draws, so it stood out beside them.
-    Button(
-        onClick = onClick,
-        modifier = modifier,
-        enabled = enabled,
-        shape = MaterialTheme.shapes.small,
-        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-        contentPadding = PaddingValues(0.dp),
+    val shape = MaterialTheme.shapes.small
+    // The button pads itself out to the 48dp minimum touch target, and a
+    // background on its modifier fills that whole target — 8dp taller than
+    // the 40dp container every other button draws. So the padding is taken
+    // here, outside the ramp, and the button inside is told not to add its
+    // own. The box hands its size down, so a `fillMaxWidth` still reaches it.
+    Box(
+        modifier.minimumInteractiveComponentSize(),
+        contentAlignment = Alignment.Center,
+        propagateMinConstraints = true,
     ) {
-        Row(
-            // Only while it is live: a disabled button keeps Material's flat
-            // disabled container, because a greyed control that still wears
-            // the one strong colour in the window reads as pressable.
-            modifier = (if (enabled) Modifier.background(accentBrush()) else Modifier)
-                .defaultMinSize(ButtonDefaults.MinWidth, ButtonDefaults.MinHeight)
-                .padding(ButtonDefaults.ContentPadding),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-            content = content,
-        )
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+            Button(
+                onClick = onClick,
+                // Only while it is live: a disabled button keeps Material's flat
+                // disabled container, because a greyed control that still wears the
+                // one strong colour in the window reads as pressable.
+                modifier = if (enabled) Modifier.background(accentBrush(), shape) else Modifier,
+                enabled = enabled,
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                content = content,
+            )
+        }
     }
 }
 
