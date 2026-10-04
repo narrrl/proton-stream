@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 source_dir="${PSTR_MPV_SOURCE_DIR:-$repo_root/.build/mpv-android}"
-revision=20a3fa526fac6d3fe267aee0d4c349893fee65a3
+revision=687c7fd586d826fd0387809e14bec7a2b4fc45a1
 destination="$repo_root/android/app/build/generated/mpv"
 
 # The staged tree depends only on the pinned revision and on this script, which
@@ -32,19 +32,19 @@ git -C "$source_dir" submodule update --init --recursive
 if [[ -n "${ANDROID_NDK_HOME:-}" ]]; then
   ndk_dir="$ANDROID_NDK_HOME"
 elif [[ -n "${ANDROID_HOME:-}" ]]; then
-  ndk_dir="$ANDROID_HOME/ndk/29.0.14206865"
+  ndk_dir="$ANDROID_HOME/ndk/30.0.16248370"
 else
-  echo "error: set ANDROID_NDK_HOME or ANDROID_HOME to an Android NDK r29 installation" >&2
+  echo "error: set ANDROID_NDK_HOME or ANDROID_HOME to an Android NDK r30 installation" >&2
   exit 1
 fi
 if [[ ! -f "$ndk_dir/source.properties" ]] ||
-   ! grep -q '^Pkg.Revision = 29\.0\.14206865$' "$ndk_dir/source.properties"; then
-  echo "error: libmpv requires Android NDK 29.0.14206865: $ndk_dir" >&2
+   ! grep -q '^Pkg.Revision = 30\.0\.16248370$' "$ndk_dir/source.properties"; then
+  echo "error: libmpv requires Android NDK 30.0.16248370: $ndk_dir" >&2
   exit 1
 fi
 ndk_dir="$(cd -- "$ndk_dir" && pwd -P)"
 mpv_sdk_dir="$source_dir/buildscripts/sdk"
-mpv_ndk_link="$mpv_sdk_dir/android-ndk-r29"
+mpv_ndk_link="$mpv_sdk_dir/android-ndk-r30"
 mkdir -p "$mpv_sdk_dir"
 if [[ -e "$mpv_ndk_link" && ! -L "$mpv_ndk_link" ]]; then
   echo "error: refusing to replace non-symlink NDK path: $mpv_ndk_link" >&2

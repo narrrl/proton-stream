@@ -10,7 +10,7 @@ reimplementing it in Kotlin.
 ## Toolchain
 
 Install JDK 17, Android SDK Platform/Build Tools 36, NDK
-`29.0.14206865`, Rust 1.96, Gradle 8.13, and the native helpers:
+`30.0.16248370`, Rust 1.96, Gradle 8.13, and the native helpers:
 
 ```bash
 rustup target add aarch64-linux-android x86_64-linux-android

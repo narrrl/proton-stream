@@ -7,7 +7,7 @@ distributions.
 | Component | License |
 |---|---|
 | mpv/libmpv | GPL-2.0-or-later by default; verify the pinned build configuration |
-| LLVM libc++ shared runtime (Android NDK r29) | Apache-2.0 WITH LLVM-exception |
+| LLVM libc++ shared runtime (Android NDK r30) | Apache-2.0 WITH LLVM-exception |
 | AndroidX and Jetpack Compose | Apache-2.0 |
 | Kotlin | Apache-2.0 |
 | JNA | Apache-2.0 or LGPL-2.1-or-later |

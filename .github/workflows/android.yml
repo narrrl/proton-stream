@@ -39,8 +39,8 @@ env:
   CARGO_TERM_COLOR: always
   ANDROID_API: '36'
   ANDROID_BUILD_TOOLS: '37.0.0'
-  ANDROID_NDK: '29.0.14206865'
-  ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/29.0.14206865
+  ANDROID_NDK: '30.0.16248370'
+  ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/30.0.16248370
 
 jobs:
   build:
