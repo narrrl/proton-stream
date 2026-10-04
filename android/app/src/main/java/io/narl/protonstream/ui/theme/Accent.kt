@@ -2,9 +2,14 @@ package io.narl.protonstream.ui.theme
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -20,6 +25,7 @@ import androidx.compose.material3.SliderState
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
@@ -67,18 +73,30 @@ internal fun AccentButton(
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
-    val shape = MaterialTheme.shapes.small
+    // The ramp is painted inside the container, not on `modifier`: the button
+    // pads itself out to the 48dp minimum touch target, and a background on
+    // the outer modifier fills that whole target — 8dp taller than the 40dp
+    // container every other button draws, so it stood out beside them.
     Button(
         onClick = onClick,
-        // Only while it is live: a disabled button keeps Material's flat
-        // disabled container, because a greyed control that still wears the
-        // one strong colour in the window reads as pressable.
-        modifier = if (enabled) modifier.background(accentBrush(), shape) else modifier,
+        modifier = modifier,
         enabled = enabled,
-        shape = shape,
+        shape = MaterialTheme.shapes.small,
         colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-        content = content,
-    )
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Row(
+            // Only while it is live: a disabled button keeps Material's flat
+            // disabled container, because a greyed control that still wears
+            // the one strong colour in the window reads as pressable.
+            modifier = (if (enabled) Modifier.background(accentBrush()) else Modifier)
+                .defaultMinSize(ButtonDefaults.MinWidth, ButtonDefaults.MinHeight)
+                .padding(ButtonDefaults.ContentPadding),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
+    }
 }
 
 @Composable
