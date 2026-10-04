@@ -11,12 +11,13 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use pstr_core::appearance::{Accent, Appearance, Flavor, Palette};
+use pstr_core::browse::Sort;
 use pstr_core::catalog::{Catalog, OfflineFile, TitleTrackPrefs, WatchState, build_rows};
 use pstr_core::chapters::{Chapter, ChapterRole};
 use pstr_core::config::AppDirs;
 use pstr_core::library::{Episode, Library, Title, TitleKind};
 use pstr_core::metadata::{
-    EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId, TitleMetadata,
+    EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId, TitleMetadata, TitleNames,
 };
 use pstr_core::prefs::PlaybackPrefs;
 use pstr_core::proton_drive_rs::{ProtonDrivePublicLinkClient, ThumbnailType};
@@ -175,6 +176,55 @@ pub struct AppearanceRecord {
     pub flavor: FlavorChoice,
     pub accent: AccentChoice,
     pub gradients: bool,
+    /// Which name a title goes by. Shared with the desktop.
+    pub names: TitleNamesChoice,
+}
+
+/// The shared `pstr_core::metadata::TitleNames`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TitleNamesChoice {
+    /// The share's folder name.
+    Library,
+    English,
+    Romaji,
+}
+
+/// The shared `pstr_core::browse::Sort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum LibrarySort {
+    Name,
+    Recent,
+    Added,
+    Release,
+    Rating,
+    Popularity,
+}
+
+/// One tile of the library grid.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TileRecord {
+    /// The title drawn.
+    pub key: String,
+    /// How many other titles of its franchise it stands for.
+    pub folded: u32,
+}
+
+/// One row of titles that share a director, studio or genre.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ShelfRecord {
+    pub label: String,
+    pub keys: Vec<String>,
+}
+
+/// The library grid, ordered and folded, and the shelves above it — what
+/// `pstr_core::browse` and `pstr_core::shelves` make of the library, as keys
+/// into [`AndroidEngine::library`]'s titles.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ArrangementRecord {
+    pub tiles: Vec<TileRecord>,
+    /// Empty while searching: a shelf of titles the search did not find reads
+    /// as the search not working.
+    pub shelves: Vec<ShelfRecord>,
 }
 
 /// One flavour and accent resolved into colours, packed as `0xAARRGGBB`.
@@ -327,6 +377,26 @@ pub struct TitleRecord {
     pub external_url: Option<String>,
     pub manual_match: bool,
     pub seasons: Vec<SeasonRecord>,
+    /// The name to show, as the viewer's name setting has it.
+    pub display_name: String,
+    /// The widest art there is: fanart, else the provider's banner.
+    pub wide_url: Option<String>,
+    /// `TV`, `Film`, `OVA` — the provider's format, said for a person.
+    pub format_label: Option<String>,
+    /// `Spring 2013`.
+    pub season_label: Option<String>,
+    pub studios: Vec<String>,
+    pub directors: Vec<String>,
+    pub tags: Vec<String>,
+    /// Still airing.
+    pub airing: bool,
+    /// The next episode to air and when, Unix seconds — only while that is
+    /// still ahead.
+    pub next_episode: Option<u32>,
+    pub next_airing_at: Option<i64>,
+    /// Every title of its franchise, in release order, its own key included;
+    /// empty for a title that stands alone.
+    pub franchise: Vec<String>,
 }
 
 /// Playback preferences that outlive one file, one title and one launch.
@@ -952,23 +1022,70 @@ impl AndroidEngine {
     /// table scans, a `Library::build` and a full record conversion per
     /// keystroke.
     pub fn library(&self, search: Option<String>) -> Result<Vec<TitleRecord>, BridgeError> {
-        let titles = self.all_title_records()?;
-        let needle = search.unwrap_or_default().trim().to_lowercase();
-        if needle.is_empty() {
-            return Ok(titles);
-        }
-        Ok(titles
-            .into_iter()
-            .filter(|title| {
-                title.name.to_lowercase().contains(&needle)
-                    || title.seasons.iter().any(|season| {
-                        season
-                            .episodes
-                            .iter()
-                            .any(|episode| episode.name.to_lowercase().contains(&needle))
+        let query = search.unwrap_or_default();
+        self.with_library(|cached| {
+            if query.trim().is_empty() {
+                return cached.titles.clone();
+            }
+            let found: std::collections::HashSet<&str> =
+                pstr_core::browse::search(&cached.library, &cached.metadata, &query)
+                    .into_iter()
+                    .map(|title| title.key.as_str())
+                    .collect();
+            cached
+                .titles
+                .iter()
+                .filter(|title| found.contains(title.key.as_str()))
+                .cloned()
+                .collect()
+        })
+    }
+
+    /// The library grid for `search`, in `sort` order, each franchise folded
+    /// into one tile when `grouped` — and the shelves above it. Keys into
+    /// [`AndroidEngine::library`]'s titles, so the records cross the bridge
+    /// once.
+    pub fn arrangement(
+        &self,
+        search: Option<String>,
+        sort: LibrarySort,
+        grouped: bool,
+    ) -> Result<ArrangementRecord, BridgeError> {
+        let query = search.unwrap_or_default();
+        self.with_library(|cached| {
+            let titles = pstr_core::browse::search(&cached.library, &cached.metadata, &query);
+            let tiles = pstr_core::browse::arrange(
+                &titles,
+                pstr_core::browse::Order {
+                    sort: sort_choice(sort),
+                    grouped,
+                    names: cached.names,
+                    metadata: &cached.metadata,
+                    added: &cached.added,
+                },
+            );
+            let shelves = if query.trim().is_empty() {
+                pstr_core::shelves::pick(&cached.library.titles, &cached.metadata, SHELVES)
+                    .into_iter()
+                    .map(|shelf| ShelfRecord {
+                        label: shelf.label,
+                        keys: shelf.keys,
                     })
-            })
-            .collect())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            ArrangementRecord {
+                tiles: tiles
+                    .iter()
+                    .map(|tile| TileRecord {
+                        key: titles[tile.lead].key.clone(),
+                        folded: (tile.members.len() - 1) as u32,
+                    })
+                    .collect(),
+                shelves,
+            }
+        })
     }
 
     pub fn metadata_settings(&self) -> Result<MetadataSettingsRecord, BridgeError> {
@@ -1184,12 +1301,11 @@ impl AndroidEngine {
     }
 
     pub fn set_appearance(&self, appearance: AppearanceRecord) -> Result<(), BridgeError> {
-        // The record carries the palette and nothing else; what the desktop's
-        // library layout fields hold is kept as it was stored.
+        // The record has no grid shape — Android's is always covers — so the
+        // desktop's is kept as it was stored.
         let stored = pstr_core::appearance::load(&self.dirs).unwrap_or_default();
         let appearance = Appearance {
             tiles: stored.tiles,
-            names: stored.names,
             ..appearance_choice(appearance)
         };
         pstr_core::appearance::save(&self.dirs, &appearance).map_err(BridgeError::from_display)
@@ -1518,13 +1634,19 @@ impl AndroidEngine {
     }
 
     /// Every title as a bridge record, rebuilt only when the catalog moved.
-    fn all_title_records(&self) -> Result<Vec<TitleRecord>, BridgeError> {
+    /// Run `read` over the library, its metadata and its records, rebuilt
+    /// only when the catalog or the name setting has changed since.
+    fn with_library<T>(&self, read: impl FnOnce(&CachedLibrary) -> T) -> Result<T, BridgeError> {
+        let names = pstr_core::appearance::load(&self.dirs)
+            .unwrap_or_default()
+            .names;
         let catalog = self.catalog.lock();
         let writes = catalog.writes();
         if let Some(cached) = self.library_cache.lock().as_ref()
             && cached.writes == writes
+            && cached.names == names
         {
-            return Ok(cached.titles.clone());
+            return Ok(read(cached));
         }
 
         let files = catalog.all_files().map_err(BridgeError::from_display)?;
@@ -1538,26 +1660,61 @@ impl AndroidEngine {
         let offline = catalog
             .all_offline_files()
             .map_err(BridgeError::from_display)?;
+        let first_seen = catalog.first_seen().map_err(BridgeError::from_display)?;
         drop(catalog);
 
         let library = Library::build(files, &watch);
+        let all: Vec<&Title> = library.titles.iter().collect();
+        let franchises: HashMap<String, Vec<String>> = pstr_core::franchise::group(&all, &metadata)
+            .into_iter()
+            .filter(|franchise| franchise.members.len() > 1)
+            .flat_map(|franchise| {
+                let keys: Vec<String> = franchise
+                    .members
+                    .iter()
+                    .map(|&index| all[index].key.clone())
+                    .collect();
+                keys.clone().into_iter().map(move |key| (key, keys.clone()))
+            })
+            .collect();
+        let now = now();
         let titles: Vec<TitleRecord> = library
             .titles
             .iter()
             .map(|title| {
-                title_record(
+                let mut record = title_record(
                     title,
                     &offline,
                     metadata.get(&title.key),
                     guides.get(&title.key),
-                )
+                );
+                record.display_name =
+                    pstr_core::browse::display_name(title, &metadata, names).to_owned();
+                record.franchise = franchises.get(&title.key).cloned().unwrap_or_default();
+                if let Some(details) = metadata
+                    .get(&title.key)
+                    .and_then(|record| record.metadata.as_ref())
+                    .and_then(|found| found.details.as_ref())
+                    && let Some((episode, at)) = details.next_airing(now)
+                {
+                    record.next_episode = Some(episode);
+                    record.next_airing_at = Some(at);
+                }
+                record
             })
             .collect();
-        *self.library_cache.lock() = Some(CachedLibrary {
+        let added = library.added_at(&first_seen);
+        let cached = CachedLibrary {
             writes,
-            titles: titles.clone(),
-        });
-        Ok(titles)
+            names,
+            library,
+            metadata,
+            added,
+            titles,
+        };
+        let answer = read(&cached);
+        *self.library_cache.lock() = Some(cached);
+        Ok(answer)
     }
 
     fn titles_and_metadata(
@@ -2316,6 +2473,11 @@ fn normalized_language(language: Option<String>) -> Option<String> {
 /// The library conversion, valid while the catalog has not been written to.
 struct CachedLibrary {
     writes: u64,
+    names: TitleNames,
+    library: Library,
+    metadata: HashMap<String, MetadataRecord>,
+    /// When each title last gained a file.
+    added: HashMap<String, i64>,
     titles: Vec<TitleRecord>,
 }
 
@@ -2370,8 +2532,28 @@ fn appearance_record(appearance: Appearance) -> AppearanceRecord {
             Accent::Red => AccentChoice::Red,
         },
         gradients: appearance.gradients,
+        names: match appearance.names {
+            TitleNames::Library => TitleNamesChoice::Library,
+            TitleNames::English => TitleNamesChoice::English,
+            TitleNames::Romaji => TitleNamesChoice::Romaji,
+        },
     }
 }
+
+fn sort_choice(sort: LibrarySort) -> Sort {
+    match sort {
+        LibrarySort::Name => Sort::Name,
+        LibrarySort::Recent => Sort::Recent,
+        LibrarySort::Added => Sort::Added,
+        LibrarySort::Release => Sort::Release,
+        LibrarySort::Rating => Sort::Rating,
+        LibrarySort::Popularity => Sort::Popularity,
+    }
+}
+
+/// How many shelves the library shows above the grid — fewer than the
+/// desktop's four, because on a phone each is a screen's height.
+const SHELVES: usize = 3;
 
 fn appearance_choice(record: AppearanceRecord) -> Appearance {
     Appearance {
@@ -2395,6 +2577,11 @@ fn appearance_choice(record: AppearanceRecord) -> Appearance {
             AccentChoice::Red => Accent::Red,
         },
         gradients: record.gradients,
+        names: match record.names {
+            TitleNamesChoice::Library => TitleNames::Library,
+            TitleNamesChoice::English => TitleNames::English,
+            TitleNamesChoice::Romaji => TitleNames::Romaji,
+        },
         ..Appearance::default()
     }
 }
@@ -2469,6 +2656,7 @@ fn title_record(
     guide: Option<&EpisodeGuide>,
 ) -> TitleRecord {
     let metadata = record.and_then(|record| record.metadata.as_ref());
+    let details = metadata.and_then(|found| found.details.as_ref());
     TitleRecord {
         key: title.key.clone(),
         name: title.name.clone(),
@@ -2493,6 +2681,17 @@ fn title_record(
         provider_episode_count: metadata.and_then(|metadata| metadata.episodes),
         external_url: metadata.and_then(|metadata| metadata.url.clone()),
         manual_match: record.is_some_and(|record| record.manual),
+        display_name: metadata.map_or_else(|| title.name.clone(), |found| found.name.clone()),
+        wide_url: metadata.and_then(|found| found.wide_art().map(str::to_owned)),
+        format_label: details.and_then(|details| details.format_label().map(str::to_owned)),
+        season_label: details.and_then(|details| details.season_label()),
+        studios: details.map_or_else(Vec::new, |details| details.studios.clone()),
+        directors: details.map_or_else(Vec::new, |details| details.directors.clone()),
+        tags: details.map_or_else(Vec::new, |details| details.tags.clone()),
+        airing: details.is_some_and(|details| details.is_airing()),
+        next_episode: None,
+        next_airing_at: None,
+        franchise: Vec::new(),
         seasons: title
             .seasons
             .iter()
@@ -2641,6 +2840,7 @@ mod tests {
             flavor,
             accent: AccentChoice::Mauve,
             gradients: true,
+            names: super::TitleNamesChoice::English,
         }
     }
 
@@ -2993,6 +3193,117 @@ mod tests {
 
         pstr_android_stream_release(handle);
         assert_eq!(pstr_android_stream_size(handle), -1);
+    }
+
+    /// The arrangement folds a franchise into its series, and the name
+    /// setting — stored in the file the desktop reads — renames the tile
+    /// without anything in the catalog changing.
+    #[test]
+    fn the_library_folds_a_franchise_and_follows_the_name_setting() {
+        use pstr_core::catalog::CatalogNode;
+        use pstr_core::metadata::{MetadataRecord, TitleDetails};
+
+        let root = std::env::temp_dir().join(format!(
+            "pstr-android-arrangement-{}-{}",
+            std::process::id(),
+            super::now()
+        ));
+        let engine = AndroidEngine::new(
+            AndroidPaths {
+                config: root.join("config").to_string_lossy().into_owned(),
+                data: root.join("data").to_string_lossy().into_owned(),
+                cache: root.join("cache").to_string_lossy().into_owned(),
+            },
+            Box::<MemorySecrets>::default(),
+        )
+        .expect("engine");
+
+        let file = |link: &str, name: &str| CatalogNode {
+            share_id: "s".into(),
+            link_id: link.into(),
+            volume_id: "v".into(),
+            parent_link_id: None,
+            name: name.into(),
+            is_folder: false,
+            media_type: None,
+            size: None,
+            active_revision_id: None,
+            parsed: pstr_core::naming::parse(name),
+        };
+        let matched = |key: &str, id: &str, name: &str, kind, related: &str| MetadataRecord {
+            title_key: key.into(),
+            provider: ProviderId::AniList,
+            metadata: Some(TitleMetadata {
+                provider: ProviderId::AniList,
+                remote_id: id.into(),
+                name: name.into(),
+                original_name: None,
+                overview: None,
+                year: None,
+                kind,
+                poster_url: None,
+                backdrop_url: None,
+                rating: None,
+                genres: Vec::new(),
+                episodes: None,
+                url: None,
+                details: Some(TitleDetails {
+                    related: vec![related.into()],
+                    ..TitleDetails::default()
+                }),
+            }),
+            fetched_at: 0,
+            manual: false,
+        };
+        {
+            let mut catalog = engine.catalog.lock();
+            catalog
+                .replace_share(
+                    "s",
+                    &[
+                        file("a", "Sousou no Frieren S01E01.mkv"),
+                        file("b", "Made in Abyss Dawn of the Deep Soul.mkv"),
+                    ],
+                )
+                .expect("crawl");
+            catalog
+                .set_metadata(&matched(
+                    "sousou no frieren",
+                    "1",
+                    "Frieren",
+                    TitleKind::Series,
+                    "2",
+                ))
+                .expect("match");
+            catalog
+                .set_metadata(&matched(
+                    "made in abyss dawn of the deep soul",
+                    "2",
+                    "Dawn of the Deep Soul",
+                    TitleKind::Film,
+                    "1",
+                ))
+                .expect("match");
+        }
+
+        let arranged = engine
+            .arrangement(None, super::LibrarySort::Name, true)
+            .expect("arrange");
+        assert_eq!(arranged.tiles.len(), 1);
+        assert_eq!(arranged.tiles[0].key, "sousou no frieren");
+        assert_eq!(arranged.tiles[0].folded, 1);
+        let titles = engine.library(Some("frieren".into())).expect("library");
+        assert_eq!(titles.len(), 1);
+        assert_eq!(titles[0].display_name, "Frieren");
+        assert_eq!(titles[0].franchise.len(), 2);
+
+        let mut appearance = engine.appearance().expect("appearance");
+        appearance.names = super::TitleNamesChoice::Library;
+        engine.set_appearance(appearance).expect("store");
+        let titles = engine.library(Some("frieren".into())).expect("library");
+        assert_eq!(titles[0].display_name, "Sousou no Frieren");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

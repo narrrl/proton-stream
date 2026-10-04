@@ -71,6 +71,7 @@ import io.narl.protonstream.ui.theme.TonalButton
 import uniffi.pstr_android.MetadataProvider
 import uniffi.pstr_android.FlavorChoice
 import uniffi.pstr_android.AppearanceRecord
+import uniffi.pstr_android.TitleNamesChoice
 import uniffi.pstr_android.AccentChoice
 import uniffi.pstr_android.PlaybackPrefsRecord
 import androidx.compose.material3.ListItem
@@ -94,6 +95,8 @@ internal fun SettingsScreen(
     // A parameter so the screenshot tests can pin it: read from the package,
     // every version bump changed the committed image of this page.
     version: String = appVersion(),
+    /** The library's names changed, and it has to be read again to show them. */
+    onNamesChanged: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
@@ -264,7 +267,7 @@ internal fun SettingsScreen(
             )
         }
         SettingsPage.Appearance -> SettingsSubPage(SettingsPage.Appearance, padding, back) {
-            Column(Modifier.padding(horizontal = 16.dp)) { AppearancePicker() }
+            Column(Modifier.padding(horizontal = 16.dp)) { AppearancePicker(onNamesChanged) }
         }
         SettingsPage.Metadata -> SettingsSubPage(SettingsPage.Metadata, padding, back) {
             SettingAction(
@@ -502,7 +505,7 @@ internal fun SettingToggle(label: String, checked: Boolean, onChecked: (Boolean)
  * the file both clients read.
  */
 @Composable
-private fun AppearancePicker() {
+private fun AppearancePicker(onNamesChanged: () -> Unit) {
     val scope = rememberCoroutineScope()
     var choice by remember { mutableStateOf<AppearanceRecord?>(null) }
     var swatches by remember { mutableStateOf<Map<AccentChoice, Color>>(emptyMap()) }
@@ -571,6 +574,26 @@ private fun AppearancePicker() {
             )
         }
     }
+    Text("Title names", style = MaterialTheme.typography.bodyMedium)
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+        items(TitleNamesChoice.entries.toList(), key = { it.name }) { names ->
+            if (names == current.names) {
+                AccentButton(onClick = {}) { Text(names.label()) }
+            } else {
+                EdgedButton(onClick = {
+                    scope.launch {
+                        repaint(current.copy(names = names), store = true)
+                        onNamesChanged()
+                    }
+                }) { Text(names.label()) }
+            }
+        }
+    }
+    Text(
+        "What a matched title is called. Its other names still find it in search.",
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(bottom = 8.dp),
+    )
     SettingToggle("Paint the accent as a gradient", current.gradients) { on ->
         scope.launch { repaint(current.copy(gradients = on), store = true) }
     }
@@ -580,6 +603,13 @@ private fun AppearancePicker() {
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.padding(bottom = 14.dp),
     )
+}
+
+/** What each name setting is called. The desktop client says the same. */
+private fun TitleNamesChoice.label() = when (this) {
+    TitleNamesChoice.LIBRARY -> "As in the share"
+    TitleNamesChoice.ENGLISH -> "English"
+    TitleNamesChoice.ROMAJI -> "Romaji"
 }
 
 /** What each palette family is called. The desktop client says the same. */

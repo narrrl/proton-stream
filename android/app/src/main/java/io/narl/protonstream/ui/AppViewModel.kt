@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.withContext
 import io.narl.protonstream.native.NativeRuntime
+import uniffi.pstr_android.ArrangementRecord
+import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.OfflineRecord
@@ -40,6 +42,14 @@ data class AppUiState(
     val refreshing: Boolean = false,
     val query: String = "",
     val titles: List<TitleRecord> = emptyList(),
+    /**
+     * The grid: [titles] ordered, each franchise folded into one tile when
+     * [grouped], and the shelves above it. Null until the bridge has answered,
+     * when the grid falls back to [titles] as they are.
+     */
+    val arrangement: ArrangementRecord? = null,
+    val sort: LibrarySort = LibrarySort.NAME,
+    val grouped: Boolean = true,
     val shares: List<ShareRecord> = emptyList(),
     val offline: List<OfflineRecord> = emptyList(),
     val metadataSettings: MetadataSettingsRecord = MetadataSettingsRecord(
@@ -84,6 +94,12 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 .drop(1)
                 .collect { reload() }
         }
+    }
+
+    /** Reorder the grid, or fold or unfold its franchises. */
+    fun arrange(sort: LibrarySort, grouped: Boolean) {
+        mutableState.update { it.copy(sort = sort, grouped = grouped) }
+        viewModelScope.launch { reloadLibrary(mutableState.value.query) }
     }
 
     fun search(query: String) {
@@ -205,7 +221,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         val episodes = title.seasons.flatMap { it.episodes }
         changeWatch(
             episodes,
-            "${title.canonicalName ?: title.name} marked ${if (watched) "watched" else "unwatched"}",
+            "${title.displayName} marked ${if (watched) "watched" else "unwatched"}",
         ) { engine, episode, before ->
             val duration = before?.durationSecs
             engine.saveWatchState(
@@ -225,7 +241,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     fun forgetPosition(title: TitleRecord, episode: EpisodeRecord) {
         changeWatch(
             listOf(episode),
-            "${title.canonicalName ?: title.name} removed from Continue watching",
+            "${title.displayName} removed from Continue watching",
         ) { engine, target, before ->
             engine.saveWatchState(target.shareId, target.linkId, 0.0, before?.durationSecs, false)
         }
@@ -238,7 +254,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     fun removeFromHistory(title: TitleRecord, episode: EpisodeRecord) {
         changeWatch(
             listOf(episode),
-            "${episode.label} of ${title.canonicalName ?: title.name} removed from history",
+            "${episode.label} of ${title.displayName} removed from history",
         ) { engine, target, before ->
             engine.saveWatchState(target.shareId, target.linkId, 0.0, before?.durationSecs, false)
         }
@@ -444,9 +460,12 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                     // and cached: a full reload is the one place that has
                     // already paid for a walk of the offline files.
                     engine.pruneOfflineFiles()
+                    val current = mutableState.value
+                    val query = current.query.takeIf(String::isNotBlank)
                     Reloaded(
                         engine.shares(),
-                        engine.library(mutableState.value.query.takeIf(String::isNotBlank)),
+                        engine.library(query),
+                        engine.arrangement(query, current.sort, current.grouped),
                         engine.offlineFiles(),
                         engine.metadataSettings(),
                         engine.storageUsage(),
@@ -457,6 +476,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                         loading = false,
                         shares = result.shares,
                         titles = result.titles,
+                        arrangement = result.arrangement,
                         offline = result.offline,
                         metadataSettings = result.metadataSettings,
                         storage = result.storage,
@@ -469,10 +489,16 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     }
 
     private suspend fun reloadLibrary(query: String) {
+        val current = mutableState.value
         runCatching {
-            withContext(Dispatchers.IO) { NativeRuntime.engine().library(query.takeIf(String::isNotBlank)) }
-        }.onSuccess { titles -> mutableState.update { it.copy(titles = titles) } }
-            .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+            withContext(Dispatchers.IO) {
+                val engine = NativeRuntime.engine()
+                val search = query.takeIf(String::isNotBlank)
+                engine.library(search) to engine.arrangement(search, current.sort, current.grouped)
+            }
+        }.onSuccess { (titles, arrangement) ->
+            mutableState.update { it.copy(titles = titles, arrangement = arrangement) }
+        }.onFailure { error -> mutableState.update { it.copy(message = error.message) } }
     }
 
     class Factory(private val context: Context, private val workManager: WorkManager) : ViewModelProvider.Factory {
@@ -484,6 +510,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
 private data class Reloaded(
     val shares: List<ShareRecord>,
     val titles: List<TitleRecord>,
+    val arrangement: ArrangementRecord,
     val offline: List<OfflineRecord>,
     val metadataSettings: MetadataSettingsRecord,
     val storage: StorageUsageRecord,

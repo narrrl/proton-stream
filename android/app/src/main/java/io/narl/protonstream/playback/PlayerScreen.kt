@@ -302,7 +302,7 @@ fun PlayerScreen(
             NowPlaying(
                 media = key,
                 title = episode.label,
-                show = title.canonicalName ?: title.name,
+                show = title.displayName,
                 detail = episode.detail,
                 artworkUrl = title.posterUrl ?: title.backdropUrl,
                 artworkFile = episode.thumbnailSource,
@@ -425,7 +425,7 @@ fun PlayerScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        listOfNotNull(title.canonicalName ?: title.name, episode.detail.takeIf(String::isNotBlank))
+                        listOfNotNull(title.displayName, episode.detail.takeIf(String::isNotBlank))
                             .joinToString("  •  "),
                         color = Color.White.copy(alpha = 0.7f),
                         maxLines = 1,

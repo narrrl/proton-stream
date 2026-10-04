@@ -23,6 +23,9 @@ class HistoryTest {
         metadataProvider = null, metadataId = null, metadataYear = null, metadataKind = null, posterUrl = null,
         backdropUrl = null, rating = null, genres = emptyList(), providerEpisodeCount = null, externalUrl = null,
         manualMatch = false, seasons = listOf(SeasonRecord(1u, "Season 1", episodes.toList())),
+        displayName = key, wideUrl = null, formatLabel = null, seasonLabel = null, studios = emptyList(),
+        directors = emptyList(), tags = emptyList(), airing = false, nextEpisode = null, nextAiringAt = null,
+        franchise = emptyList(),
     )
 
     @Test

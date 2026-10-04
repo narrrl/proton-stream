@@ -382,45 +382,7 @@ impl Filter {
     }
 }
 
-/// What order the grid is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Sort {
-    /// By the name shown, ignoring a leading article.
-    #[default]
-    Name,
-    /// Most recently played first.
-    Recent,
-    /// Most recently given a new file first.
-    Added,
-    /// Newest first by when it aired, undated last.
-    Release,
-    /// Best rated first, unrated last.
-    Rating,
-    /// Most followed at the provider first.
-    Popularity,
-}
-
-impl Sort {
-    pub const ALL: [Self; 6] = [
-        Self::Name,
-        Self::Recent,
-        Self::Added,
-        Self::Release,
-        Self::Rating,
-        Self::Popularity,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Name => "A – Z",
-            Self::Recent => "Recently watched",
-            Self::Added => "Recently added",
-            Self::Release => "Newest",
-            Self::Rating => "Highest rated",
-            Self::Popularity => "Most popular",
-        }
-    }
-}
+pub use pstr_core::browse::Sort;
 
 /// What the library view is built from, besides the library itself.
 pub struct ViewInputs<'a> {
@@ -436,20 +398,13 @@ const SHELVES: usize = 4;
 
 impl LibraryView {
     fn refresh(&mut self, library: &Library, inputs: ViewInputs<'_>) {
-        use pstr_core::library::{Title, sort_name};
+        use pstr_core::library::Title;
 
         let built_with = (self.filter, self.sort, self.grouped, inputs.names);
         if !self.stale && self.query == inputs.query && self.built_with == Some(built_with) {
             return;
         }
         let metadata = inputs.metadata;
-        let found = |title: &Title| {
-            metadata
-                .get(&title.key)
-                .and_then(|record| record.metadata.as_ref())
-        };
-        let name = |title: &Title| ui::title_name(title, metadata, inputs.names).to_owned();
-
         if self.stale {
             let all: Vec<&Title> = library.titles.iter().collect();
             self.franchises = pstr_core::franchise::group(&all, metadata)
@@ -483,128 +438,41 @@ impl LibraryView {
                 .collect();
         }
 
-        // A search finds a title by the provider's names for it as well as
-        // the share's: a folder called `Sousou no Frieren` is found by typing
-        // "Frieren: Beyond".
-        let needle = inputs.query.trim().to_lowercase();
-        let by_files: std::collections::HashSet<*const Title> = library
-            .search(inputs.query)
+        let titles: Vec<&Title> = pstr_core::browse::search(library, metadata, inputs.query)
             .into_iter()
-            .map(|title| title as *const Title)
+            .filter(|title| self.filter.admits(title))
             .collect();
-        let mut titles: Vec<(usize, &Title)> = library
-            .titles
+        let tiles = pstr_core::browse::arrange(
+            &titles,
+            pstr_core::browse::Order {
+                sort: self.sort,
+                grouped: self.grouped,
+                names: inputs.names,
+                metadata,
+                added: inputs.added,
+            },
+        );
+        let index_of = |title: &Title| {
+            library
+                .titles
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, title))
+        };
+        // Indices into what was arranged, made indices into the library.
+        let entries: Vec<(usize, usize)> = tiles
             .iter()
-            .enumerate()
-            .filter(|(_, title)| {
-                by_files.contains(&(*title as *const Title))
-                    || found(title).is_some_and(|found| {
-                        std::iter::once(found.name.as_str())
-                            .chain(found.original_name.as_deref())
-                            .chain(
-                                found
-                                    .details
-                                    .as_ref()
-                                    .and_then(|details| details.romaji.as_deref()),
-                            )
-                            .any(|name| name.to_lowercase().contains(&needle))
-                    })
-            })
-            .filter(|(_, title)| self.filter.admits(title))
+            .filter_map(|tile| Some((index_of(titles[tile.lead])?, tile.members.len())))
             .collect();
-        titles.sort_by_cached_key(|(_, title)| sort_name(&name(title)));
-
-        // Each entry is the tile and every title it stands for.
-        let entries: Vec<(usize, Vec<usize>)> = if self.grouped {
-            let refs: Vec<&Title> = titles.iter().map(|(_, title)| *title).collect();
-            pstr_core::franchise::group(&refs, metadata)
-                .into_iter()
-                .map(|franchise| {
-                    let lead = titles[franchise.lead(&refs)].0;
-                    let members = franchise
-                        .members
-                        .iter()
-                        .map(|&member| titles[member].0)
-                        .collect();
-                    (lead, members)
-                })
-                .collect()
-        } else {
-            titles
-                .iter()
-                .map(|&(index, _)| (index, vec![index]))
-                .collect()
-        };
-        let mut entries = entries;
-        let titles_of = |members: &[usize]| -> Vec<&Title> {
-            members
-                .iter()
-                .map(|&index| &library.titles[index])
-                .collect()
-        };
-        // Every sort is stable over the name order above, so ties and the
-        // undated, unrated and unplayed keep their alphabetical order.
-        match self.sort {
-            Sort::Name => {}
-            Sort::Recent => entries.sort_by_key(|(_, members)| {
-                std::cmp::Reverse(
-                    titles_of(members)
-                        .iter()
-                        .map(|title| title.last_played())
-                        .max(),
-                )
-            }),
-            Sort::Added => entries.sort_by_key(|(_, members)| {
-                std::cmp::Reverse(
-                    titles_of(members)
-                        .iter()
-                        .filter_map(|title| inputs.added.get(&title.key))
-                        .max()
-                        .copied(),
-                )
-            }),
-            Sort::Release => entries.sort_by_cached_key(|(_, members)| {
-                std::cmp::Reverse(
-                    titles_of(members)
-                        .iter()
-                        .map(|title| pstr_core::franchise::release_key(title, metadata))
-                        // `~` is how the key says "undated"; it sorts last
-                        // here rather than first.
-                        .filter(|key| key != "~")
-                        .max(),
-                )
-            }),
-            Sort::Rating => entries.sort_by_key(|(lead, _)| {
-                std::cmp::Reverse(
-                    found(&library.titles[*lead])
-                        .and_then(|found| found.rating)
-                        .map(|rating| (rating * 100.0) as i64),
-                )
-            }),
-            Sort::Popularity => entries.sort_by_key(|(lead, _)| {
-                std::cmp::Reverse(
-                    found(&library.titles[*lead])
-                        .and_then(|found| found.details.as_ref())
-                        .and_then(|details| details.popularity),
-                )
-            }),
-        }
 
         self.folded = entries
             .iter()
-            .filter(|(_, members)| members.len() > 1)
-            .map(|(lead, members)| (*lead, members.len() - 1))
+            .filter(|(_, members)| *members > 1)
+            .map(|(lead, members)| (*lead, members - 1))
             .collect();
         self.matches = entries.into_iter().map(|(lead, _)| lead).collect();
         self.built_with = Some(built_with);
         if self.stale {
             self.history = ui::history::entries(library);
-            let index_of = |title: &Title| {
-                library
-                    .titles
-                    .iter()
-                    .position(|candidate| std::ptr::eq(candidate, title))
-            };
             self.resumable = library
                 .continue_watching()
                 .into_iter()

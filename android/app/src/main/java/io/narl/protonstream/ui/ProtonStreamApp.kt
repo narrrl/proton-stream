@@ -215,6 +215,7 @@ fun ProtonStreamApp(
                                 body,
                                 onMatchChanged = model::reloadAfterMetadataChange,
                                 onError = model::reportError,
+                                onArrange = model::arrange,
                                 )
                         }
                         val titlePane = @Composable { selected: TitleRecord ->
@@ -231,6 +232,10 @@ fun ProtonStreamApp(
                                 model::reloadAfterMetadataChange,
                                 model::setWatched,
                                 body,
+                                franchise = selected.franchise.mapNotNull { key ->
+                                    state.titles.firstOrNull { it.key == key }
+                                },
+                                onOpenTitle = { selectedTitleKey = it.key },
                                 )
                         }
                         if (maxWidth >= TWO_PANE_WIDTH) {
@@ -292,6 +297,7 @@ fun ProtonStreamApp(
                         model::clearBlockCache,
                         model::removeAllOffline,
                         body,
+                        onNamesChanged = model::reloadAfterMetadataChange,
                     )
                 }
             }

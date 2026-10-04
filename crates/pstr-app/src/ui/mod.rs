@@ -44,19 +44,7 @@ pub struct Art<'a> {
     pub names: TitleNames,
 }
 
-/// The name to show for `title`: the provider's, in the form the viewer
-/// picked, else the share's.
-pub fn title_name<'a>(
-    title: &'a Title,
-    metadata: &'a HashMap<String, MetadataRecord>,
-    names: TitleNames,
-) -> &'a str {
-    metadata
-        .get(&title.key)
-        .and_then(|record| record.metadata.as_ref())
-        .and_then(|found| found.display_name(names))
-        .unwrap_or(&title.name)
-}
+pub use pstr_core::browse::display_name as title_name;
 
 impl Art<'_> {
     /// What the provider says about one file of a title, matched on the

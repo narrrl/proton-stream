@@ -126,10 +126,11 @@ page's band. The banner, wrong in a 16:9 tile, fits those strips as drawn.
 or 16:9 stills. Covers fill their tile; a cover in a still-shaped tile is still
 fitted whole.
 
-**Names.** Settings → Appearance → *Title names*: the share's, English or
-romaji. Search matches all of them whichever is shown.
+**Names.** Settings → Appearance → *Title names*: English (the default, and
+what Android always showed), romaji, or the share's own. Search matches all
+of them whichever is shown.
 
-**Sorts.** A–Z by the shown name, recently watched, recently added (from
+**Sorts.** `pstr_core::browse`, shared by both clients. A–Z by the shown name, recently watched, recently added (from
 `node_first_seen`, which survives recrawls; files present before v10 count as
 added at 0), newest by air date, highest rated, most popular.
 
@@ -150,14 +151,18 @@ Satoshi Kon*, *From MADHOUSE*, *From MAPPA*, *From Production I.G*.
 **The title page** adds the season, studios, director and next airing episode
 to its line of facts, and the tags beside the genres.
 
-Not done: Android shows none of this yet beyond what it already drew — the
-bridge carries `TitleDetails` through a hand-picked match, and the grouping,
-shelves and sorts are in `pstr-core` ready for it, but its screens are
-unchanged. TMDB fills no details.
+**Android.** The same, through the bridge: `AndroidEngine::arrangement`
+returns the grid's tiles and the shelves as keys into `library`'s titles, and
+each `TitleRecord` carries its display name, franchise and details. The
+library's bar has a sort menu with the franchise toggle in it; the grid shows
+`+N` on a folded tile and up to three shelves above it; the title page has the
+same facts, tags and franchise row as the desktop's; *Title names* is in
+Settings → Appearance. Android's grid is always covers, so it has no
+*Library tiles* choice.
+
+Not done: TMDB fills no details.
 
 ## Phase 3 — reach
-
-- **Android**: the sorts, grouping, shelves and names above.
 
 - **Local matching** against the offline database, so only ids leave the
   machine.

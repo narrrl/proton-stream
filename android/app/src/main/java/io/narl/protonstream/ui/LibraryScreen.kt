@@ -76,7 +76,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.narl.protonstream.ui.theme.AccentProgress
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import uniffi.pstr_android.EpisodeRecord
+import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TitleType
@@ -92,6 +98,12 @@ private const val CONTINUE_WATCHING_MAX = 12
 /** One row of the continue-watching shelf: which episode, and where it sits. */
 private data class Resumable(val title: TitleRecord, val episode: EpisodeRecord, val index: Int)
 
+/** One tile of the grid: the title drawn, and how many more of its franchise it stands for. */
+private data class Tile(val title: TitleRecord, val folded: Int)
+
+/** A row above the grid: titles that share a director, a studio or a genre. */
+private data class Shelf(val label: String, val titles: List<TitleRecord>)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LibraryScreen(
@@ -105,6 +117,7 @@ internal fun LibraryScreen(
     padding: PaddingValues,
     onMatchChanged: () -> Unit = {},
     onError: (Throwable) -> Unit = {},
+    onArrange: (LibrarySort, Boolean) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     // What a long press opened a menu for: a title, or a Continue watching card.
@@ -144,6 +157,7 @@ internal fun LibraryScreen(
                     IconButton(onClick = { searching = true }) {
                         Icon(Icons.Default.Search, contentDescription = "Search library")
                     }
+                    ArrangeMenu(state.sort, state.grouped, onArrange)
                     // Pull to refresh is the gesture; the icon stays for a
                     // viewer who does not know it.
                     IconButton(onClick = onRefresh, enabled = !state.refreshing) {
@@ -183,7 +197,7 @@ internal fun LibraryScreen(
     menuFor?.let { title ->
         val playlist = title.seasons.flatMap(SeasonRecord::episodes)
         val allWatched = title.episodeCount > 0uL && title.watchedCount == title.episodeCount
-        TileMenu(title.canonicalName ?: title.name, title.caption(), onDismiss = { menuFor = null }) {
+        TileMenu(title.displayName, title.caption(), onDismiss = { menuFor = null }) {
             MenuRow(Icons.Default.PlayArrow, if (playlist.any { it.resumeAt != null }) "Resume" else "Play") {
                 onResume(title, nextUpIndex(playlist))
             }
@@ -211,7 +225,7 @@ internal fun LibraryScreen(
     }
     menuResume?.let { entry ->
         TileMenu(
-            entry.title.canonicalName ?: entry.title.name,
+            entry.title.displayName,
             entry.episode.label,
             onDismiss = { menuResume = null },
         ) {
@@ -222,6 +236,56 @@ internal fun LibraryScreen(
             }
         }
     }
+}
+
+/**
+ * The grid's order, and whether a franchise is one tile or one per title —
+ * the same choices the desktop offers beside its grid, behind one icon here
+ * because a phone's bar has room for three.
+ */
+@Composable
+private fun ArrangeMenu(sort: LibrarySort, grouped: Boolean, onArrange: (LibrarySort, Boolean) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort library")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            LibrarySort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label()) },
+                    leadingIcon = {
+                        if (option == sort) Icon(Icons.Default.Check, contentDescription = null)
+                    },
+                    onClick = {
+                        open = false
+                        onArrange(option, grouped)
+                    },
+                )
+            }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("One tile per franchise") },
+                leadingIcon = {
+                    if (grouped) Icon(Icons.Default.Check, contentDescription = null)
+                },
+                onClick = {
+                    open = false
+                    onArrange(sort, !grouped)
+                },
+            )
+        }
+    }
+}
+
+/** What each order is called. The desktop says the same. */
+private fun LibrarySort.label() = when (this) {
+    LibrarySort.NAME -> "A – Z"
+    LibrarySort.RECENT -> "Recently watched"
+    LibrarySort.ADDED -> "Recently added"
+    LibrarySort.RELEASE -> "Newest"
+    LibrarySort.RATING -> "Highest rated"
+    LibrarySort.POPULARITY -> "Most popular"
 }
 
 /**
@@ -321,6 +385,18 @@ private fun LibraryGrid(
     onTitleMenu: (TitleRecord) -> Unit,
     onResumeMenu: (Resumable) -> Unit,
 ) {
+    // The arrangement names titles by key; before it has arrived, the titles
+    // as they came are the grid.
+    val byKey = remember(state.titles) { state.titles.associateBy { it.key } }
+    val tiles = remember(state.titles, state.arrangement) {
+        state.arrangement?.tiles?.mapNotNull { tile -> byKey[tile.key]?.let { Tile(it, tile.folded.toInt()) } }
+            ?: state.titles.map { Tile(it, 0) }
+    }
+    val shelves = remember(state.titles, state.arrangement) {
+        state.arrangement?.shelves.orEmpty()
+            .map { shelf -> Shelf(shelf.label, shelf.keys.mapNotNull(byKey::get)) }
+            .filter { it.titles.isNotEmpty() }
+    }
     // Posters, three across on a phone. Cropped backdrops at full width fitted
     // two titles to a screen, which is a library read one row at a time.
     LazyVerticalGrid(
@@ -363,12 +439,42 @@ private fun LibraryGrid(
                     }
                 }
             }
-            item(key = "library-heading", span = { GridItemSpan(maxLineSpan) }) {
-                Text("All titles", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+        }
+        if (state.query.isBlank()) {
+            shelves.forEach { shelf ->
+                item(key = "shelf-${shelf.label}", span = { GridItemSpan(maxLineSpan) }) {
+                    Column {
+                        Text(shelf.label, style = MaterialTheme.typography.titleMedium)
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(top = 10.dp),
+                        ) {
+                            items(shelf.titles, key = { it.key }) { title ->
+                                PosterTile(
+                                    title,
+                                    onClick = { onTitle(title) },
+                                    onLongClick = { onTitleMenu(title) },
+                                    modifier = Modifier.width(SHELF_TILE_WIDTH),
+                                    shared = false,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (resumable.isNotEmpty() || shelves.isNotEmpty()) {
+                item(key = "library-heading", span = { GridItemSpan(maxLineSpan) }) {
+                    Text("All titles", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                }
             }
         }
-        items(state.titles, key = { it.key }) { title ->
-            PosterTile(title, onClick = { onTitle(title) }, onLongClick = { onTitleMenu(title) })
+        items(tiles, key = { it.title.key }) { tile ->
+            PosterTile(
+                tile.title,
+                onClick = { onTitle(tile.title) },
+                onLongClick = { onTitleMenu(tile.title) },
+                folded = tile.folded,
+            )
         }
     }
 }
@@ -399,6 +505,9 @@ private fun LibrarySkeleton() {
     }
 }
 
+/** A shelf's covers: a little narrower than the grid's, so the row reads as a row. */
+private val SHELF_TILE_WIDTH = 112.dp
+
 /** Enough placeholder tiles to fill a tablet's first screen. */
 private const val SKELETON_TILES = 18
 
@@ -421,7 +530,7 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
     Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(MaterialTheme.shapes.large)) {
         RemoteArtwork(
             title.backdropUrl ?: title.posterUrl,
-            title.canonicalName ?: title.name,
+            title.displayName,
             Modifier.fillMaxSize(),
             fallback = title.thumbnailSource,
             labelled = false,
@@ -433,7 +542,7 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
         )
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
             Text(
-                title.canonicalName ?: title.name,
+                title.displayName,
                 style = MaterialTheme.typography.headlineMedium,
                 color = Color.White,
                 maxLines = 2,
@@ -481,7 +590,7 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.medium)) {
             RemoteArtwork(
                 entry.episode.stillUrl ?: entry.title.backdropUrl,
-                entry.title.canonicalName ?: entry.title.name,
+                entry.title.displayName,
                 Modifier.fillMaxSize(),
                 fallback = entry.episode.thumbnailSource,
             )
@@ -493,7 +602,7 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
             }
         }
         Text(
-            entry.title.canonicalName ?: entry.title.name,
+            entry.title.displayName,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -509,23 +618,55 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
     }
 }
 
-/** One title: its poster, and its name and size under it rather than in a card. */
+/**
+ * One title: its poster, and its name and size under it rather than in a card.
+ *
+ * [folded] is how many more titles of its franchise the tile stands for, said
+ * in the corner. [shared] is whether the poster grows into the title page —
+ * only one copy of a title on screen can, and a shelf may hold the same title
+ * as the grid.
+ */
 @Composable
-private fun PosterTile(title: TitleRecord, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun PosterTile(
+    title: TitleRecord,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    folded: Int = 0,
+    shared: Boolean = true,
+) {
     Column(
-        Modifier
+        modifier
             .clip(MaterialTheme.shapes.medium)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
-        RemoteArtwork(
-            title.posterUrl ?: title.backdropUrl,
-            title.canonicalName ?: title.name,
-            Modifier.sharedArt(title.key).fillMaxWidth().aspectRatio(2f / 3f).clip(MaterialTheme.shapes.medium),
-            fallback = title.thumbnailSource,
-        )
+        Box {
+            RemoteArtwork(
+                title.posterUrl ?: title.backdropUrl,
+                title.displayName,
+                (if (shared) Modifier.sharedArt(title.key) else Modifier)
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f)
+                    .clip(MaterialTheme.shapes.medium),
+                fallback = title.thumbnailSource,
+            )
+            if (folded > 0) {
+                Text(
+                    "+$folded",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Text(
-            title.canonicalName ?: title.name,
+            title.displayName,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,

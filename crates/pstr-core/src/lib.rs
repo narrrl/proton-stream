@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod appearance;
+pub mod browse;
 pub mod catalog;
 pub mod chapters;
 pub mod config;

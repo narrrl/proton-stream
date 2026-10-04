@@ -25,12 +25,15 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import uniffi.pstr_android.ArrangementRecord
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.OfflineRecord
 import uniffi.pstr_android.PaletteRecord
 import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.ShareRecord
+import uniffi.pstr_android.ShelfRecord
 import uniffi.pstr_android.StorageUsageRecord
+import uniffi.pstr_android.TileRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TitleType
 
@@ -129,7 +132,7 @@ class ScreenshotTest {
 
     @Test
     fun `a title with seasons`() = capture("title-phone") {
-        TitleScreen(SERIES, true, { _, _ -> }, {}, {}, {}, { _, _ -> }, PaddingValues())
+        TitleScreen(SERIES, true, { _, _ -> }, {}, {}, {}, { _, _ -> }, PaddingValues(), franchise = listOf(SERIES, SEQUEL))
     }
 
     @Test
@@ -250,6 +253,17 @@ class ScreenshotTest {
             externalUrl = null,
             manualMatch = false,
             seasons = seasons,
+            displayName = name,
+            wideUrl = null,
+            formatLabel = null,
+            seasonLabel = null,
+            studios = emptyList(),
+            directors = emptyList(),
+            tags = emptyList(),
+            airing = false,
+            nextEpisode = null,
+            nextAiringAt = null,
+            franchise = emptyList(),
         )
 
         val SERIES = title(
@@ -260,7 +274,18 @@ class ScreenshotTest {
                 SeasonRecord(2u, "Season 2", (1u..3u).map { episode(2u, it, progress = if (it == 1u) 0.4 else null) }),
             ),
             overview = "A doctor in a countryside clinic is reborn as the child of the idol he followed.",
+        ).copy(
+            formatLabel = "TV",
+            seasonLabel = "Spring 2023",
+            studios = listOf("Doga Kobo"),
+            directors = listOf("Daisuke Hiramaki"),
+            tags = listOf("Idol", "Reincarnation"),
+            franchise = listOf("oshi-no-ko", "oshi-no-ko-film"),
         )
+
+        /** The rest of [SERIES]'s franchise, for the title page's row of it. */
+        val SEQUEL = title("oshi-no-ko-film", "Oshi no Ko: The Final Act", listOf(SeasonRecord(null, "Film", listOf(episode(1u, 1u)))))
+            .copy(kind = TitleType.FILM, year = 2024u, formatLabel = "Film", franchise = SERIES.franchise)
 
         val FILM = title("akira", "Akira", listOf(SeasonRecord(null, "Film", listOf(episode(1u, 1u)))))
             .copy(kind = TitleType.FILM, year = 1988u)
@@ -272,6 +297,14 @@ class ScreenshotTest {
                 SERIES,
                 title("ano-hana", "Ano Hi Mita Hana no Namae o Bokutachi wa Mada Shiranai.", listOf(SeasonRecord(1u, "Season 1", (1u..11u).map { episode(1u, it) }))),
                 title("bleach", "Bleach", listOf(SeasonRecord(1u, "Season 1", (1u..2u).map { episode(1u, it) }))),
+            ),
+            // Bleach stands for one more title of its franchise, and one shelf
+            // sits above the grid: what the bridge's arrangement would give.
+            arrangement = ArrangementRecord(
+                tiles = listOf("akira", "ano-hana", "bleach", "oshi-no-ko").map {
+                    TileRecord(it, if (it == "bleach") 1u else 0u)
+                },
+                shelves = listOf(ShelfRecord("From MAPPA", listOf("oshi-no-ko", "bleach", "akira"))),
             ),
             shares = listOf(
                 ShareRecord("anime", "anime", true),

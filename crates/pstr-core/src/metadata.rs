@@ -240,11 +240,13 @@ impl TitleMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TitleNames {
-    /// The folder's — what the share calls it. The default, because it is the
-    /// one name that is there whether or not anything matched.
-    #[default]
+    /// The folder's — what the share calls it.
     Library,
-    /// The provider's English title, where it has one.
+    /// The provider's English title, where it has one. The default, because
+    /// it is what Android always showed, and a folder name is whatever an
+    /// uploader typed — `Kaijuu 8-gou`, `Fate Stay Night - Heaven s Feel -
+    /// THE MOVIE I presage flower`.
+    #[default]
     English,
     /// The provider's romaji title.
     Romaji,

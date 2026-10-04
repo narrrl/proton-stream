@@ -73,7 +73,9 @@ import io.narl.protonstream.ui.theme.EdgedButton
 import io.narl.protonstream.ui.theme.QuietButton
 import io.narl.protonstream.ui.theme.TonalButton
 import io.narl.protonstream.ui.theme.solid
+import androidx.compose.foundation.border
 import uniffi.pstr_android.TitleRecord
+import uniffi.pstr_android.TitleType
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.MatchRecord
@@ -95,6 +97,9 @@ internal fun TitleScreen(
     onMetadataChanged: () -> Unit,
     onSetWatched: (EpisodeRecord, Boolean) -> Unit,
     padding: PaddingValues,
+    /** Every title of its franchise, in release order, this one included. */
+    franchise: List<TitleRecord> = emptyList(),
+    onOpenTitle: (TitleRecord) -> Unit = {},
 ) {
     val context = LocalContext.current
     var showMatch by remember(title.key) { mutableStateOf(false) }
@@ -165,7 +170,7 @@ internal fun TitleScreen(
                 Box(Modifier.sharedArt(title.key).fillMaxWidth().height(backdropHeight)) {
                     RemoteArtwork(
                         title.backdropUrl ?: title.posterUrl,
-                        title.canonicalName ?: title.name,
+                        title.displayName,
                         Modifier.fillMaxSize(),
                         fallback = title.thumbnailSource,
                         labelled = false,
@@ -192,21 +197,40 @@ internal fun TitleScreen(
             }
             item(key = "heading") {
                 Column(Modifier.padding(horizontal = side + 16.dp)) {
-                    Text(title.canonicalName ?: title.name, style = MaterialTheme.typography.headlineMedium)
-                    title.originalName?.takeIf { it != title.canonicalName }?.let {
+                    Text(title.displayName, style = MaterialTheme.typography.headlineMedium)
+                    // The other names it goes by: the share's when the shown one
+                    // is the provider's, and the original-language one.
+                    listOfNotNull(
+                        title.name.takeIf { it != title.displayName },
+                        title.originalName?.takeIf { it != title.displayName && it != title.canonicalName },
+                    ).joinToString("  ·  ").takeIf(String::isNotEmpty)?.let {
                         Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text(
                         listOfNotNull(
-                            (title.metadataYear ?: title.year)?.toString(),
+                            title.formatLabel,
+                            title.seasonLabel ?: (title.metadataYear ?: title.year)?.toString(),
                             title.rating?.let { "★ %.1f".format(it) },
-                            title.genres.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
                             "${title.watchedCount} of ${title.episodeCount} watched".takeIf { title.episodeCount > 1uL },
                         ).joinToString("  ·  "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
                     )
+                    // Who made it, and whether more is coming — the desktop's
+                    // line of facts, on a line of its own so neither wraps.
+                    listOfNotNull(
+                        title.studios.takeIf { it.isNotEmpty() }?.take(2)?.joinToString(", "),
+                        title.directors.firstOrNull()?.let { "dir. $it" },
+                        airingNote(title),
+                    ).joinToString("  ·  ").takeIf(String::isNotEmpty)?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
                     // The one thing the page is for, full width and naming what it
                     // will play: "Resume" alone left the viewer guessing which
                     // episode of forty it meant.
@@ -271,6 +295,17 @@ internal fun TitleScreen(
                                 .clickable { overviewOpen = !overviewOpen },
                         )
                     }
+                    // Genres as chips, then the provider's tags quieter after
+                    // them: a tag is its community describing it, not what it
+                    // is filed as.
+                    if (title.genres.isNotEmpty() || title.tags.isNotEmpty()) {
+                        Text(
+                            (title.genres + title.tags.take(4)).joinToString("  ·  "),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
+                    }
                     // Said plainly, because it changes what a re-match will do: a
                     // hand-picked match is not overwritten by an automatic pass.
                     if (title.manualMatch) {
@@ -280,6 +315,25 @@ internal fun TitleScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 8.dp),
                         )
+                    }
+                }
+            }
+            if (franchise.size > 1) {
+                item(key = "franchise") {
+                    Column(Modifier.padding(top = 12.dp)) {
+                        Text(
+                            "In this franchise",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = side + 16.dp),
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(start = side + 16.dp, end = side + 16.dp, top = 10.dp),
+                        ) {
+                            items(franchise, key = { it.key }) { member ->
+                                FranchiseTile(member, here = member.key == title.key) { onOpenTitle(member) }
+                            }
+                        }
                     }
                 }
             }
@@ -334,6 +388,68 @@ internal fun TitleScreen(
             onError = onPreferenceError,
         )
     }
+}
+
+/**
+ * One part of the franchise: its cover, what it is and when. This title's own
+ * is marked rather than left out, so the row says where it sits in the story.
+ */
+@Composable
+private fun FranchiseTile(title: TitleRecord, here: Boolean, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .width(96.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(enabled = !here, onClick = onClick),
+    ) {
+        RemoteArtwork(
+            title.posterUrl ?: title.backdropUrl,
+            title.displayName,
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(MaterialTheme.shapes.medium)
+                .then(
+                    if (here) {
+                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)
+                    } else {
+                        Modifier
+                    },
+                ),
+            fallback = title.thumbnailSource,
+        )
+        Text(
+            title.displayName,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (here) FontWeight.SemiBold else null,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        Text(
+            listOfNotNull(
+                title.formatLabel ?: if (title.kind == TitleType.FILM) "Film" else "Series",
+                (title.metadataYear ?: title.year)?.toString(),
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * "Episode 7 on Sat 11 Oct" while one is due, "Airing" while it is airing with
+ * no date yet, else nothing.
+ */
+private fun airingNote(title: TitleRecord): String? {
+    val at = title.nextAiringAt
+    val episode = title.nextEpisode
+    if (at != null && episode != null) {
+        val day = java.time.Instant.ofEpochSecond(at).atZone(java.time.ZoneId.systemDefault())
+        return "episode $episode on " + day.format(java.time.format.DateTimeFormatter.ofPattern("EEE d MMM"))
+    }
+    return if (title.airing) "airing" else null
 }
 
 /** How wide the page's text and controls run on a window wider than a phone. */

@@ -145,7 +145,7 @@ private fun HistoryRow(entry: Played, onPlay: () -> Unit, onTitle: () -> Unit, o
         }
         Column(Modifier.weight(1f).clickable(onClick = onTitle).padding(horizontal = 12.dp, vertical = 4.dp)) {
             Text(
-                entry.title.canonicalName ?: entry.title.name,
+                entry.title.displayName,
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

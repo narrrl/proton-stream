@@ -74,7 +74,7 @@ internal fun DownloadsScreen(
         state.offline
             .groupBy { shows["${it.shareId}/${it.linkId}"] }
             .map { (title, files) ->
-                OfflineGroup(title?.let { it.canonicalName ?: it.name } ?: "Not in the library", title, files)
+                OfflineGroup(title?.displayName ?: "Not in the library", title, files)
             }
             .sortedBy { it.name }
     }
