@@ -55,19 +55,26 @@ pub trait SecretStore: Send + Sync {
 }
 
 /// The desktop OS credential store.
+///
+/// A value too long for one entry is split across several; see
+/// [`ENTRY_UNITS`].
 #[cfg(not(target_os = "android"))]
 #[derive(Debug, Default)]
 pub struct KeyringSecretStore;
 
+/// One credential-store entry per key, with no splitting.
 #[cfg(not(target_os = "android"))]
-impl KeyringSecretStore {
+struct KeyringEntries;
+
+#[cfg(not(target_os = "android"))]
+impl KeyringEntries {
     fn entry(key: &str) -> Result<keyring::Entry> {
         Ok(keyring::Entry::new(KEYRING_SERVICE, key)?)
     }
 }
 
 #[cfg(not(target_os = "android"))]
-impl SecretStore for KeyringSecretStore {
+impl SecretStore for KeyringEntries {
     fn set(&self, key: &str, value: &str) -> Result<()> {
         Self::entry(key)?.set_password(value)?;
         Ok(())
@@ -85,6 +92,205 @@ impl SecretStore for KeyringSecretStore {
         match Self::entry(key)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(error.into()),
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl SecretStore for KeyringSecretStore {
+    fn set(&self, key: &str, value: &str) -> Result<()> {
+        chunked::set(&KeyringEntries, key, value)
+    }
+
+    fn get(&self, key: &str) -> Result<Option<String>> {
+        chunked::get(&KeyringEntries, key)
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        chunked::delete(&KeyringEntries, key)
+    }
+}
+
+/// The most UTF-16 code units one credential-store entry is given.
+///
+/// Windows caps a credential's blob at 2560 bytes, and `keyring` stores it as
+/// UTF-16: 1280 units. A share secret is far below that, but the account
+/// session — tokens, scopes, the mailbox password and a salt per key — can
+/// pass it, and failing to store a refreshed token signs the viewer out at
+/// the next launch. The margin is for the header.
+#[cfg(any(not(target_os = "android"), test))]
+const ENTRY_UNITS: usize = 1200;
+
+/// Splitting a long secret across several entries of an underlying store.
+///
+/// A short value is one entry, exactly as before splitting existed, so every
+/// secret already stored still reads. A long one is written as `key#0`,
+/// `key#1`, … with `key` itself holding [`HEADER`] and the count. The parts go
+/// first and the header last, so a reader never finds a header naming parts
+/// that are not there yet.
+#[cfg(any(not(target_os = "android"), test))]
+mod chunked {
+    use super::{ENTRY_UNITS, SecretStore};
+    use crate::error::Result;
+
+    /// Marks a split value. A short value that happens to start with it is
+    /// split too, so it cannot be mistaken for a header.
+    const HEADER: &str = "pstr-chunked:";
+
+    fn part(key: &str, index: usize) -> String {
+        format!("{key}#{index}")
+    }
+
+    fn parts_of(header: &str) -> Option<usize> {
+        header.strip_prefix(HEADER)?.parse().ok()
+    }
+
+    /// `value` cut into pieces of at most [`ENTRY_UNITS`] UTF-16 units, never
+    /// inside a character.
+    fn split(value: &str) -> Vec<&str> {
+        let mut pieces = Vec::new();
+        let mut start = 0;
+        let mut units = 0;
+        for (at, ch) in value.char_indices() {
+            if units + ch.len_utf16() > ENTRY_UNITS {
+                pieces.push(&value[start..at]);
+                start = at;
+                units = 0;
+            }
+            units += ch.len_utf16();
+        }
+        pieces.push(&value[start..]);
+        pieces
+    }
+
+    pub(super) fn set(store: &dyn SecretStore, key: &str, value: &str) -> Result<()> {
+        let before = store.get(key)?.as_deref().and_then(parts_of).unwrap_or(0);
+        let fits = value.encode_utf16().count() <= ENTRY_UNITS && !value.starts_with(HEADER);
+        let written = if fits {
+            store.set(key, value)?;
+            0
+        } else {
+            let pieces = split(value);
+            for (index, piece) in pieces.iter().enumerate() {
+                store.set(&part(key, index), piece)?;
+            }
+            store.set(key, &format!("{HEADER}{}", pieces.len()))?;
+            pieces.len()
+        };
+        for index in written..before {
+            store.delete(&part(key, index))?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn get(store: &dyn SecretStore, key: &str) -> Result<Option<String>> {
+        let Some(value) = store.get(key)? else {
+            return Ok(None);
+        };
+        let Some(count) = parts_of(&value) else {
+            return Ok(Some(value));
+        };
+        let mut joined = String::new();
+        for index in 0..count {
+            // A part gone missing is a value that no longer exists whole;
+            // half of a token is worse than none.
+            let Some(piece) = store.get(&part(key, index))? else {
+                return Ok(None);
+            };
+            joined.push_str(&piece);
+        }
+        Ok(Some(joined))
+    }
+
+    pub(super) fn delete(store: &dyn SecretStore, key: &str) -> Result<()> {
+        let count = store.get(key)?.as_deref().and_then(parts_of).unwrap_or(0);
+        store.delete(key)?;
+        for index in 0..count {
+            store.delete(&part(key, index))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::collections::BTreeMap;
+
+        use parking_lot::Mutex;
+
+        use super::*;
+
+        /// An underlying store that refuses what Windows would.
+        #[derive(Default)]
+        struct Limited(Mutex<BTreeMap<String, String>>);
+
+        impl SecretStore for Limited {
+            fn set(&self, key: &str, value: &str) -> Result<()> {
+                assert!(
+                    value.encode_utf16().count() <= 1280,
+                    "{key} is too long for one entry"
+                );
+                self.0.lock().insert(key.to_owned(), value.to_owned());
+                Ok(())
+            }
+            fn get(&self, key: &str) -> Result<Option<String>> {
+                Ok(self.0.lock().get(key).cloned())
+            }
+            fn delete(&self, key: &str) -> Result<()> {
+                self.0.lock().remove(key);
+                Ok(())
+            }
+        }
+
+        #[test]
+        fn a_short_secret_is_one_entry_as_it_always_was() {
+            let store = Limited::default();
+            set(&store, "share-a", "fragment").unwrap();
+            assert_eq!(store.0.lock().len(), 1);
+            assert_eq!(get(&store, "share-a").unwrap().as_deref(), Some("fragment"));
+        }
+
+        #[test]
+        fn a_secret_longer_than_an_entry_round_trips() {
+            let store = Limited::default();
+            let long: String = "aé😀".repeat(1500);
+            set(&store, "proton-account", &long).unwrap();
+            assert!(store.0.lock().len() > 2);
+            assert_eq!(get(&store, "proton-account").unwrap(), Some(long));
+        }
+
+        #[test]
+        fn a_shorter_value_leaves_no_parts_of_the_longer_one_behind() {
+            let store = Limited::default();
+            set(&store, "k", &"x".repeat(5000)).unwrap();
+            set(&store, "k", &"y".repeat(1300)).unwrap();
+            assert_eq!(store.0.lock().len(), 3);
+            set(&store, "k", "short").unwrap();
+            assert_eq!(store.0.lock().len(), 1);
+            assert_eq!(get(&store, "k").unwrap().as_deref(), Some("short"));
+        }
+
+        #[test]
+        fn a_value_that_looks_like_a_header_is_not_taken_for_one() {
+            let store = Limited::default();
+            set(&store, "k", "pstr-chunked:3").unwrap();
+            assert_eq!(get(&store, "k").unwrap().as_deref(), Some("pstr-chunked:3"));
+        }
+
+        #[test]
+        fn deleting_a_split_secret_deletes_every_part() {
+            let store = Limited::default();
+            set(&store, "k", &"x".repeat(5000)).unwrap();
+            delete(&store, "k").unwrap();
+            assert!(store.0.lock().is_empty());
+            assert_eq!(get(&store, "k").unwrap(), None);
+        }
+
+        #[test]
+        fn a_split_secret_missing_a_part_reads_as_absent() {
+            let store = Limited::default();
+            set(&store, "k", &"x".repeat(5000)).unwrap();
+            store.delete("k#1").unwrap();
+            assert_eq!(get(&store, "k").unwrap(), None);
         }
     }
 }

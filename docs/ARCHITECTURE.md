@@ -108,9 +108,18 @@ an edge case.
   session — tokens, the mailbox password that unlocks the key chain, and the
   key salts a refreshed token can no longer fetch — is one blob in the same
   credential store, under `proton-account`. Refresh tokens are single-use, so
-  every refresh is written back. The account writes exactly one thing: the
-  watch-history files on its own `proton-stream` device (`pstr-core::sync`).
-  Folders of the account added as shares are only ever read.
+  every refresh is written back. On the desktop the blob can outgrow one
+  credential entry — Windows caps one at 1280 UTF-16 units — so
+  `KeyringSecretStore` splits a long value across `key#0`, `key#1`, … under a
+  header in `key`. The account writes exactly one kind of thing: the
+  watch-history files on its own `proton-stream` device (`pstr-core::sync`),
+  including trashing the file of an installation quiet for 90 days once its
+  history is merged into this one's. Folders of the account added as shares
+  are only ever read.
+- A CAPTCHA in front of a sign-in is shown in a webview, because the page
+  reports success by posting a message to its host. On the desktop that is a
+  child process of the app (`pstr-app::verify`, wry): WebKitGTK on Linux,
+  WebView2 on Windows. It may only navigate to `https://*.proton.me`.
 - Signature verification is absent on the visitor path by design — an anonymous
   visitor cannot read `core/v4/keys/all` to resolve a signer. Decryption still
   proves the bytes were encrypted to the node key. Nodes come back with nothing
@@ -125,10 +134,10 @@ an edge case.
 | Share list | config dir, `shares.json` | **No** — atomic writes, never overwritten when unparseable |
 | Share secrets | OS credential store | **No** |
 | Catalog | data dir, `catalog.db` | Yes — recrawl |
-| Watch state | same DB, own table | **No** — deliberately survives a recrawl; with an account, mirrored to its Drive |
+| Watch state | same DB, own table | **No** — deliberately survives a recrawl and removing the share; with an account, mirrored to its Drive |
 | Proton session | OS credential store, `proton-account` | No — sign in again |
 | Sync identity | config dir, `sync.json` | A new id if missing — the old history file is still read |
-| Watch history in Drive | device `proton-stream`, `watch-history/<id>.json` | One file per installation; merged per episode, newer wins |
+| Watch history in Drive | device `proton-stream`, `watch-history/<id>.json` | One file per installation; merged per episode, newer wins. A file unwritten for 90 days is retired by the next installation to sync, after merging it; a live installation whose file was retired writes it again |
 | Block cache | cache dir, `blocks/` | Yes — must work correctly after deletion |
 | Poster thumbnails | cache dir, `thumbs/` | Yes — refetched per file, one small decrypt each; stored scaled to 640 px |
 | Provider artwork | cache dir, `posters/` | Yes — refetched by URL; stored scaled to 640 px |

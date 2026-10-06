@@ -40,6 +40,7 @@ are not Arch.
 |---|---|
 | **libmpv ≥ 0.34** | The player. `pstr-player` links it directly and drives it through `stream_cb`; nothing here shells out to `mpv(1)`, so packages depend on the library, not the player binary. |
 | **libsecret / Secret Service** | The share URL fragment and the custom password are secrets and live in the OS credential store, never in `shares.json`. |
+| **WebKitGTK 4.1** | The window Proton's CAPTCHA is shown in when it gates a sign-in (`pstr-app::verify`). The page reports success by posting a message to its host, so the system browser cannot stand in for it. |
 | **libGL, libxkbcommon, libX11, libwayland-client** | eframe on glow, with both display backends compiled in. |
 
 Not dependencies, deliberately: **SQLite** (rusqlite is `bundled`) and
@@ -47,11 +48,13 @@ Not dependencies, deliberately: **SQLite** (rusqlite is `bundled`) and
 
 Per packager that is:
 
-- Debian — `libmpv2 | libmpv1` (trixie | bookworm), `libsecret-1-0`, `libgl1`,
-  `libxkbcommon0`, `libx11-6`, `libwayland-client0`.
-- RPM — `mpv-libs`, `libsecret`, `mesa-libGL`, `libxkbcommon`, `libX11`,
-  `libwayland-client`.
-- Arch — `mpv` (which carries both `libmpv.so` and its headers), `libsecret`.
+- Debian — `libmpv2 | libmpv1` (trixie | bookworm), `libsecret-1-0`,
+  `libwebkit2gtk-4.1-0`, `libgl1`, `libxkbcommon0`, `libx11-6`,
+  `libwayland-client0`.
+- RPM — `mpv-libs`, `libsecret`, `webkit2gtk4.1`, `mesa-libGL`, `libxkbcommon`,
+  `libX11`, `libwayland-client`.
+- Arch — `mpv` (which carries both `libmpv.so` and its headers), `libsecret`,
+  `webkit2gtk-4.1`.
 
 The `.deb` and `.rpm` are built from binaries compiled on the packaging host, so
 they inherit its glibc. A package built on Arch installs on Fedora rawhide but
@@ -87,6 +90,13 @@ yourself from `dumpbin /exports libmpv-2.dll`.
 There is no static libmpv worth shipping, so **"standalone exe" means the exe
 plus `libmpv-2.dll` beside it** — that pair, plus `pstr.exe` and the README, is
 what the portable `.zip` contains and what the `.msi` installs.
+
+The cross build adds `WebView2Loader.dll` to that set. The CAPTCHA window runs
+on WebView2, and under `-gnu` `webview2-com-sys` links its loader as a DLL —
+without it beside the exe, the app does not start at all. `build-windows.sh`
+takes it from that crate's build output. An `-msvc` build links the loader
+statically and needs no DLL. The WebView2 *runtime* is part of Windows 10 and
+11 and is not shipped.
 
 The MSI needs the WiX toolset; the script installs it (`dotnet tool install
 --global wix`) and adds the UI extension if they are missing. It installs to

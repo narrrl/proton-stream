@@ -31,6 +31,7 @@ ExclusiveArch:  x86_64
 # `bundled`) and TLS is rustls, so neither shows up here.
 Requires:       mpv-libs >= 0.34
 Requires:       libsecret
+Requires:       webkit2gtk4.1
 Requires:       mesa-libGL
 Requires:       libxkbcommon
 Requires:       libX11

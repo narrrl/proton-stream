@@ -35,6 +35,7 @@ use pstr_core::library::{Library, Title, TitleKind};
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId};
 use pstr_core::prefs::PlaybackPrefs;
 use pstr_core::proton_drive_rs::ThumbnailType;
+use pstr_core::proton_sdk::api::HumanVerificationCredential;
 use pstr_core::proton_sdk::ids::{LinkId, NodeUid, VolumeId};
 use pstr_core::shares::AccountFolder;
 use pstr_core::sync::{SyncReport, WatchSync};
@@ -704,17 +705,38 @@ impl Engine {
     pub fn sign_in(&self, username: String, password: String) {
         let engine = self.clone();
         self.runtime.spawn(async move {
-            match engine.accounts.sign_in(&username, &password, None).await {
-                Ok(step) => engine.sign_in_step(step),
-                Err(pstr_core::Error::HumanVerification(_)) => {
-                    engine.emit(Event::SignInFailed(
-                        "Proton wants a CAPTCHA before it accepts this sign-in, and this app \
-                         cannot show one. Try again later, or sign in once from the Android app."
-                            .to_owned(),
-                    ));
+            let mut verification = None;
+            // Twice at most: once as asked, and once more with a solved
+            // CAPTCHA if Proton wanted one. A second gate after that is
+            // Proton refusing the answer, not a puzzle worth repeating.
+            for _ in 0..2 {
+                match engine
+                    .accounts
+                    .sign_in(&username, &password, verification.take())
+                    .await
+                {
+                    Ok(step) => return engine.sign_in_step(step),
+                    Err(pstr_core::Error::HumanVerification(challenge)) => {
+                        let url = challenge.verification_url();
+                        let token = tokio::task::spawn_blocking(move || crate::verify::solve(&url))
+                            .await
+                            .ok()
+                            .flatten();
+                        let Some(token) = token else {
+                            return engine.emit(Event::SignInFailed(
+                                "Proton wants you to confirm you are human before it accepts \
+                                 this sign-in. Sign in again to solve the puzzle."
+                                    .to_owned(),
+                            ));
+                        };
+                        verification = Some(HumanVerificationCredential::captcha(token));
+                    }
+                    Err(error) => return engine.emit(Event::SignInFailed(error.to_string())),
                 }
-                Err(error) => engine.emit(Event::SignInFailed(error.to_string())),
             }
+            engine.emit(Event::SignInFailed(
+                "Proton did not accept the verification. Try again in a while.".to_owned(),
+            ));
         });
     }
 
@@ -837,6 +859,27 @@ impl Engine {
                     tracing::warn!("sync watch history: {error}");
                     engine.emit(Event::SyncFailed(error.to_string()));
                 }
+            }
+        });
+    }
+
+    /// Sync once more before the app exits, waiting at most `timeout`.
+    ///
+    /// Where the viewer stopped is what another device wants next, and the
+    /// timer would not get to it. Bounded, because quitting must not hang on
+    /// a slow network; a sync cut short loses nothing, the next launch sends
+    /// the same table.
+    pub fn sync_before_exit(&self, timeout: std::time::Duration) {
+        let (Some(account), Some(sync)) = (self.account.lock().clone(), self.watch_sync.clone())
+        else {
+            return;
+        };
+        let catalog = Arc::clone(&self.catalog);
+        self.runtime.block_on(async move {
+            match tokio::time::timeout(timeout, sync.sync(&account, &catalog)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!("sync watch history on exit: {error}"),
+                Err(_) => tracing::warn!("sync watch history on exit: timed out"),
             }
         });
     }

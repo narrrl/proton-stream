@@ -23,7 +23,7 @@ license=('MIT')
 # mpv carries libmpv.so plus its headers on Arch, so it is both the runtime and
 # the build dependency. libsecret is the Secret Service side of the keyring —
 # the share fragment and custom password never touch shares.json.
-depends=('mpv' 'libsecret' 'hicolor-icon-theme')
+depends=('mpv' 'libsecret' 'webkit2gtk-4.1' 'hicolor-icon-theme')
 makedepends=('cargo')
 optdepends=('gnome-keyring: credential storage via Secret Service'
             'kwallet: credential storage via Secret Service on KDE')

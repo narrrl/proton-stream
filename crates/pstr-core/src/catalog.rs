@@ -513,19 +513,17 @@ impl Catalog {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
-    /// Drop everything a share contributed, watch positions included.
+    /// Drop everything a share contributed except where it was watched.
     ///
-    /// Unlike a recrawl — which replaces rows and deliberately leaves watch
-    /// state alone — this is the viewer saying they are done with the share.
-    /// Keeping positions for files they can no longer reach would only leave
-    /// the "continue watching" row pointing at nothing.
+    /// Watch state stays, as through a recrawl. It is history, and not only
+    /// this device's: with an account signed in, the next sync would bring it
+    /// straight back from the other devices' files, so deleting it here would
+    /// only make it flicker. Nothing shows it — the library pairs positions
+    /// with files, and the files are gone — until the share is added again,
+    /// when it picks up where it left off.
     pub fn remove_share(&mut self, share_id: &str) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
-        tx.execute(
-            "DELETE FROM watch_state WHERE share_id = ?1",
-            params![share_id],
-        )?;
         tx.execute(
             "DELETE FROM offline_files WHERE share_id = ?1",
             params![share_id],
@@ -2428,6 +2426,38 @@ mod tests {
         let rows = build_rows("share", &nodes);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].link_id, "film");
+    }
+
+    #[test]
+    fn removing_a_share_keeps_its_watch_state_out_of_sight() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .replace_share("s1", &[file("s1", "a", "Show S01E01.mkv")])
+            .expect("crawl");
+        let state = WatchState {
+            position_secs: 120.0,
+            duration_secs: Some(1440.0),
+            watched: false,
+            updated_at: 10,
+        };
+        catalog.set_watch_state("s1", "a", &state).expect("set");
+
+        catalog.remove_share("s1").expect("remove");
+        let library = crate::library::Library::build(
+            catalog.all_files().expect("files"),
+            &catalog.all_watch_states().expect("watch"),
+        );
+        assert!(library.titles.is_empty());
+        assert_eq!(catalog.watch_state("s1", "a").expect("read"), Some(state));
+
+        catalog
+            .replace_share("s1", &[file("s1", "a", "Show S01E01.mkv")])
+            .expect("re-add");
+        let library = crate::library::Library::build(
+            catalog.all_files().expect("files"),
+            &catalog.all_watch_states().expect("watch"),
+        );
+        assert_eq!(library.titles[0].seasons[0].episodes[0].watch, Some(state));
     }
 
     #[test]

@@ -1084,7 +1084,6 @@ async fn play(
     Ok(())
 }
 
-/// Unix seconds, for the "when was this asked" columns.
 /// Walk an interactive sign-in through whatever the account asks for.
 async fn login(accounts: &AccountStore, username: &str) -> Result<()> {
     let password = read_password("Password: ")?;
@@ -1092,10 +1091,12 @@ async fn login(accounts: &AccountStore, username: &str) -> Result<()> {
         Ok(step) => step,
         Err(pstr_core::Error::HumanVerification(challenge)) => {
             // Solving a CAPTCHA needs a browser engine that can hand the
-            // token back, which a terminal does not have.
+            // token back, which a terminal does not have. The desktop app has
+            // one, and keeps its session in the same keyring entry.
             anyhow::bail!(
                 "Proton wants a CAPTCHA before it accepts this sign-in. Sign in once in the \
-                 desktop or Android app, or try again later. ({})",
+                 desktop app on this computer, which shows it and shares its session with \
+                 pstr, or try again later. ({})",
                 challenge.verification_url()
             );
         }
@@ -1108,7 +1109,8 @@ async fn login(accounts: &AccountStore, username: &str) -> Result<()> {
                 return Ok(());
             }
             SignIn::SecondFactor(pending) => {
-                let code = read_password("Two-factor code: ")?;
+                // Security keys need WebAuthn, which this sign-in does not speak.
+                let code = read_password("Code from your authenticator app: ")?;
                 pending
                     .second_factor(&code)
                     .await

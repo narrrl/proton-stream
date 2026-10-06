@@ -149,6 +149,13 @@
             <File Id="MpvDll" Source="$(var.MpvDll)" Name="libmpv-2.dll" KeyPath="yes" />
           </Component>
 
+          <!-- Loads WebView2 for the CAPTCHA window Proton sometimes puts
+               in front of a sign-in. A -gnu build links it as a DLL; the
+               WebView2 runtime itself comes with Windows. -->
+          <Component Id="WebViewLoader" Guid="3e8a89cf-cf3e-4cc7-b1c6-9d272b3210c3" Win64="yes">
+            <File Id="WebViewLoader" Source="$(var.WebViewLoader)" Name="WebView2Loader.dll" KeyPath="yes" />
+          </Component>
+
           <Component Id="ReadMe" Guid="5bb65b44-f5df-423b-8dcc-a753d7aef565" Win64="yes">
             <File Id="ReadMe" Source="$(var.ReadMe)" Name="README.md" KeyPath="yes" />
           </Component>
@@ -162,6 +169,7 @@
       <ComponentRef Id="AppExe" />
       <ComponentRef Id="CliExe" />
       <ComponentRef Id="MpvDll" />
+      <ComponentRef Id="WebViewLoader" />
       <ComponentRef Id="ReadMe" />
     </Feature>
 

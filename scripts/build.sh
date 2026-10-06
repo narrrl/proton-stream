@@ -229,7 +229,7 @@ Priority: optional
 Architecture: $arch
 Maintainer: Nils Pukropp <contact@narl.io>
 Installed-Size: $size
-Depends: libc6, libmpv2 | libmpv1, libsecret-1-0, libgl1, libxkbcommon0, libx11-6, libwayland-client0
+Depends: libc6, libmpv2 | libmpv1, libsecret-1-0, libwebkit2gtk-4.1-0, libgl1, libxkbcommon0, libx11-6, libwayland-client0
 Recommends: gnome-keyring
 Homepage: https://github.com/narrrl/proton-stream
 Description: Netflix-style desktop client for Proton Drive public links

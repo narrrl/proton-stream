@@ -207,6 +207,12 @@ fn code_form(ui: &mut egui::Ui, panel: &mut AccountPanel, actions: &mut Vec<Acti
             .desired_width(160.0),
     );
     field.request_focus();
+    ui.add_space(theme::space::S);
+    // Security keys need WebAuthn, which the sign-in here does not speak.
+    ui.label(ui::muted(
+        "Security keys are not supported. If your account has only a security key, add an \
+         authenticator app in your Proton account settings to sign in here.",
+    ));
     ui.add_space(theme::space::L);
     error_line(ui, panel);
     let ready = !panel.code.trim().is_empty() && !panel.busy;

@@ -30,5 +30,6 @@ pub mod pacing;
 pub mod playback;
 pub mod theme;
 pub mod ui;
+pub mod verify;
 pub mod video;
 pub mod window;

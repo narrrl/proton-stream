@@ -136,15 +136,15 @@ internal fun SharesScreen(
         )
     }
     removing?.let { share ->
-        // Asked, because it cannot be undone: the link's secret, its offline
-        // files and its watch positions all go (`Catalog::remove_share`).
+        // Asked, because it cannot be undone: the link's secret and its
+        // offline files go. Watch positions stay (`Catalog::remove_share`).
         AlertDialog(
             onDismissRequest = { removing = null },
             title = { Text("Remove ${share.name}?") },
             text = {
                 Text(
-                    "Its titles leave the library, and its offline episodes and watch " +
-                        "progress are deleted. Adding the link again starts it fresh.",
+                    "Its titles leave the library and its offline episodes are deleted. " +
+                        "Watch progress is kept, so adding the link again picks up where you left off.",
                 )
             },
             confirmButton = {

@@ -16,6 +16,12 @@ use anyhow::Context;
 use pstr_core::config::AppDirs;
 
 fn main() -> anyhow::Result<()> {
+    // Before anything else: a verification window is a child process of the
+    // app, and must not claim the single instance or open a library.
+    if let Some(code) = pstr_app::verify::run_if_requested() {
+        std::process::exit(code);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

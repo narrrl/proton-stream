@@ -23,11 +23,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.1
 
-      # libmpv for pstr-player.
-      - name: Install libmpv
+      # libmpv for pstr-player, WebKitGTK for the CAPTCHA window.
+      - name: Install libmpv and WebKitGTK
         run: |
           sudo apt-get update
-          sudo apt-get install -y libmpv-dev
+          sudo apt-get install -y libmpv-dev libwebkit2gtk-4.1-dev
 
       - run: cargo fmt --all -- --check
 

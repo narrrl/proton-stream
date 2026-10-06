@@ -232,9 +232,16 @@ stage() {
     [[ -f "$rel/$f" ]] || die "$f missing from $rel — drop --skip-build"
   done
 
+  # The CAPTCHA window's WebView2 loader. Under -msvc it links statically;
+  # under -gnu, webview2-com-sys links the DLL, which it ships and copies into
+  # its build output, so the exe does not start without it beside it.
+  local loader
+  loader="$(ls -t "$rel"/build/webview2-com-sys-*/out/x64/WebView2Loader.dll 2>/dev/null | head -n1)"
+  [[ -n "$loader" ]] || die "WebView2Loader.dll missing from $rel/build — drop --skip-build"
+
   rm -rf "$OUTDIR"
   mkdir -p "$OUTDIR"
-  install -m755 "$rel/$GUI_BIN" "$rel/$CLI_BIN" "$MPV_DLL" "$OUTDIR/"
+  install -m755 "$rel/$GUI_BIN" "$rel/$CLI_BIN" "$MPV_DLL" "$loader" "$OUTDIR/"
   install -m644 "$ROOT/README.md" "$OUTDIR/"
 
   if [[ -n "$SIGN_CERT" ]]; then
@@ -295,6 +302,7 @@ make_msi() {
     -D "Version=$VERSION" \
     -D "BinDir=$OUTDIR" \
     -D "MpvDll=$OUTDIR/libmpv-2.dll" \
+    -D "WebViewLoader=$OUTDIR/WebView2Loader.dll" \
     -D "IconFile=$PKG/proton-stream.ico" \
     -D "ReadMe=$OUTDIR/README.md" \
     -o "$out" "$PKG/proton-stream.wixl.wxs"

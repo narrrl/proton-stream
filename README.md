@@ -83,7 +83,9 @@ Rust 2024, MSRV 1.96.
 cargo build --release
 ```
 
-`pstr-player` needs libmpv development headers (`mpv` ≥ 2.0). On Windows those
+`pstr-player` needs libmpv development headers (`mpv` ≥ 2.0), and on Linux
+`pstr-app` needs WebKitGTK 4.1's, for the window Proton's CAPTCHA is shown in.
+On Windows the libmpv ones
 come from the separate **mpv-dev** archive rather than mpv's player build, and
 `libmpv-2.dll` ships next to the executable. The Proton SDK crates come from
 crates.io; nothing here builds against a sibling checkout.

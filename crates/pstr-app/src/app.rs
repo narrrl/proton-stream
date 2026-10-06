@@ -2118,6 +2118,9 @@ impl eframe::App for App {
         self.playback = None;
         self.engine
             .shutdown_downloads(std::time::Duration::from_secs(3));
+        // After the player: its last position is saved on the way out.
+        self.engine
+            .sync_before_exit(std::time::Duration::from_secs(3));
     }
 }
 

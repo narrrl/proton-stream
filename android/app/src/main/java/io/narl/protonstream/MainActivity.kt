@@ -33,6 +33,7 @@ import io.narl.protonstream.playback.MpvPlaybackState
 import io.narl.protonstream.playback.NativeMpvHost
 import io.narl.protonstream.playback.PlaybackService
 import io.narl.protonstream.settings.SettingsStore
+import io.narl.protonstream.sync.WatchSyncWorker
 import io.narl.protonstream.ui.ProtonStreamApp
 import io.narl.protonstream.ui.theme.AppearanceState
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
@@ -207,6 +208,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        // Where the viewer stopped is what their other devices want next, and
+        // a process in the background may not live to the next timed sync.
+        if (!isChangingConfigurations) WatchSyncWorker.enqueue(this)
         if (
             !isChangingConfigurations &&
             !isInPictureInPictureMode &&

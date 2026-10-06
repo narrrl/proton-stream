@@ -107,6 +107,12 @@ windows-sys = "0.61"
 tauri-winrt-notification = "0.8"
 # The exe's own icon resource, which is what Explorer and a taskbar pin draw.
 embed-resource = "3"
+# Proton's CAPTCHA page, which reports success by posting a message to its
+# host, so it needs a webview this app controls. Run in a child process of its
+# own (`pstr-app::verify`): tao and eframe's winit cannot share an event loop.
+# WebKitGTK on Linux, WebView2 on Windows, WKWebView on macOS.
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
+tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
 rpassword = "7"
 libloading = "0.8"
 lru = "0.18"

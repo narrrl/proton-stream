@@ -33,6 +33,8 @@ serde_json.workspace = true
 directories.workspace = true
 chrono.workspace = true
 souvlaki.workspace = true
+wry.workspace = true
+tao.workspace = true
 
 [build-dependencies]
 embed-resource.workspace = true

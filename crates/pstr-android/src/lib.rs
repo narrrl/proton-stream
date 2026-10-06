@@ -3809,11 +3809,12 @@ mod tests {
         assert!(engine.remove_share(share.id.clone()).is_err());
         assert_eq!(engine.share_generation.load(Ordering::Acquire), 2);
         assert!(engine.shares().expect("shares").is_empty());
+        // Kept, as through a recrawl: sync would bring it back regardless.
         assert!(
             engine
                 .watch_state(share.id, "episode".to_owned())
                 .expect("watch state")
-                .is_none()
+                .is_some()
         );
 
         drop(engine);

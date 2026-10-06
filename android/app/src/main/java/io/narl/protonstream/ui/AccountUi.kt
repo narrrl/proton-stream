@@ -194,13 +194,16 @@ internal fun SignInDialog(account: AccountUiState, actions: AccountActions, onDi
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (state) {
-                    AccountState.SecondFactor -> OutlinedTextField(
-                        code,
-                        { code = it },
-                        label = { Text("Two-factor code") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    )
+                    AccountState.SecondFactor -> {
+                        OutlinedTextField(
+                            code,
+                            { code = it },
+                            label = { Text("Code from your authenticator app") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        )
+                        Text(SECURITY_KEY_NOTE, style = MaterialTheme.typography.bodySmall)
+                    }
                     AccountState.MailboxPassword -> {
                         Text(
                             "This account has a separate mailbox password. It unlocks your files.",
@@ -328,6 +331,11 @@ private fun VerificationDialog(url: String, onToken: (String) -> Unit, onDismiss
         }
     }
 }
+
+/** Security keys need WebAuthn, which the sign-in here does not speak. */
+private const val SECURITY_KEY_NOTE =
+    "Security keys are not supported. If your account has only a security key, add an " +
+        "authenticator app in your Proton account settings to sign in here."
 
 /** Installed once per page, at start and again at finish in case the first ran too early. */
 private const val VERIFICATION_BRIDGE = """

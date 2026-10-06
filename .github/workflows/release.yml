@@ -76,7 +76,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libmpv-dev rpm
+          sudo apt-get install -y libmpv-dev libwebkit2gtk-4.1-dev rpm
 
       - name: Gate
         run: |
