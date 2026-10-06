@@ -100,3 +100,6 @@ targets:
       base:
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
+        # `@testable import ProtonStream` pulls in the app's bridging header,
+        # which includes the generated FFI header.
+        HEADER_SEARCH_PATHS: $(PROJECT_DIR)/build/generated
