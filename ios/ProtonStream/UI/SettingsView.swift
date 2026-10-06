@@ -422,7 +422,7 @@ private struct AppearancePicker: View {
         let accents = Self.accents
         guard let (palette, row) = try? await model.run({ engine -> (PaletteRecord, [AccentChoice: UInt32]) in
             if store { try engine.setAppearance(appearance: next) }
-            let palette = try engine.previewPalette(appearance: next)
+            let palette = engine.previewPalette(appearance: next)
             // Every accent as it would look in *this* flavour: a swatch row that
             // keeps Mocha's pastels while Latte is selected lies about what the
             // next tap does.
@@ -430,7 +430,7 @@ private struct AppearancePicker: View {
             for accent in accents {
                 var variant = next
                 variant.accent = accent
-                row[accent] = try engine.previewPalette(appearance: variant).accent
+                row[accent] = engine.previewPalette(appearance: variant).accent
             }
             return (palette, row)
         }) else { return }

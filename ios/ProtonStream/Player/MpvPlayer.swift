@@ -110,7 +110,8 @@ final class MpvPlayer {
         layer.framebufferOnly = true
         layer.backgroundColor = UIColor.black.cgColor
         guard let mpv = mpv_create() else { return }
-        var wid = layer
+        // mpv takes the layer's address as an int64, not a Swift reference.
+        var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(layer).toOpaque()))
         mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &wid)
         for (name, value) in [
             ("config", "no"),
