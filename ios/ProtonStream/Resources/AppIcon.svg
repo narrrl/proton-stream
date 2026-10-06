@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The iOS app icon: Android's adaptive launcher icon, both layers on the full
+  108-unit canvas, since iOS cuts its own shape out of a square just as a
+  launcher does. Layer sources: android/app/src/main/res/drawable/
+  ic_launcher_background.xml and ic_launcher_foreground.xml. The glyph is
+  scaled up by 108/72: a launcher shows only the middle 72 units of the layer,
+  and iOS's mask takes far less off the edges.
+  Render with scripts/render-ios-icon.sh.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="face" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="108" y2="108">
+      <stop offset="0" stop-color="#A48BFF"/>
+      <stop offset="0.55" stop-color="#7552FF"/>
+      <stop offset="1" stop-color="#5B36F2"/>
+    </linearGradient>
+    <linearGradient id="glyph" gradientUnits="userSpaceOnUse" x1="0" y1="36" x2="0" y2="88">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#ECE6FF"/>
+    </linearGradient>
+    <clipPath id="blocks">
+      <path d="M0,0h63v128h-63zM68.5,0h10v128h-10zM84,0h44v128h-44z"/>
+    </clipPath>
+  </defs>
+  <rect width="108" height="108" fill="url(#face)"/>
+  <g transform="translate(54 54) scale(1.5) translate(-54 -54)">
+  <g transform="translate(-16 -8) translate(70 62) scale(0.6923) translate(-70 -62)">
+    <g transform="translate(0 3)" clip-path="url(#blocks)">
+      <path fill="#2E1596" fill-opacity="0.302" d="M50,41.5v41a6,6 0,0 0,9.1 5.1l34.2,-20.5a6,6 0,0 0,0 -10.3L59.1,36.4A6,6 0,0 0,50 41.5z"/>
+    </g>
+    <g clip-path="url(#blocks)">
+      <path fill="url(#glyph)" d="M50,41.5v41a6,6 0,0 0,9.1 5.1l34.2,-20.5a6,6 0,0 0,0 -10.3L59.1,36.4A6,6 0,0 0,50 41.5z"/>
+    </g>
+  </g>
+  </g>
+</svg>

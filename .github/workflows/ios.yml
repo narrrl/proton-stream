@@ -1,0 +1,71 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  workflow_call:
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'android/app/src/main/res/font/**'
+      - 'android/app/src/main/assets/licenses/**'
+      - 'crates/pstr-android/**'
+      - 'crates/pstr-core/**'
+      - 'crates/pstr-meta/**'
+      - 'crates/pstr-stream/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/build-ios.sh'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Unit tests and unsigned .ipa
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Restore the Rust target tree
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-target-ios-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: rust-target-ios-${{ steps.toolchain.outputs.cachekey }}-
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Bindings
+        run: scripts/build-ios.sh bindings
+
+      - name: Unit tests on the simulator
+        run: scripts/build-ios.sh test
+
+      # SideStore and AltStore re-sign whatever they install with the viewer's
+      # own Apple ID, so the release artifact is unsigned.
+      - name: Unsigned .ipa
+        run: |
+          scripts/build-ios.sh rust
+          scripts/build-ios.sh ipa
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios
+          path: dist/*.ipa
+          if-no-files-found: error

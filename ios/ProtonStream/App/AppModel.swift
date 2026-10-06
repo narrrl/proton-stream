@@ -1,140 +1,656 @@
 import Foundation
 import Observation
+import UIKit
 
-/// The app's one Rust engine and the screen state read from it.
+/// The Proton account: where a sign-in stands, and how sync is doing.
+struct AccountUiState: Equatable {
+    /// Nil until the bridge has said.
+    var state: AccountState?
+    /// A sign-in step is out and not answered yet.
+    var busy = false
+    /// Why the last sign-in step was refused.
+    var error: String?
+    /// The CAPTCHA page Proton wants solved before it accepts the sign-in.
+    var verificationUrl: String?
+    /// When watch history last synced.
+    var syncedAt: Date?
+    /// Positions the last sync took from other devices.
+    var applied = 0
+    /// Why the last sync failed, until one succeeds.
+    var syncError: String?
+}
+
+/// One episode's watch state as it was before a change the viewer can undo.
+/// Nil `state` means it had never been played.
+struct WatchSnapshot: Equatable {
+    let shareId: String
+    let linkId: String
+    let state: WatchStateRecord?
+}
+
+/// The app's screen state and every action on it: Android's `AppViewModel`,
+/// field for field and message for message.
 ///
-/// Rust owns the Proton sessions, SQLite and every decrypted byte; this only
-/// asks it questions off the main thread and keeps the answers for SwiftUI.
+/// Rust owns the Proton sessions, SQLite and every decrypted byte; this asks it
+/// questions off the main thread and keeps the answers for SwiftUI.
 @MainActor
 @Observable
 final class AppModel {
-    let engine: AndroidEngine?
-    private(set) var startupError: String?
-
+    var loading = true
+    var refreshing = false
+    private(set) var query = ""
     var titles: [TitleRecord] = []
+    /// The grid: `titles` ordered, each franchise folded into one tile when
+    /// `grouped`, and the shelves above it. Nil until the bridge has answered,
+    /// when the grid falls back to `titles` as they are.
+    var arrangement: ArrangementRecord?
+    var sort: LibrarySort = .name
+    var grouped = true
     var shares: [ShareRecord] = []
-    var search = ""
-    var crawling = false
-    var error: String?
+    var offline: [OfflineRecord] = []
+    var metadataSettings = MetadataSettingsRecord(enabled: false, provider: .aniList, language: "en", ready: true)
+    var storage = StorageUsageRecord(offlineBytes: 0, offlineCount: 0, partialBytes: 0, cacheBytes: 0)
+    /// What the snackbar says.
+    var message: String?
+    /// What Undo on `message` puts back, when the message offers one.
+    var undo: [WatchSnapshot]?
+    var account = AccountUiState()
 
-    init() {
-        do {
-            engine = try AndroidEngine(paths: Self.paths(), secrets: KeychainSecretStore())
-        } catch {
-            engine = nil
-            startupError = String(describing: error)
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var started = false
+
+    /// Five minutes, as on Android: cheap when nothing changed — one folder
+    /// listing, and no upload.
+    private static let syncInterval: Duration = .seconds(5 * 60)
+
+    func start() {
+        if started { return }
+        started = true
+        reload()
+        DownloadCoordinator.shared.onFinished = { [weak self] in self?.reload() }
+        DownloadCoordinator.shared.resumeQueued()
+        Task {
+            let state = (try? await run { $0.accountState() }) ?? .signedOut
+            account.state = state
+            // While the app is alive, on top of after sign-in and whenever the
+            // player closes.
+            while !Task.isCancelled {
+                await syncWatchHistory()
+                try? await Task.sleep(for: Self.syncInterval)
+            }
         }
-    }
-
-    /// Application Support survives updates and is backed up, which is what
-    /// the watch history wants. The block cache goes under Caches, which iOS
-    /// may purge and never backs up.
-    private static func paths() throws -> AndroidPaths {
-        let files = FileManager.default
-        let support = try files.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let caches = try files.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let config = support.appendingPathComponent("config", isDirectory: true)
-        let data = support.appendingPathComponent("data", isDirectory: true)
-        let cache = caches.appendingPathComponent("proton-stream", isDirectory: true)
-        for directory in [config, data, cache] {
-            try files.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        return AndroidPaths(config: config.path, data: data.path, cache: cache.path)
-    }
-
-    struct NoEngine: Error, CustomStringConvertible {
-        var description: String { "the Rust engine did not start" }
     }
 
     /// Run a blocking bridge call off the main thread. The synchronous exports
     /// take the catalog lock and touch SQLite, which a scroll must not wait on.
-    func run<T>(_ work: @escaping (AndroidEngine) throws -> T) async throws -> T {
-        guard let engine else { throw NoEngine() }
-        return try await Task.detached(priority: .userInitiated) { try work(engine) }.value
+    nonisolated func run<T: Sendable>(_ work: @escaping @Sendable (AndroidEngine) throws -> T) async throws -> T {
+        try await Task.detached(priority: .userInitiated) {
+            try work(try NativeRuntime.blockingEngine())
+        }.value
     }
 
-    func report(_ error: Error) {
-        self.error = String(describing: error)
+    // MARK: - Library
+
+    /// Reorder the grid, or fold or unfold its franchises.
+    func arrange(_ sort: LibrarySort, _ grouped: Bool) {
+        self.sort = sort
+        self.grouped = grouped
+        Task { await reloadLibrary(query) }
     }
 
-    func reload() async {
-        let needle = search.trimmingCharacters(in: .whitespaces)
+    func search(_ query: String) {
+        self.query = query
+        searchTask?.cancel()
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            if Task.isCancelled { return }
+            await reloadLibrary(query)
+        }
+    }
+
+    func refresh() {
+        crawl(nil)
+    }
+
+    /// Recrawl one share rather than the whole library: a share whose link has
+    /// expired makes a whole-library refresh fail, and must not leave no way to
+    /// refresh the shares that still work.
+    func refreshShare(_ id: String) {
+        crawl(id)
+    }
+
+    private func crawl(_ shareId: String?) {
+        Task { await crawlNow(shareId) }
+    }
+
+    /// The crawl itself, for pull to refresh, which holds its spinner until
+    /// this returns.
+    func crawlNow(_ shareId: String?) async {
+        refreshing = true
+        message = nil
         do {
-            let (titles, shares) = try await run { engine in
-                (try engine.library(search: needle.isEmpty ? nil : needle), try engine.shares())
+            try await NativeRuntime.engine().crawl(shareId: shareId)
+        } catch {
+            message = errorMessage(error)
+        }
+        refreshing = false
+        reload()
+    }
+
+    /// Run enrichment again. With `force` every title is looked up afresh,
+    /// including ones that already matched.
+    func matchTitles(force: Bool) {
+        Task {
+            refreshing = true
+            message = nil
+            do {
+                let summary = try await NativeRuntime.engine().matchTitles(force: force)
+                message = Self.describe(summary)
+            } catch {
+                message = errorMessage(error)
+            }
+            refreshing = false
+            reload()
+        }
+    }
+
+    // MARK: - Shares
+
+    func addShare(name: String, url: String, password: String?) {
+        Task {
+            do {
+                let password = password.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+                _ = try await run { try $0.addShare(name: name, url: url, customPassword: password) }
+                try await NativeRuntime.engine().crawl(shareId: nil)
+            } catch {
+                message = errorMessage(error)
+            }
+            reload()
+        }
+    }
+
+    /// Re-supply the link behind a share whose stored secret cannot be read.
+    /// Re-entering the link rewrites the secret and leaves the catalog and the
+    /// offline files alone.
+    func repairShare(id: String, url: String, password: String?) {
+        Task {
+            do {
+                let password = password.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+                _ = try await run { try $0.repairShare(shareId: id, url: url, customPassword: password) }
+                try await NativeRuntime.engine().crawl(shareId: id)
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    func removeShare(_ id: String) {
+        Task {
+            do {
+                // Wait for the transfers to stop before Rust removes catalog
+                // and files. Rust also rejects any late publication.
+                await DownloadCoordinator.shared.cancelShare(id)
+                let store = DownloadStateStore.shared
+                let engine = try await NativeRuntime.engine()
+                for download in store.records() where download.shareId == id {
+                    try await engine.removeOfflineEpisode(shareId: download.shareId, linkId: download.linkId)
+                }
+                store.removeShare(id)
+                try await run { try $0.removeShare(shareId: id) }
+            } catch {
+                message = errorMessage(error)
+            }
+            reload()
+        }
+    }
+
+    func dismissMessage() {
+        message = nil
+        undo = nil
+    }
+
+    // MARK: - Account
+
+    /// Start signing in, or start again with `verificationToken` once the
+    /// CAPTCHA from a first try is solved.
+    func signIn(_ username: String, _ password: String, verificationToken: String? = nil) {
+        signInStep { try await $0.signIn(username: username, password: password, verificationToken: verificationToken) }
+    }
+
+    func submitSecondFactor(_ code: String) {
+        signInStep { try await $0.submitSecondFactor(code: code) }
+    }
+
+    func submitMailboxPassword(_ password: String) {
+        signInStep(keepStepOnFailure: true) { try await $0.submitMailboxPassword(password: password) }
+    }
+
+    func cancelSignIn() {
+        account = AccountUiState(state: .signedOut)
+        Task { try? await run { $0.cancelSignIn() } }
+    }
+
+    /// The CAPTCHA page closed without a token.
+    func dismissVerification() {
+        account.verificationUrl = nil
+        account.busy = false
+    }
+
+    private func signInStep(keepStepOnFailure: Bool = false, _ step: @escaping (AndroidEngine) async throws -> SignInOutcome) {
+        account.busy = true
+        account.error = nil
+        account.verificationUrl = nil
+        Task {
+            do {
+                let outcome = try await step(NativeRuntime.engine())
+                switch outcome {
+                case let .done(username):
+                    account = AccountUiState(state: .signedIn(username: username))
+                    message = "Signed in as \(username)"
+                    await syncWatchHistory()
+                    reload()
+                case .secondFactor:
+                    account.state = .secondFactor
+                    account.busy = false
+                case .mailboxPassword:
+                    account.state = .mailboxPassword
+                    account.busy = false
+                case let .humanVerification(url):
+                    account.verificationUrl = url
+                }
+            } catch {
+                account.busy = false
+                account.error = errorMessage(error)
+                // A refused code spends the half-made session.
+                if !keepStepOnFailure { account.state = .signedOut }
+            }
+        }
+    }
+
+    func signOut() {
+        Task {
+            do {
+                try await NativeRuntime.engine().signOut()
+            } catch {
+                reportError(error)
+            }
+            account = AccountUiState(state: .signedOut)
+            reload()
+        }
+    }
+
+    /// Sync now, from a tap: says so when it is done.
+    func syncNow() {
+        Task {
+            guard await syncWatchHistory() else { return }
+            let applied = account.applied
+            message = applied > 0 ? "Watch history synced, \(applied) from other devices" : "Watch history is up to date"
+        }
+    }
+
+    /// Pull other devices' positions in and push this one's out. Quiet: it runs
+    /// on a timer, and a failure is shown on the account card rather than as a
+    /// snackbar every five minutes of an offline evening. Returns whether it
+    /// synced.
+    @discardableResult
+    func syncWatchHistory() async -> Bool {
+        guard case .signedIn = account.state else { return false }
+        do {
+            guard let report = try await NativeRuntime.engine().syncWatchHistory() else { return false }
+            account.syncedAt = Date()
+            account.applied = Int(report.applied)
+            account.syncError = nil
+            if report.applied > 0 { reload() }
+            return true
+        } catch {
+            let state = try? await run { $0.accountState() }
+            if let state { account.state = state }
+            account.syncError = errorMessage(error)
+            // Signed out by the engine: the session ended, and that is worth
+            // interrupting for, unlike a dropped connection.
+            if state == .signedOut { reportError(error) }
+            return false
+        }
+    }
+
+    /// Leaving the app: push where playback stopped, inside the grace iOS
+    /// gives a backgrounded app — what `WatchSyncWorker` does on Android.
+    func syncInBackground() {
+        guard case .signedIn = account.state else { return }
+        let task = BackgroundTask(name: "watch-history-sync")
+        Task {
+            await syncWatchHistory()
+            task.end()
+        }
+    }
+
+    /// After the player closes: where it stopped is what another device wants next.
+    func playerClosed() {
+        reload()
+        Task { await syncWatchHistory() }
+    }
+
+    func addAccountFolder(name: String, volumeId: String, linkId: String) {
+        Task {
+            refreshing = true
+            do {
+                let share = try await run { try $0.addAccountFolder(name: name, volumeId: volumeId, linkId: linkId) }
+                try await NativeRuntime.engine().crawl(shareId: share.id)
+            } catch {
+                reportError(error)
+            }
+            refreshing = false
+            reload()
+        }
+    }
+
+    // MARK: - Watch state
+
+    /// Every episode of a title watched or unwatched, with an Undo: a whole
+    /// title's positions are what this throws away, and a mis-tap on a tile's
+    /// menu should not cost them.
+    func setTitleWatched(_ title: TitleRecord, _ watched: Bool) {
+        changeWatch(title.playlist, "\(title.displayName) marked \(watched ? "watched" : "unwatched")") { engine, episode, before in
+            let duration = before?.durationSecs
+            try engine.saveWatchState(
+                shareId: episode.shareId,
+                linkId: episode.linkId,
+                positionSecs: watched ? duration ?? 0 : 0,
+                durationSecs: duration,
+                watched: watched
+            )
+        }
+    }
+
+    /// Off Continue watching by forgetting where the episode stopped — what the
+    /// desktop does — with an Undo that puts the position back.
+    func forgetPosition(_ title: TitleRecord, _ episode: EpisodeRecord) {
+        changeWatch([episode], "\(title.displayName) removed from Continue watching") { engine, target, before in
+            try engine.saveWatchState(shareId: target.shareId, linkId: target.linkId, positionSecs: 0, durationSecs: before?.durationSecs, watched: false)
+        }
+    }
+
+    /// Off the history page: the position and the watched mark both go, which
+    /// is "never played", with an Undo.
+    func removeFromHistory(_ title: TitleRecord, _ episode: EpisodeRecord) {
+        changeWatch([episode], "\(episode.label) of \(title.displayName) removed from history") { engine, target, before in
+            try engine.saveWatchState(shareId: target.shareId, linkId: target.linkId, positionSecs: 0, durationSecs: before?.durationSecs, watched: false)
+        }
+    }
+
+    /// Put back what the last undoable change replaced.
+    func performUndo() {
+        guard let snapshots = undo else { return }
+        message = nil
+        undo = nil
+        Task {
+            do {
+                try await run { engine in
+                    for snapshot in snapshots {
+                        try engine.saveWatchState(
+                            shareId: snapshot.shareId,
+                            linkId: snapshot.linkId,
+                            positionSecs: snapshot.state?.positionSecs ?? 0,
+                            durationSecs: snapshot.state?.durationSecs,
+                            watched: snapshot.state?.watched ?? false
+                        )
+                    }
+                }
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    private func changeWatch(
+        _ episodes: [EpisodeRecord],
+        _ text: String,
+        _ change: @escaping @Sendable (AndroidEngine, EpisodeRecord, WatchStateRecord?) throws -> Void
+    ) {
+        Task {
+            do {
+                let snapshots = try await run { engine in
+                    try episodes.map { episode in
+                        let before = try engine.watchState(shareId: episode.shareId, linkId: episode.linkId)
+                        try change(engine, episode, before)
+                        return WatchSnapshot(shareId: episode.shareId, linkId: episode.linkId, state: before)
+                    }
+                }
+                message = text
+                undo = snapshots
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    func reportError(_ error: Error) {
+        message = errorMessage(error)
+    }
+
+    func report(_ text: String) {
+        message = text
+    }
+
+    // MARK: - Metadata
+
+    func saveMetadataSettings(enabled: Bool, provider: MetadataProvider, language: String, apiKey: String) {
+        Task {
+            do {
+                let engine = try await NativeRuntime.engine()
+                try await run { engine in
+                    if provider == .tmdb, !apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+                        try engine.setMetadataApiKey(provider: provider, key: apiKey)
+                    }
+                    try engine.setMetadataSettings(settings: MetadataSettingsRecord(enabled: enabled, provider: provider, language: language, ready: true))
+                }
+                if enabled {
+                    message = Self.describe(try await engine.matchTitles(force: false))
+                }
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    func reloadAfterMetadataChange() { reload() }
+
+    /// What an enrichment pass did, in one line. Failures are reported even
+    /// when most titles matched.
+    static func describe(_ summary: MatchSummary) -> String {
+        if summary.matched == 0, summary.unmatched == 0, summary.failed == 0 {
+            return "Everything is already matched"
+        }
+        var parts = ["\(summary.matched) matched"]
+        if summary.unmatched > 0 { parts.append("\(summary.unmatched) not found") }
+        if summary.episodes > 0 { parts.append("\(summary.episodes) episodes named") }
+        if summary.failed > 0 { parts.append("\(summary.failed) failed") }
+        return parts.joined(separator: ", ")
+    }
+
+    // MARK: - Offline
+
+    func removeOffline(_ file: OfflineRecord) {
+        Task {
+            do {
+                try await NativeRuntime.engine().removeOfflineEpisode(shareId: file.shareId, linkId: file.linkId)
+            } catch {
+                message = errorMessage(error)
+            }
+            reload()
+        }
+    }
+
+    func pauseDownload(_ download: RetainedDownload) { DownloadCoordinator.shared.pause(download) }
+
+    func resumeDownload(_ download: RetainedDownload) { DownloadCoordinator.shared.resume(download) }
+
+    func deletePartial(_ download: RetainedDownload) {
+        Task {
+            await DownloadCoordinator.shared.cancelAndWait(download)
+            do {
+                try await NativeRuntime.engine().removeOfflineEpisode(shareId: download.shareId, linkId: download.linkId)
+                DownloadStateStore.shared.remove(download.shareId, download.linkId)
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    func removeAllOffline() {
+        Task {
+            await DownloadCoordinator.shared.cancelAll()
+            do {
+                try await NativeRuntime.engine().removeAllOffline()
+                DownloadStateStore.shared.clear()
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    func clearBlockCache() {
+        Task {
+            do {
+                let reclaimed = try await run { try $0.clearBlockCache() }
+                message = "Reclaimed \(formatBytes(reclaimed)) of cache"
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    // MARK: - Progress
+
+    /// Persist where an episode was left. Runs on its own task rather than the
+    /// player's, so a save issued on the way out is not cancelled by the
+    /// player going away.
+    func saveProgress(_ episode: EpisodeRecord, position: Double, duration: Double, watched: Bool) {
+        Task {
+            do {
+                try await run { engine in
+                    try engine.saveWatchState(
+                        shareId: episode.shareId,
+                        linkId: episode.linkId,
+                        positionSecs: min(max(position, 0), duration),
+                        durationSecs: duration,
+                        watched: watched
+                    )
+                }
+            } catch {
+                reportError(error)
+            }
+        }
+    }
+
+    /// Mark an episode seen, or unseen, without playing it.
+    ///
+    /// Unwatching rewinds, matching the desktop client. Marking one seen puts
+    /// the position at its duration where one is known, so the progress bar
+    /// agrees with the tick.
+    func setWatched(_ episode: EpisodeRecord, _ watched: Bool) {
+        Task {
+            do {
+                try await run { engine in
+                    let duration = try engine.watchState(shareId: episode.shareId, linkId: episode.linkId)?.durationSecs
+                    try engine.saveWatchState(
+                        shareId: episode.shareId,
+                        linkId: episode.linkId,
+                        positionSecs: watched ? duration ?? 0 : 0,
+                        durationSecs: duration,
+                        watched: watched
+                    )
+                }
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
+    // MARK: - Reload
+
+    func reload() {
+        let query = query.trimmingCharacters(in: .whitespaces).isEmpty ? nil : self.query
+        let sort = sort
+        let grouped = grouped
+        Task {
+            do {
+                let result = try await run { engine in
+                    // Here rather than inside `library()`, which is read-only
+                    // and cached: a full reload is the one place that has
+                    // already paid for a walk of the offline files.
+                    _ = try engine.pruneOfflineFiles()
+                    return Reloaded(
+                        shares: try engine.shares(),
+                        titles: try engine.library(search: query),
+                        arrangement: try engine.arrangement(search: query, sort: sort, grouped: grouped),
+                        offline: try engine.offlineFiles(),
+                        metadataSettings: try engine.metadataSettings(),
+                        storage: try engine.storageUsage()
+                    )
+                }
+                loading = false
+                shares = result.shares
+                titles = result.titles
+                arrangement = result.arrangement
+                offline = result.offline
+                metadataSettings = result.metadataSettings
+                storage = result.storage
+            } catch {
+                loading = false
+                message = errorMessage(error)
+            }
+        }
+    }
+
+    private func reloadLibrary(_ query: String) async {
+        let search = query.trimmingCharacters(in: .whitespaces).isEmpty ? nil : query
+        let sort = sort
+        let grouped = grouped
+        do {
+            let (titles, arrangement) = try await run { engine in
+                (try engine.library(search: search), try engine.arrangement(search: search, sort: sort, grouped: grouped))
             }
             self.titles = titles
-            self.shares = shares
+            self.arrangement = arrangement
         } catch {
-            report(error)
+            message = errorMessage(error)
+        }
+    }
+}
+
+/// The grace iOS gives an app leaving the screen, ended exactly once —
+/// whether by the work finishing or by the time running out.
+@MainActor
+final class BackgroundTask {
+    private var identifier = UIBackgroundTaskIdentifier.invalid
+
+    init(name: String) {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
         }
     }
 
-    func crawl(shareId: String? = nil) async {
-        guard let engine, !crawling else { return }
-        crawling = true
-        defer { crawling = false }
-        do {
-            try await engine.crawl(shareId: shareId)
-        } catch {
-            report(error)
-        }
-        await reload()
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
     }
+}
 
-    func addShare(name: String, url: String, password: String?) async {
-        do {
-            let share = try await run { try $0.addShare(name: name, url: url, customPassword: password) }
-            await crawl(shareId: share.id)
-        } catch {
-            report(error)
-        }
-    }
-
-    func repairShare(id: String, url: String, password: String?) async {
-        do {
-            _ = try await run { try $0.repairShare(shareId: id, url: url, customPassword: password) }
-            await crawl(shareId: id)
-        } catch {
-            report(error)
-        }
-    }
-
-    func removeShare(id: String) async {
-        do {
-            try await run { try $0.removeShare(shareId: id) }
-        } catch {
-            report(error)
-        }
-        await reload()
-    }
-
-    /// Marking seen puts the position at the duration where one is known, and
-    /// unwatching rewinds, as on desktop and Android.
-    func setWatched(_ episode: EpisodeRecord, _ watched: Bool) async {
-        do {
-            try await run { engine in
-                let duration = try engine.watchState(shareId: episode.shareId, linkId: episode.linkId)?.durationSecs
-                try engine.saveWatchState(
-                    shareId: episode.shareId, linkId: episode.linkId,
-                    positionSecs: watched ? duration ?? 0 : 0,
-                    durationSecs: duration, watched: watched
-                )
-            }
-        } catch {
-            report(error)
-        }
-        await reload()
-    }
-
-    /// Episodes started but not finished, most recent first.
-    var continueWatching: [(title: TitleRecord, episode: EpisodeRecord)] {
-        titles
-            .flatMap { title in
-                title.seasons.flatMap(\.episodes)
-                    .filter { $0.resumeAt != nil && !$0.watched }
-                    .map { (title: title, episode: $0) }
-            }
-            .sorted { $0.episode.lastPlayed > $1.episode.lastPlayed }
-    }
+private struct Reloaded: @unchecked Sendable {
+    let shares: [ShareRecord]
+    let titles: [TitleRecord]
+    let arrangement: ArrangementRecord
+    let offline: [OfflineRecord]
+    let metadataSettings: MetadataSettingsRecord
+    let storage: StorageUsageRecord
 }

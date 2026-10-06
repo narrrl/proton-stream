@@ -33,6 +33,10 @@ streaming implementation through UniFFI. It features a modern Material 3 interfa
 an immersive fullscreen player with auto-hiding controls, and offline downloads.
 Its toolchain, emulator, signing, and release instructions are in [`docs/ANDROID.md`](docs/ANDROID.md).
 
+An iOS 17+ client under `ios/` is a SwiftUI port of the Android one over the same
+Rust engine, built as an unsigned `.ipa` for SideStore or AltStore; see
+[`docs/IOS.md`](docs/IOS.md).
+
 ```bash
 cargo run --release -p pstr-app          # the app
 proton-stream 'https://drive.proton.me/urls/TOKEN#fragment'   # open the Add form with a link
@@ -73,7 +77,7 @@ against the SDK's own range download.
 | UI | egui/eframe on glow; mpv renders into the same GL context. |
 | Themes | The shipped near-black palette, Catppuccin Latte, Frappé, Macchiato and Mocha, and a Persona 5 one — black, white and one loud red, which is what the Red accent is there for — each with a choice of nine accents, drawn as a gradient unless you turn that off. Picked on the Settings page, applied without a restart. |
 | Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses, fanart and per-episode titles and synopses (for AniList, from ani.zip, which is sent the matched ids); a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. The library sorts by name, watch, add or air date, rating and popularity, folds a franchise into one tile, and shelves titles by director, studio and genre. See [docs/METADATA.md](docs/METADATA.md). |
-| Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. A native Android 12+ client is available featuring a Material 3 UI and immersive fullscreen playback. |
+| Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. A native Android 12+ client is available featuring a Material 3 UI and immersive fullscreen playback, and an iOS 17+ port of it for sideloading. |
 
 ## Building
 
@@ -99,6 +103,9 @@ Android builds use JDK 17, Android SDK 36/NDK 28, Gradle 8.13, `cargo-ndk`, and
 UniFFI. Run `bash scripts/build-android.sh debug` after installing that toolchain;
 see [`docs/ANDROID.md`](docs/ANDROID.md) for exact setup and release signing.
 
+iOS builds need macOS with Xcode, XcodeGen and the `aarch64-apple-ios` Rust
+target: `scripts/build-ios.sh all` writes `dist/proton-stream-<version>-ios.ipa`.
+
 ## Privacy
 
 - The share URL fragment **is** the decryption password. It and any custom
@@ -121,9 +128,10 @@ see [`docs/ANDROID.md`](docs/ANDROID.md) for exact setup and release signing.
 
 ## License
 
-The shared Rust crates and desktop application are MIT licensed. The Android
-application and its combined native distribution are GPL-3.0-or-later; see
-[`android/LICENSE.md`](android/LICENSE.md) and the bundled-component notices.
+The shared Rust crates and desktop application are MIT licensed. The Android and
+iOS applications and their combined native distributions are GPL-3.0-or-later; see
+[`android/LICENSE.md`](android/LICENSE.md), [`ios/LICENSE.md`](ios/LICENSE.md) and
+the bundled-component notices.
 The desktop application embeds the Inter typeface, under the SIL Open Font
 License 1.1 ([`crates/pstr-app/assets/fonts/Inter-OFL.txt`](crates/pstr-app/assets/fonts/Inter-OFL.txt)),
 and the Phosphor icon font, under MIT.

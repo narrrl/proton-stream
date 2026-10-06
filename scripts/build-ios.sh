@@ -11,14 +11,16 @@ repo_root="$(cd -- "$script_dir/.." && pwd)"
 ios_dir="$repo_root/ios"
 generated="$ios_dir/build/generated"
 target=aarch64-apple-ios
+simulator=aarch64-apple-ios-sim
 
 usage() {
-  echo "usage: $0 {rust|bindings|ipa|all}"
+  echo "usage: $0 {rust|bindings|ipa|all|test}"
   echo
   echo "  rust      static libpstr_android.a for $target"
   echo "  bindings  Swift bindings into ios/build/generated"
-  echo "  ipa       xcodegen + xcodebuild, then dist/ProtonStream-<version>.ipa"
+  echo "  ipa       xcodegen + xcodebuild, then dist/proton-stream-<version>-ios.ipa"
   echo "  all       all three, in that order"
+  echo "  test      the unit tests on a simulator ($simulator)"
 }
 
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -36,11 +38,19 @@ version="$(awk '/^\[workspace.package\]/{found=1; next} found && /^\[/{exit} fou
 [[ -n "$version" ]] || die "no [workspace.package] version in Cargo.toml"
 
 build_rust() {
-  log "cargo rustc -p pstr-android --target $target (staticlib)"
+  local triple="${1:-$target}"
+  log "cargo rustc -p pstr-android --target $triple (staticlib)"
   # The crate stays `cdylib, rlib` for Android; the archive iOS links is asked
   # for here instead of being built on every other platform too.
   ( cd "$repo_root" && IPHONEOS_DEPLOYMENT_TARGET=17.0 cargo rustc -p pstr-android --lib \
-      --release --locked --target "$target" --crate-type staticlib )
+      --release --locked --target "$triple" --crate-type staticlib )
+}
+
+generate_project() {
+  command -v xcodegen >/dev/null || die "xcodegen is required (brew install xcodegen)"
+  [[ -f "$generated/PstrBridge.swift" ]] || die "run '$0 bindings' first"
+  log "xcodegen ($version)"
+  ( cd "$ios_dir" && PSTR_VERSION="$version" PSTR_BUILD="${PSTR_BUILD:-1}" xcodegen generate --quiet )
 }
 
 build_bindings() {
@@ -56,12 +66,8 @@ build_bindings() {
 }
 
 build_ipa() {
-  command -v xcodegen >/dev/null || die "xcodegen is required (brew install xcodegen)"
   [[ -f "$repo_root/target/$target/release/libpstr_android.a" ]] || die "run '$0 rust' first"
-  [[ -f "$generated/PstrBridge.swift" ]] || die "run '$0 bindings' first"
-
-  log "xcodegen ($version)"
-  ( cd "$ios_dir" && PSTR_VERSION="$version" PSTR_BUILD="${PSTR_BUILD:-1}" xcodegen generate --quiet )
+  generate_project
 
   log "xcodebuild (unsigned)"
   xcodebuild -project "$ios_dir/ProtonStream.xcodeproj" -scheme ProtonStream \
@@ -76,10 +82,27 @@ build_ipa() {
   rm -rf "$stage"
   mkdir -p "$stage/Payload" "$repo_root/dist"
   cp -R "$app" "$stage/Payload/"
-  local ipa="$repo_root/dist/ProtonStream-$version.ipa"
+  local ipa="$repo_root/dist/proton-stream-$version-ios.ipa"
   rm -f "$ipa"
   ( cd "$stage" && zip -qry "$ipa" Payload )
   log "wrote $ipa"
+}
+
+run_tests() {
+  build_rust "$simulator"
+  [[ -f "$generated/PstrBridge.swift" ]] || build_bindings
+  generate_project
+  # Whichever iPhone this Xcode ships a simulator for: the names change with
+  # every release, and the tests do not care which one.
+  local device
+  device="$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [^(]+' | sed 's/ *$//')"
+  [[ -n "$device" ]] || die "no iPhone simulator is installed"
+  log "xcodebuild test ($device)"
+  xcodebuild -project "$ios_dir/ProtonStream.xcodeproj" -scheme ProtonStream \
+    -destination "platform=iOS Simulator,name=$device" \
+    -derivedDataPath "$ios_dir/build/DerivedData" \
+    CODE_SIGNING_ALLOWED=NO \
+    test
 }
 
 case "${1:-}" in
@@ -87,5 +110,6 @@ case "${1:-}" in
   bindings) build_bindings ;;
   ipa) build_ipa ;;
   all) build_rust; build_bindings; build_ipa ;;
+  test) run_tests ;;
   *) usage >&2; exit 2 ;;
 esac
