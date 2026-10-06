@@ -161,7 +161,10 @@ reads an external subtitle through the same protocol); the work is in
 ## Design decisions already taken
 
 - **Fat client, no server.** Each viewer's app talks to Proton directly.
-- **Public links only**, but several, merged into one catalog. No account login.
+- **Public links first**, several, merged into one catalog. A Proton account
+  is optional: it adds folders of the viewer's own Drive as shares, and watch
+  history synced through a `proton-stream` device in that Drive — one file per
+  installation, so no two devices ever write the same file.
 - **Embedded libmpv**, not a bundled decoder stack. HEVC 10-bit, HDR and ASS
   subtitles with hardware decode, for free.
 - **No transcoding.** mpv demuxes and decodes natively; there is no remux or

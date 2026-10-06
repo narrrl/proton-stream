@@ -54,6 +54,8 @@ directories = "5"
 # Local dates for the history page. Already in the tree through the SDK.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 sha2 = "0.10"
+# The id a watch-history file is named by. Already in the tree through the SDK.
+getrandom = "0.3"
 # `bundled` so a Windows build needs no system SQLite.
 rusqlite = { version = "0.32", features = ["bundled"] }
 # The share URL fragment and the custom password are both secrets; they go in

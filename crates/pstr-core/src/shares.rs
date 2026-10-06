@@ -14,15 +14,28 @@
 //! A library is not one folder. [`SharedLibrary`] opens every configured share
 //! and merges them into one catalog, so the app has a single browsable view
 //! regardless of how many links it was given.
+//!
+//! ## Folders from a signed-in account
+//!
+//! A share can also be a folder of the viewer's own Drive — My Files, another
+//! device, or something shared with them — opened through the account signed
+//! in by [`crate::account`] instead of a link. It has no secrets of its own:
+//! the account session is the credential, and without it such a share simply
+//! fails to open, the same as a revoked link. [`ShareClient`] puts both kinds
+//! behind one surface so the crawl, the stream layer and the thumbnail path
+//! do not care which one they hold.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use proton_drive_rs::{Node, ProtonDrivePublicLinkClient};
+use proton_drive_rs::{
+    Node, ProtonDriveClient, ProtonDrivePublicLinkClient, RevisionReader, ThumbnailType,
+};
 use proton_sdk::config::ProtonClientConfiguration;
-use proton_sdk::ids::NodeUid;
+use proton_sdk::ids::{LinkId, NodeUid, VolumeId};
 use serde::{Deserialize, Serialize};
 
+use crate::account::Account;
 use crate::config::{AppDirs, read_json, write_json};
 use crate::error::{Error, Result};
 
@@ -92,6 +105,47 @@ pub struct Share {
     /// rather than after it fails.
     #[serde(default)]
     pub has_custom_password: bool,
+    /// Set when this share is a folder of the signed-in account rather than a
+    /// public link; `token` is then empty and there are no secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<AccountFolder>,
+}
+
+/// A folder of the signed-in account, kept as a library share.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountFolder {
+    pub volume_id: String,
+    pub link_id: String,
+}
+
+impl AccountFolder {
+    pub fn uid(&self) -> NodeUid {
+        NodeUid::new(
+            VolumeId::from(self.volume_id.clone()),
+            LinkId::from(self.link_id.clone()),
+        )
+    }
+
+    /// The share id this folder is kept under.
+    ///
+    /// Derived, like a link's `share-{token}`, so the same folder added on two
+    /// devices is the same share — which is what lets watch history recorded
+    /// against it on one device land on the other. Hashed rather than spliced
+    /// in because Proton ids are base64 and may carry characters a catalog key
+    /// is better off without.
+    pub fn share_id(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(self.volume_id.as_bytes());
+        hash.update([0]);
+        hash.update(self.link_id.as_bytes());
+        let digest = hash.finalize();
+        let hex: String = digest[..12]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("drive-{hex}")
+    }
 }
 
 /// The secrets for one share, as held in the credential store.
@@ -154,6 +208,31 @@ impl ShareStore {
             name: name.to_string(),
             token,
             has_custom_password: secrets.custom_password.is_some(),
+            folder: None,
+        };
+        shares.push(share.clone());
+        write_json(&self.dirs.shares_file(), &shares)?;
+        Ok(share)
+    }
+
+    /// Record a folder of the signed-in account as a share.
+    ///
+    /// Nothing goes in the credential store: the folder opens through the
+    /// account's session, which [`crate::account::AccountStore`] keeps.
+    pub fn add_folder(&self, name: &str, folder: AccountFolder) -> Result<Share> {
+        let id = folder.share_id();
+        let mut shares = self.list()?;
+        if shares.iter().any(|share| share.id == id) {
+            return Err(Error::Config(
+                "that folder is already in the library".to_owned(),
+            ));
+        }
+        let share = Share {
+            id,
+            name: name.to_string(),
+            token: String::new(),
+            has_custom_password: false,
+            folder: Some(folder),
         };
         shares.push(share.clone());
         write_json(&self.dirs.shares_file(), &shares)?;
@@ -184,6 +263,11 @@ impl ShareStore {
             .iter_mut()
             .find(|share| share.id == id)
             .ok_or_else(|| Error::NotFound(format!("no share with id {id}")))?;
+        if share.folder.is_some() {
+            return Err(Error::Config(
+                "that share is a folder of your account and has no link".to_owned(),
+            ));
+        }
         if share.token != token {
             return Err(Error::Config(
                 "that link is for a different share; add it as a new one".to_owned(),
@@ -221,8 +305,20 @@ impl ShareStore {
         self.secrets.delete(id)
     }
 
-    /// Open a share as a visitor.
-    pub async fn open(&self, share: &Share) -> Result<ProtonDrivePublicLinkClient> {
+    /// Open a share: a link as a visitor, a folder through `account`.
+    pub async fn open(&self, share: &Share, account: Option<&Account>) -> Result<ShareClient> {
+        if let Some(folder) = &share.folder {
+            let account = account.ok_or_else(|| {
+                Error::SignedOut(format!(
+                    "sign in to Proton to open {}, a folder of your account",
+                    share.name
+                ))
+            })?;
+            return Ok(ShareClient::Account {
+                client: account.drive().clone(),
+                root: folder.uid(),
+            });
+        }
         let secrets = self.load_secrets(&share.id)?;
         let client = ProtonDrivePublicLinkClient::open(
             client_configuration(),
@@ -234,7 +330,7 @@ impl ShareStore {
         // seeks wants more blocks in flight; at 4 MiB each this is a 192 MiB
         // ceiling, which is unremarkable for a desktop app.
         .with_max_inflight_blocks(48);
-        Ok(client)
+        Ok(ShareClient::PublicLink(Box::new(client)))
     }
 
     fn store_secrets(&self, id: &str, secrets: &ShareSecrets) -> Result<()> {
@@ -256,7 +352,96 @@ impl ShareStore {
 
 /// Several opened shares, presented as one library.
 pub struct SharedLibrary {
-    clients: BTreeMap<String, ProtonDrivePublicLinkClient>,
+    clients: BTreeMap<String, ShareClient>,
+}
+
+/// One opened share, whichever kind it is.
+///
+/// Cheap to clone: both clients share their caches and sessions between
+/// clones.
+#[derive(Clone)]
+pub enum ShareClient {
+    /// A public link, opened as a visitor. Boxed: the visitor client is
+    /// several times the size of the account variant, and libraries are
+    /// mostly links, so every map entry would otherwise pay for it.
+    PublicLink(Box<ProtonDrivePublicLinkClient>),
+    /// A folder of the signed-in account.
+    Account {
+        client: ProtonDriveClient,
+        root: NodeUid,
+    },
+}
+
+impl ShareClient {
+    /// The share's top folder.
+    pub async fn root_node(&self) -> proton_sdk::error::Result<Node> {
+        match self {
+            Self::PublicLink(client) => client.get_root_node().await,
+            Self::Account { client, root } => client.get_node(root).await?.ok_or_else(|| {
+                proton_sdk::error::ProtonError::invalid_operation(
+                    "the folder is no longer in your Drive",
+                )
+            }),
+        }
+    }
+
+    pub async fn enumerate_folder_children_node_uids(
+        &self,
+        folder: &NodeUid,
+    ) -> proton_sdk::error::Result<Vec<NodeUid>> {
+        match self {
+            Self::PublicLink(client) => client.enumerate_folder_children_node_uids(folder).await,
+            Self::Account { client, .. } => {
+                client.enumerate_folder_children_node_uids(folder).await
+            }
+        }
+    }
+
+    pub async fn enumerate_nodes(&self, uids: &[NodeUid]) -> proton_sdk::error::Result<Vec<Node>> {
+        match self {
+            Self::PublicLink(client) => client.enumerate_nodes(uids).await,
+            Self::Account { client, .. } => client.enumerate_nodes(uids).await,
+        }
+    }
+
+    pub async fn open_revision(&self, uid: &NodeUid) -> proton_sdk::error::Result<RevisionReader> {
+        match self {
+            Self::PublicLink(client) => client.open_revision(uid).await,
+            Self::Account { client, .. } => client.open_revision(uid).await,
+        }
+    }
+
+    pub async fn download_range(
+        &self,
+        uid: &NodeUid,
+        offset: u64,
+        length: u64,
+    ) -> proton_sdk::error::Result<Vec<u8>> {
+        match self {
+            Self::PublicLink(client) => client.download_range(uid, offset, length).await,
+            Self::Account { client, .. } => client.download_range(uid, offset, length).await,
+        }
+    }
+
+    pub async fn download_thumbnail(
+        &self,
+        uid: &NodeUid,
+        kind: ThumbnailType,
+    ) -> proton_sdk::error::Result<Option<Vec<u8>>> {
+        match self {
+            Self::PublicLink(client) => client.download_thumbnail(uid, kind).await,
+            Self::Account { client, .. } => client.download_thumbnail(uid, kind).await,
+        }
+    }
+
+    /// Replay a visitor handshake. An account session refreshes its own
+    /// tokens when one expires, so there is nothing to do for a folder.
+    pub async fn refresh_session(&self) -> proton_sdk::error::Result<()> {
+        match self {
+            Self::PublicLink(client) => client.refresh_session().await,
+            Self::Account { .. } => Ok(()),
+        }
+    }
 }
 
 impl SharedLibrary {
@@ -265,8 +450,14 @@ impl SharedLibrary {
     /// A share that fails to open is reported and skipped rather than failing
     /// the whole library — one revoked link should not make the other three
     /// unwatchable.
-    pub async fn open_all(store: &ShareStore) -> Result<(Self, Vec<(Share, Error)>)> {
-        Self::open_all_reusing(store, BTreeMap::new()).await
+    ///
+    /// Folders of the account open through `account`; without one they are
+    /// reported as failures like any other share that will not open.
+    pub async fn open_all(
+        store: &ShareStore,
+        account: Option<&Account>,
+    ) -> Result<(Self, Vec<(Share, Error)>)> {
+        Self::open_all_reusing(store, BTreeMap::new(), account).await
     }
 
     /// Open every configured share, reusing the clients in `reusable`.
@@ -278,7 +469,8 @@ impl SharedLibrary {
     /// link.
     pub async fn open_all_reusing(
         store: &ShareStore,
-        mut reusable: BTreeMap<String, ProtonDrivePublicLinkClient>,
+        mut reusable: BTreeMap<String, ShareClient>,
+        account: Option<&Account>,
     ) -> Result<(Self, Vec<(Share, Error)>)> {
         let mut clients = BTreeMap::new();
         let mut failures = Vec::new();
@@ -288,7 +480,7 @@ impl SharedLibrary {
                 clients.insert(share.id, client);
                 continue;
             }
-            match store.open(&share).await {
+            match store.open(&share, account).await {
                 Ok(client) => {
                     clients.insert(share.id.clone(), client);
                 }
@@ -305,19 +497,22 @@ impl SharedLibrary {
     /// The excluded share is the one whose credentials or membership just
     /// changed; leaving it out is what makes a removed share's live client
     /// unreachable rather than merely stale.
-    pub fn reusable_clients(
-        &self,
-        dropping: &str,
-    ) -> BTreeMap<String, ProtonDrivePublicLinkClient> {
+    ///
+    /// Folders of the account are never handed back: they carry the session
+    /// they were opened with, and the account may have signed out or changed
+    /// since.
+    pub fn reusable_clients(&self, dropping: &str) -> BTreeMap<String, ShareClient> {
         self.clients
             .iter()
-            .filter(|(id, _)| id.as_str() != dropping)
+            .filter(|(id, client)| {
+                id.as_str() != dropping && matches!(client, ShareClient::PublicLink(_))
+            })
             .map(|(id, client)| (id.clone(), client.clone()))
             .collect()
     }
 
     /// The client for one share.
-    pub fn client(&self, share_id: &str) -> Option<&ProtonDrivePublicLinkClient> {
+    pub fn client(&self, share_id: &str) -> Option<&ShareClient> {
         self.clients.get(share_id)
     }
 
@@ -377,7 +572,7 @@ impl SharedLibrary {
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
 
-        let root = client.get_root_node().await?;
+        let root = client.root_node().await?;
         let mut level = vec![root.uid.clone()];
         let mut found = vec![root];
 
@@ -433,7 +628,7 @@ const APP_VERSION: &str = concat!("external-drive-stream@", env!("CARGO_PKG_VERS
 const USER_AGENT: &str = concat!("proton-stream/", env!("CARGO_PKG_VERSION"));
 
 /// The API configuration every visitor client is built from.
-fn client_configuration() -> ProtonClientConfiguration {
+pub(crate) fn client_configuration() -> ProtonClientConfiguration {
     ProtonClientConfiguration::new(APP_VERSION).with_user_agent(USER_AGENT)
 }
 

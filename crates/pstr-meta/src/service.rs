@@ -421,6 +421,22 @@ impl MetadataService {
         }
     }
 
+    /// Pin `title` to the entry the viewer picked, and enrich it.
+    ///
+    /// Both halves, always: the point of choosing an entry by hand is usually
+    /// that the episode names were wrong too, so a choice that stored only the
+    /// title record left the episodes, the backdrop and the franchise chain of
+    /// the *old* match — or none — until some later match run got round to it.
+    /// A failed enrichment still keeps the choice, as in [`Self::work`].
+    pub async fn choose(&self, title: &Title, found: TitleMetadata) -> Outcome {
+        let enrichment = self.enrich_or_log(title, &found).await;
+        Outcome {
+            title_key: title.key.clone(),
+            record: Some(self.chosen(title.key.clone(), found)),
+            enrichment,
+        }
+    }
+
     async fn enrich_or_log(&self, title: &Title, found: &TitleMetadata) -> Option<Enrichment> {
         self.enrich(title, found)
             .await

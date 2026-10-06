@@ -636,8 +636,7 @@ private fun EpisodeRow(
                 fill = solid(MaterialTheme.colorScheme.tertiary),
             )
             Text(
-                "${active.status.replaceFirstChar { it.uppercase() }} · " +
-                    "${formatBytes(active.downloaded.toULong())} of ${formatBytes(active.total.toULong())}",
+                downloadStatusLine(active),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -654,6 +653,8 @@ internal fun ChangeMatchDialog(
 ) {
     var term by remember(title.key) { mutableStateOf(title.canonicalName ?: title.name) }
     var searching by remember { mutableStateOf(false) }
+    // Choosing fetches the entry's episodes too, which is a few requests.
+    var choosing by remember { mutableStateOf(false) }
     var options by remember { mutableStateOf<List<MatchRecord>>(emptyList()) }
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -672,16 +673,26 @@ internal fun ChangeMatchDialog(
                         searching = false
                     }
                 }) { Text(if (searching) "Searching…" else "Search") }
+                if (choosing) {
+                    Text(
+                        "Fetching its episodes…",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
                     items(options, key = { "${it.provider}:${it.remoteId}" }) { option ->
                         EdgedButton(
                             onClick = {
+                                choosing = true
                                 scope.launch {
                                     runCatching {
                                         withContext(Dispatchers.IO) { NativeRuntime.engine().chooseMatch(title.key, option) }
                                     }.onSuccess { onChanged() }.onFailure(onError)
+                                    choosing = false
                                 }
                             },
+                            enabled = !choosing,
                             modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                         ) {
                             Column(Modifier.fillMaxWidth()) {

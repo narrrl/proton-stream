@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use proton_drive_rs::ProtonDrivePublicLinkClient;
 use proton_sdk::error::ProtonError;
 use proton_sdk::ids::NodeUid;
 
@@ -159,7 +158,7 @@ impl LibraryOpener {
         Self { library }
     }
 
-    fn client(&self, share_id: &str) -> Result<&ProtonDrivePublicLinkClient> {
+    fn client(&self, share_id: &str) -> Result<&pstr_core::ShareClient> {
         self.library
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))

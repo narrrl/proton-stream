@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
+use pstr_core::account::{DriveEntry, PendingSignIn, PlaceKind, SignIn};
 use pstr_core::appearance::{Accent, Appearance, Flavor, Palette};
 use pstr_core::browse::Sort;
 use pstr_core::catalog::{Catalog, OfflineFile, TitleTrackPrefs, WatchState, build_rows};
@@ -20,12 +21,17 @@ use pstr_core::metadata::{
     EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId, TitleMetadata, TitleNames,
 };
 use pstr_core::prefs::PlaybackPrefs;
-use pstr_core::proton_drive_rs::{ProtonDrivePublicLinkClient, ThumbnailType};
+use pstr_core::proton_drive_rs::ThumbnailType;
+use pstr_core::proton_sdk::api::HumanVerificationCredential;
 use pstr_core::proton_sdk::ids::{LinkId, VolumeId};
-use pstr_core::{SecretStore, ShareStore, SharedLibrary};
+use pstr_core::shares::AccountFolder;
+use pstr_core::sync::WatchSync;
+use pstr_core::{
+    Account, AccountStore, SecretStore, Share, ShareClient, ShareStore, SharedLibrary,
+};
 use pstr_stream::{
-    BlockSource, DiskCacheConfig, FileBlocks, LibraryOpener, NodeUid, StreamConfig, StreamSource,
-    VideoStream,
+    BlockSource, COPY_BLOCKS_IN_FLIGHT, DiskCacheConfig, FileBlocks, LibraryOpener, NodeUid,
+    StreamConfig, StreamSource, VideoStream,
 };
 use serde::{Deserialize, Serialize};
 
@@ -131,6 +137,102 @@ pub struct ShareRecord {
     pub id: String,
     pub name: String,
     pub has_custom_password: bool,
+    /// A folder of the signed-in account rather than a public link.
+    #[uniffi(default = false)]
+    pub from_account: bool,
+}
+
+fn share_record(share: Share) -> ShareRecord {
+    ShareRecord {
+        from_account: share.folder.is_some(),
+        id: share.id,
+        name: share.name,
+        has_custom_password: share.has_custom_password,
+    }
+}
+
+/// Where the Proton account stands.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum AccountState {
+    SignedOut,
+    SignedIn {
+        username: String,
+    },
+    /// A sign-in is waiting for a second-factor code.
+    SecondFactor,
+    /// A sign-in is waiting for the mailbox password.
+    MailboxPassword,
+}
+
+/// What a sign-in step led to.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum SignInOutcome {
+    Done {
+        username: String,
+    },
+    SecondFactor,
+    MailboxPassword,
+    /// Proton wants a CAPTCHA first. Show `url` in a WebView, read the token
+    /// out of its messages with [`verification_token`], and sign in again with
+    /// it.
+    HumanVerification {
+        url: String,
+    },
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SyncRecord {
+    /// Episodes whose position another device had newer.
+    pub applied: u32,
+    pub uploaded: bool,
+    /// Other installations whose history was read.
+    pub devices: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PlaceType {
+    MyFiles,
+    Device,
+    SharedWithMe,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DrivePlaceRecord {
+    pub kind: PlaceType,
+    pub name: String,
+    pub volume_id: String,
+    pub link_id: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DriveEntryRecord {
+    pub name: String,
+    pub volume_id: String,
+    pub link_id: String,
+    pub is_folder: bool,
+    pub size: Option<u64>,
+    pub is_video: bool,
+}
+
+fn drive_entry_record(entry: DriveEntry) -> DriveEntryRecord {
+    DriveEntryRecord {
+        is_video: entry
+            .media_type
+            .as_deref()
+            .is_some_and(|media| media.starts_with("video/")),
+        name: entry.name,
+        volume_id: entry.uid.volume_id.as_str().to_owned(),
+        link_id: entry.uid.link_id.as_str().to_owned(),
+        is_folder: entry.is_folder,
+        size: entry.size.and_then(|size| u64::try_from(size).ok()),
+    }
+}
+
+/// The CAPTCHA token in a message the verification page posted, or `None` for
+/// one of its other messages. See [`SignInOutcome::HumanVerification`].
+#[uniffi::export]
+pub fn verification_token(message: String) -> Option<String> {
+    pstr_core::account::verification_token(&message)
 }
 
 #[derive(Debug, Clone, uniffi::Enum)]
@@ -811,7 +913,7 @@ pub struct AndroidEngine {
     /// Held across the open handshakes so concurrent callers share one build.
     connecting: tokio::sync::Mutex<()>,
     /// Clients carried over from a retired connection, for the next build.
-    reusable_clients: Mutex<Option<BTreeMap<String, ProtonDrivePublicLinkClient>>>,
+    reusable_clients: Mutex<Option<BTreeMap<String, ShareClient>>>,
     /// The whole library as bridge records, behind the catalog's write counter.
     library_cache: Mutex<Option<CachedLibrary>>,
     /// Serializes offline publication with share removal cleanup.
@@ -830,7 +932,29 @@ pub struct AndroidEngine {
     /// The streaming cache's budget in bytes, for the next connection and,
     /// through [`AndroidEngine::set_stream_cache_budget`], the open one.
     cache_budget: AtomicU64,
+    accounts: AccountStore,
+    /// The signed-in Proton account, if any.
+    account: Mutex<Option<Account>>,
+    /// A sign-in waiting for a code or the mailbox password.
+    pending_sign_in: Mutex<Option<PendingSignIn>>,
+    /// `None` when this installation's sync identity could not be written.
+    watch_sync: Option<Arc<WatchSync>>,
+    /// How many offline downloads may transfer at once.
+    ///
+    /// WorkManager starts every queued worker whose constraints are met, so
+    /// "Download season" on twelve episodes was twelve transfers splitting one
+    /// link: each crawled, and none reported progress for long enough to look
+    /// stuck. The rest wait here, reported as queued, and start as one ends.
+    download_permits: Arc<tokio::sync::Semaphore>,
 }
+
+/// How many offline downloads transfer at once. See
+/// [`AndroidEngine::download_permits`]; the desktop runs three, a phone link
+/// is better served by two.
+const OFFLINE_DOWNLOAD_CONCURRENCY: usize = 2;
+
+/// How often a download waiting for a slot asks whether it was cancelled.
+const DOWNLOAD_WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// How long a visitor session is assumed good for without a refresh.
 ///
@@ -854,6 +978,17 @@ impl AndroidEngine {
             Arc::clone(&secret_store),
         ));
         let catalog = Catalog::open(&dirs.catalog_db()).map_err(BridgeError::from_display)?;
+        let accounts = AccountStore::new(Arc::clone(&secret_store));
+        // An unreadable session is a signed-out app, not one that will not
+        // start: the library is the point, and the account is an extra.
+        let account = accounts.resume().unwrap_or_else(|error| {
+            log::warn!("resume the Proton session: {error}");
+            None
+        });
+        let watch_sync = WatchSync::open(&dirs)
+            .inspect_err(|error| log::warn!("watch-history sync unavailable: {error}"))
+            .ok()
+            .map(Arc::new);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -875,23 +1010,224 @@ impl AndroidEngine {
             thumbnails: tokio::sync::Semaphore::new(THUMBNAIL_CONCURRENCY),
             session_refreshed: Mutex::new(HashMap::new()),
             cache_budget: AtomicU64::new(DiskCacheConfig::DEFAULT_BUDGET_BYTES),
+            download_permits: Arc::new(tokio::sync::Semaphore::new(OFFLINE_DOWNLOAD_CONCURRENCY)),
+            accounts,
+            account: Mutex::new(account),
+            pending_sign_in: Mutex::new(None),
+            watch_sync,
         }))
+    }
+
+    pub fn account_state(&self) -> AccountState {
+        if let Some(account) = self.account.lock().as_ref() {
+            return AccountState::SignedIn {
+                username: account.username().to_owned(),
+            };
+        }
+        // A pending sign-in is only ever reached through `sign_in`, whose
+        // outcome already said which of the two it is waiting for; the
+        // distinction is not kept, and a screen rebuilt mid-sign-in starts it
+        // over.
+        AccountState::SignedOut
+    }
+
+    /// Start signing in. `verification_token` is the CAPTCHA answer, after a
+    /// first attempt came back [`SignInOutcome::HumanVerification`].
+    pub async fn sign_in(
+        self: Arc<Self>,
+        username: String,
+        password: String,
+        verification_token: Option<String>,
+    ) -> Result<SignInOutcome, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let verification = verification_token.map(HumanVerificationCredential::captcha);
+            match self
+                .accounts
+                .sign_in(&username, &password, verification)
+                .await
+            {
+                Ok(step) => Ok(self.sign_in_step(step)),
+                Err(pstr_core::Error::HumanVerification(challenge)) => {
+                    Ok(SignInOutcome::HumanVerification {
+                        url: challenge.verification_url(),
+                    })
+                }
+                Err(error) => Err(BridgeError::from_display(error)),
+            }
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    /// A wrong code ends the attempt: the half-made session is spent, and the
+    /// viewer signs in again from the start.
+    pub async fn submit_second_factor(
+        self: Arc<Self>,
+        code: String,
+    ) -> Result<SignInOutcome, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let pending =
+                self.pending_sign_in
+                    .lock()
+                    .take()
+                    .ok_or_else(|| BridgeError::Failure {
+                        reason: "that sign-in expired; start again".to_owned(),
+                    })?;
+            let step = pending
+                .second_factor(&code)
+                .await
+                .map_err(BridgeError::from_display)?;
+            Ok(self.sign_in_step(step))
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    /// A wrong mailbox password keeps the sign-in, so it can be typed again.
+    pub async fn submit_mailbox_password(
+        self: Arc<Self>,
+        password: String,
+    ) -> Result<SignInOutcome, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let pending =
+                self.pending_sign_in
+                    .lock()
+                    .take()
+                    .ok_or_else(|| BridgeError::Failure {
+                        reason: "that sign-in expired; start again".to_owned(),
+                    })?;
+            match pending.mailbox_password(&password).await {
+                Ok(account) => Ok(self.sign_in_step(SignIn::Done(account))),
+                Err(error) => {
+                    *self.pending_sign_in.lock() = Some(pending);
+                    Err(BridgeError::from_display(error))
+                }
+            }
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    pub fn cancel_sign_in(&self) {
+        self.pending_sign_in.lock().take();
+    }
+
+    /// Sign out and forget the stored session. The library keeps everything;
+    /// the account's folders stop opening until the next sign-in.
+    pub async fn sign_out(self: Arc<Self>) -> Result<(), BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let account = self.account.lock().take();
+            let result = self.accounts.sign_out(account.as_ref()).await;
+            self.signed_out();
+            result.map_err(BridgeError::from_display)
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    /// Sync watch history with the account's Drive. `None` when nobody is
+    /// signed in.
+    ///
+    /// A session that has ended — revoked elsewhere, or idle too long — signs
+    /// the app out and fails with why, rather than failing the same way on
+    /// every later call.
+    pub async fn sync_watch_history(self: Arc<Self>) -> Result<Option<SyncRecord>, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let (Some(account), Some(sync)) =
+                (self.account.lock().clone(), self.watch_sync.clone())
+            else {
+                return Ok(None);
+            };
+            match sync.sync(&account, &self.catalog).await {
+                Ok(report) => Ok(Some(SyncRecord {
+                    applied: u32::try_from(report.applied).unwrap_or(u32::MAX),
+                    uploaded: report.uploaded,
+                    devices: u32::try_from(report.devices).unwrap_or(u32::MAX),
+                })),
+                Err(error) if error.is_signed_out() => {
+                    let _ = self.accounts.sign_out(None).await;
+                    self.signed_out();
+                    Err(BridgeError::Failure {
+                        reason: "Your Proton session ended. Sign in again to keep syncing."
+                            .to_owned(),
+                    })
+                }
+                Err(error) => Err(BridgeError::from_display(error)),
+            }
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    /// The account's top-level places: My Files, devices, shared with me.
+    pub async fn drive_places(self: Arc<Self>) -> Result<Vec<DrivePlaceRecord>, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let account = self.signed_in_account()?;
+            let places = account.places().await.map_err(BridgeError::from_display)?;
+            Ok(places
+                .into_iter()
+                .map(|place| DrivePlaceRecord {
+                    kind: match place.kind {
+                        PlaceKind::MyFiles => PlaceType::MyFiles,
+                        PlaceKind::Device => PlaceType::Device,
+                        PlaceKind::SharedWithMe => PlaceType::SharedWithMe,
+                    },
+                    name: place.name,
+                    volume_id: place.uid.volume_id.as_str().to_owned(),
+                    link_id: place.uid.link_id.as_str().to_owned(),
+                })
+                .collect())
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    /// One folder of the account: folders first, then files.
+    pub async fn drive_folder(
+        self: Arc<Self>,
+        volume_id: String,
+        link_id: String,
+    ) -> Result<Vec<DriveEntryRecord>, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let account = self.signed_in_account()?;
+            let entries = account
+                .folder_children(&node_uid(&volume_id, &link_id))
+                .await
+                .map_err(BridgeError::from_display)?;
+            Ok(entries.into_iter().map(drive_entry_record).collect())
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    /// Add a folder of the account as a share. Crawl it next, as after
+    /// [`Self::add_share`].
+    pub fn add_account_folder(
+        &self,
+        name: String,
+        volume_id: String,
+        link_id: String,
+    ) -> Result<ShareRecord, BridgeError> {
+        let share = self
+            .store
+            .add_folder(&name, AccountFolder { volume_id, link_id })
+            .map_err(BridgeError::from_display)?;
+        self.invalidate_connection(&share.id);
+        Ok(share_record(share))
     }
 
     pub fn shares(&self) -> Result<Vec<ShareRecord>, BridgeError> {
         self.store
             .list()
             .map_err(BridgeError::from_display)
-            .map(|shares| {
-                shares
-                    .into_iter()
-                    .map(|share| ShareRecord {
-                        id: share.id,
-                        name: share.name,
-                        has_custom_password: share.has_custom_password,
-                    })
-                    .collect()
-            })
+            .map(|shares| shares.into_iter().map(share_record).collect())
     }
 
     pub fn add_share(
@@ -905,11 +1241,7 @@ impl AndroidEngine {
             .add(&name, &url, custom_password.as_deref())
             .map_err(BridgeError::from_display)?;
         self.invalidate_connection(&share.id);
-        Ok(ShareRecord {
-            id: share.id,
-            name: share.name,
-            has_custom_password: share.has_custom_password,
-        })
+        Ok(share_record(share))
     }
 
     /// Re-supply the link behind a share whose stored secret is unreadable.
@@ -928,11 +1260,7 @@ impl AndroidEngine {
             .replace_secrets(&share_id, &url, custom_password.as_deref())
             .map_err(BridgeError::from_display)?;
         self.invalidate_connection(&share.id);
-        Ok(ShareRecord {
-            id: share.id,
-            name: share.name,
-            has_custom_password: share.has_custom_password,
-        })
+        Ok(share_record(share))
     }
 
     pub fn remove_share(&self, share_id: String) -> Result<(), BridgeError> {
@@ -1163,19 +1491,47 @@ impl AndroidEngine {
         .map_err(BridgeError::from_display)?
     }
 
-    pub fn choose_match(&self, title_key: String, found: MatchRecord) -> Result<(), BridgeError> {
-        let service = self.metadata_service()?;
-        let metadata = title_metadata(found);
-        if metadata.provider != service.provider() {
-            return Err(BridgeError::Failure {
-                reason: "match came from a different metadata provider".to_owned(),
-            });
-        }
-        self.title(&title_key)?;
-        self.catalog
-            .lock()
-            .set_metadata(&service.chosen(title_key, metadata))
-            .map_err(BridgeError::from_display)
+    /// Pin a title to the entry the viewer picked, then fetch that entry's
+    /// episodes, backdrop and franchise chain — the same enrichment a match run
+    /// does, so the title page shows the new match's episodes as soon as this
+    /// returns rather than after the next run.
+    pub async fn choose_match(
+        self: Arc<Self>,
+        title_key: String,
+        found: MatchRecord,
+    ) -> Result<(), BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let service = self.metadata_service()?;
+            let metadata = title_metadata(found);
+            if metadata.provider != service.provider() {
+                return Err(BridgeError::Failure {
+                    reason: "match came from a different metadata provider".to_owned(),
+                });
+            }
+            let title = self.title(&title_key)?;
+            let outcome = service.choose(&title, metadata).await;
+            if let Some(record) = &outcome.record {
+                self.catalog
+                    .lock()
+                    .set_metadata(record)
+                    .map_err(BridgeError::from_display)?;
+            }
+            if let Some(enrichment) = &outcome.enrichment {
+                let stored = self.catalog.lock().set_enrichment(
+                    &title_key,
+                    service.provider(),
+                    now(),
+                    enrichment,
+                );
+                if let Err(error) = stored {
+                    log::warn!("store enrichment for {title_key}: {error}");
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(BridgeError::from_display)?
     }
 
     pub fn forget_match(&self, title_key: String) -> Result<(), BridgeError> {
@@ -1754,6 +2110,46 @@ impl AndroidEngine {
             })
     }
 
+    fn sign_in_step(&self, step: SignIn) -> SignInOutcome {
+        match step {
+            SignIn::Done(account) => {
+                let username = account.username().to_owned();
+                *self.account.lock() = Some(account);
+                if let Some(sync) = &self.watch_sync {
+                    sync.reset();
+                }
+                // Folders of the account that failed to open are openable now.
+                self.invalidate_connection("");
+                SignInOutcome::Done { username }
+            }
+            SignIn::SecondFactor(pending) => {
+                *self.pending_sign_in.lock() = Some(pending);
+                SignInOutcome::SecondFactor
+            }
+            SignIn::MailboxPassword(pending) => {
+                *self.pending_sign_in.lock() = Some(pending);
+                SignInOutcome::MailboxPassword
+            }
+        }
+    }
+
+    fn signed_out(&self) {
+        self.account.lock().take();
+        if let Some(sync) = &self.watch_sync {
+            sync.reset();
+        }
+        self.invalidate_connection("");
+    }
+
+    fn signed_in_account(&self) -> Result<Account, BridgeError> {
+        self.account
+            .lock()
+            .clone()
+            .ok_or_else(|| BridgeError::Failure {
+                reason: "not signed in to Proton".to_owned(),
+            })
+    }
+
     /// Retire the cached connection after a mutation of `share_id`.
     ///
     /// The cached `Connection` is dropped here rather than left to be noticed
@@ -1867,9 +2263,11 @@ impl AndroidEngine {
             let generation = self.share_generation.load(Ordering::Acquire);
             let reusable = self.reusable_clients.lock().take().unwrap_or_default();
 
-            let (library, failures) = SharedLibrary::open_all_reusing(&self.store, reusable)
-                .await
-                .map_err(BridgeError::from_display)?;
+            let account = self.account.lock().clone();
+            let (library, failures) =
+                SharedLibrary::open_all_reusing(&self.store, reusable, account.as_ref())
+                    .await
+                    .map_err(BridgeError::from_display)?;
             let open_failures: Vec<String> = failures
                 .into_iter()
                 .map(|(share, error)| format!("{}: {error}", share.name))
@@ -1923,6 +2321,27 @@ impl AndroidEngine {
         share_id: &str,
         uid: &NodeUid,
     ) -> Result<VideoStream, BridgeError> {
+        self.open_reauthenticating(connection, share_id, uid, false)
+            .await
+    }
+
+    /// [`Self::open_from_source`], or with `copy` the stream an offline
+    /// download reads: no read-ahead, nothing added to the memory ring or the
+    /// disk cache. See [`StreamSource::open_for_copy`].
+    async fn open_reauthenticating(
+        &self,
+        connection: &Connection,
+        share_id: &str,
+        uid: &NodeUid,
+        copy: bool,
+    ) -> Result<VideoStream, BridgeError> {
+        let open = || async {
+            if copy {
+                connection.source.open_for_copy(share_id, uid).await
+            } else {
+                connection.source.open(share_id, uid).await
+            }
+        };
         let stale = self
             .session_refreshed
             .lock()
@@ -1931,15 +2350,11 @@ impl AndroidEngine {
         if stale {
             self.refresh_session(connection, share_id).await;
         }
-        match connection.source.open(share_id, uid).await {
+        match open().await {
             Ok(stream) => Ok(stream),
             Err(_) if !stale => {
                 self.refresh_session(connection, share_id).await;
-                connection
-                    .source
-                    .open(share_id, uid)
-                    .await
-                    .map_err(BridgeError::from_display)
+                open().await.map_err(BridgeError::from_display)
             }
             Err(error) => Err(BridgeError::from_display(error)),
         }
@@ -2071,9 +2486,26 @@ impl AndroidEngine {
             return Ok(record);
         }
 
+        // Nothing is reported until a slot is held, so the worker's record
+        // stays queued while it waits rather than claiming to be running.
+        let _permit = loop {
+            if cancelled(observer.as_ref()) {
+                return Err(BridgeError::Failure {
+                    reason: "offline download cancelled".to_owned(),
+                });
+            }
+            let permits = Arc::clone(&self.download_permits);
+            tokio::select! {
+                permit = permits.acquire_owned() => {
+                    break permit.map_err(BridgeError::from_display)?;
+                }
+                () = tokio::time::sleep(DOWNLOAD_WAIT_POLL) => {}
+            }
+        };
+
         let connection = self.connection().await?;
         let stream = self
-            .open_from_source(&connection, share_id, &node_uid(volume_id, link_id))
+            .open_reauthenticating(&connection, share_id, &node_uid(volume_id, link_id), true)
             .await?;
         let revision_id = stream.revision_id().to_owned();
         let block_sizes = stream.block_sizes().to_vec();
@@ -2125,7 +2557,13 @@ impl AndroidEngine {
         let mut output = prepare_partial_file(&temporary, offset).await?;
         report(observer.as_ref(), offset, total);
 
+        use futures::TryStreamExt as _;
         use tokio::io::AsyncWriteExt;
+        // A few blocks in flight, written in order. One at a time the copy ran
+        // at one round trip per 4 MiB; through the playback stream it carried
+        // twelve blocks of read-ahead, so the first block — and with it the
+        // first progress report — waited on all twelve sharing the link.
+        let mut fetches = stream.blocks_in_order(block_index, COPY_BLOCKS_IN_FLIGHT);
         while block_index < block_sizes.len() {
             if cancelled(observer.as_ref()) {
                 output.sync_all().await.map_err(BridgeError::from_display)?;
@@ -2134,10 +2572,13 @@ impl AndroidEngine {
                 });
             }
             let size = block_sizes[block_index];
-            let bytes = stream
-                .read_range(offset, size)
+            let bytes = fetches
+                .try_next()
                 .await
-                .map_err(BridgeError::from_display)?;
+                .map_err(BridgeError::from_display)?
+                .ok_or_else(|| BridgeError::Failure {
+                    reason: format!("offline block {block_index} never arrived"),
+                })?;
             if bytes.len() as u64 != size {
                 return Err(BridgeError::Failure {
                     reason: format!(

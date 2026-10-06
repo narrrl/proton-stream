@@ -146,6 +146,32 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B64 — Android offline downloads looked stuck
+
+**Symptom.** A queued episode, and more so a queued season, sat at a progress
+bar that did not move for long stretches, then jumped.
+
+**Cause.** Three, compounding. WorkManager starts every queued worker whose
+constraints are met, so "Download season" was a dozen transfers at once, each
+with a share of the link. Each read through the *playback* stream, so behind
+every block it read sat twelve blocks of read-ahead competing for the same
+bandwidth — and filling the shared memory ring and the disk block cache, a
+second copy of every byte. And progress was reported once per completed
+in-order block, so the first report waited on all of that. The desktop had none
+of these: three downloads at most, a copy stream with no read-ahead, four
+blocks in flight.
+
+**Fix.** The Android engine allows two downloads to transfer at once; the rest
+wait for a slot, reported as queued (the worker no longer marks itself running
+before its first progress report, and its notification says "Waiting to
+download"). Downloads open through `StreamSource::open_for_copy` and read with
+`VideoStream::blocks_in_order` at `COPY_BLOCKS_IN_FLIGHT`, now shared with the
+desktop engine. The rows show a smoothed transfer rate beside the bytes, so a
+slow download reads as slow rather than stuck.
+
+**Verified.** Workspace gate and the Android host check pass, with
+`TransferRateTest` covering the rate. Not yet observed on a device.
+
 ### B63 — a taskbar pin on Windows lost its icon
 
 **Symptom.** Proton Stream pinned to the Windows taskbar showed its icon at

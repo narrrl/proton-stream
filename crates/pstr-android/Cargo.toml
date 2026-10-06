@@ -24,6 +24,7 @@ pstr-core.workspace = true
 pstr-meta.workspace = true
 pstr-stream.workspace = true
 tokio.workspace = true
+futures.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
 uniffi.workspace = true

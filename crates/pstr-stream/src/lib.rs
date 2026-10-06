@@ -42,4 +42,4 @@ pub use proton_sdk::ids::NodeUid;
 pub use reader::{FileBlocks, LibraryOpener, RevisionBlocks};
 pub use ring::{DEFAULT_RING_BYTES, RingStats};
 pub use source::{RevisionOpener, StreamConfig, StreamSource};
-pub use stream::{DEFAULT_READAHEAD_BLOCKS, StreamStats, VideoStream};
+pub use stream::{COPY_BLOCKS_IN_FLIGHT, DEFAULT_READAHEAD_BLOCKS, StreamStats, VideoStream};

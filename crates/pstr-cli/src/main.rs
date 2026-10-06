@@ -8,9 +8,12 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use proton_sdk::ids::{LinkId, NodeUid, VolumeId};
+use pstr_core::account::{PlaceKind, SignIn};
 use pstr_core::catalog::{Catalog, build_rows};
 use pstr_core::config::AppDirs;
-use pstr_core::{ShareStore, SharedLibrary};
+use pstr_core::shares::AccountFolder;
+use pstr_core::sync::WatchSync;
+use pstr_core::{Account, AccountStore, KeyringSecretStore, ShareStore, SharedLibrary};
 use pstr_player::{EndReason, Player, PlayerConfig, PlayerEvent};
 use pstr_stream::{DiskCacheConfig, LibraryOpener, StreamConfig, StreamSource};
 
@@ -69,8 +72,38 @@ enum Command {
         #[arg(long)]
         custom_password: bool,
     },
+    /// Add a folder of the signed-in account as a share.
+    ///
+    /// The folder is named by the `VOLUME:LINK` id `browse` prints.
+    AddFolder {
+        /// What to call it in the UI.
+        #[arg(long)]
+        name: String,
+        /// The folder, as `VOLUME:LINK`.
+        folder: String,
+    },
     /// List configured shares.
     Shares,
+    /// Sign in to a Proton account, for watch history across devices and for
+    /// folders of your own Drive.
+    ///
+    /// The password, a second-factor code and a mailbox password are prompted
+    /// for as the account needs them.
+    Login {
+        /// The account's address.
+        username: String,
+    },
+    /// Sign out and forget the stored session.
+    Logout,
+    /// Show which account is signed in.
+    Account,
+    /// List the account's Drive: its top-level places, or one folder.
+    Browse {
+        /// The folder to list, as `VOLUME:LINK`; the places when omitted.
+        folder: Option<String>,
+    },
+    /// Sync watch history with the signed-in account's Drive.
+    Sync,
     /// Forget a share and its stored credentials.
     Remove {
         /// The share id, as printed by `shares`.
@@ -210,6 +243,7 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
     let cli = Cli::parse();
     let dirs = AppDirs::ensure().context("resolve app directories")?;
     let store = ShareStore::new(dirs.clone());
+    let accounts = AccountStore::new(std::sync::Arc::new(KeyringSecretStore));
 
     match cli.command {
         Command::Add {
@@ -228,6 +262,80 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
             println!("added {} ({})", share.name, share.id);
         }
 
+        Command::AddFolder { name, folder } => {
+            let uid = parse_uid(&folder)?;
+            let share = store
+                .add_folder(
+                    &name,
+                    AccountFolder {
+                        volume_id: uid.volume_id.as_str().to_owned(),
+                        link_id: uid.link_id.as_str().to_owned(),
+                    },
+                )
+                .context("add folder")?;
+            println!("added {} ({})", share.name, share.id);
+        }
+
+        Command::Login { username } => login(&accounts, &username).await?,
+
+        Command::Logout => {
+            let account = accounts.resume().ok().flatten();
+            accounts
+                .sign_out(account.as_ref())
+                .await
+                .context("sign out")?;
+            println!("signed out");
+        }
+
+        Command::Account => match accounts.username().context("read the account")? {
+            Some(username) => println!("signed in as {username}"),
+            None => println!("not signed in — sign in with `pstr login <address>`"),
+        },
+
+        Command::Browse { folder } => {
+            let account = signed_in(&accounts)?;
+            match folder {
+                None => {
+                    for place in account.places().await.context("list places")? {
+                        let kind = match place.kind {
+                            PlaceKind::MyFiles => "files",
+                            PlaceKind::Device => "device",
+                            PlaceKind::SharedWithMe => "shared",
+                        };
+                        println!("{}\t{kind}\t{}", format_uid(&place.uid), place.name);
+                    }
+                }
+                Some(folder) => {
+                    let entries = account
+                        .folder_children(&parse_uid(&folder)?)
+                        .await
+                        .context("list folder")?;
+                    for entry in entries {
+                        let kind = if entry.is_folder { "dir" } else { "file" };
+                        println!("{}\t{kind}\t{}", format_uid(&entry.uid), entry.name);
+                    }
+                }
+            }
+        }
+
+        Command::Sync => {
+            let account = signed_in(&accounts)?;
+            let sync = WatchSync::open(&dirs).context("open sync state")?;
+            let catalog =
+                parking_lot::Mutex::new(Catalog::open(&dirs.catalog_db()).context("open catalog")?);
+            let report = sync.sync(&account, &catalog).await.context("sync")?;
+            println!(
+                "read {} other device(s), took {} newer position(s), {}",
+                report.devices,
+                report.applied,
+                if report.uploaded {
+                    "uploaded this device's history"
+                } else {
+                    "this device's history was already up to date"
+                }
+            );
+        }
+
         Command::Shares => {
             let shares = store.list().context("list shares")?;
             if shares.is_empty() {
@@ -239,7 +347,12 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
                 } else {
                     ""
                 };
-                println!("{}\t{}{}", share.id, share.name, custom);
+                let kind = if share.folder.is_some() {
+                    " [account folder]"
+                } else {
+                    ""
+                };
+                println!("{}\t{}{}{}", share.id, share.name, custom, kind);
             }
         }
 
@@ -249,7 +362,8 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
         }
 
         Command::Crawl { share } => {
-            let (library, failures) = SharedLibrary::open_all(&store)
+            let account = accounts.resume().context("resume the account")?;
+            let (library, failures) = SharedLibrary::open_all(&store, account.as_ref())
                 .await
                 .context("open shares")?;
             for (share, error) in &failures {
@@ -643,7 +757,10 @@ async fn open_target(
 
     println!("file:   {} ({})", target.name, target.share_id);
 
-    let (library, failures) = SharedLibrary::open_all(store)
+    let account = AccountStore::new(std::sync::Arc::new(KeyringSecretStore))
+        .resume()
+        .context("resume the account")?;
+    let (library, failures) = SharedLibrary::open_all(store, account.as_ref())
         .await
         .context("open shares")?;
     for (share, error) in &failures {
@@ -968,6 +1085,71 @@ async fn play(
 }
 
 /// Unix seconds, for the "when was this asked" columns.
+/// Walk an interactive sign-in through whatever the account asks for.
+async fn login(accounts: &AccountStore, username: &str) -> Result<()> {
+    let password = read_password("Password: ")?;
+    let mut step = match accounts.sign_in(username, &password, None).await {
+        Ok(step) => step,
+        Err(pstr_core::Error::HumanVerification(challenge)) => {
+            // Solving a CAPTCHA needs a browser engine that can hand the
+            // token back, which a terminal does not have.
+            anyhow::bail!(
+                "Proton wants a CAPTCHA before it accepts this sign-in. Sign in once in the \
+                 desktop or Android app, or try again later. ({})",
+                challenge.verification_url()
+            );
+        }
+        Err(error) => return Err(error).context("sign in"),
+    };
+    loop {
+        step = match step {
+            SignIn::Done(account) => {
+                println!("signed in as {}", account.username());
+                return Ok(());
+            }
+            SignIn::SecondFactor(pending) => {
+                let code = read_password("Two-factor code: ")?;
+                pending
+                    .second_factor(&code)
+                    .await
+                    .context("second factor")?
+            }
+            SignIn::MailboxPassword(pending) => {
+                let mailbox = read_password("Mailbox password: ")?;
+                SignIn::Done(
+                    pending
+                        .mailbox_password(&mailbox)
+                        .await
+                        .context("mailbox password")?,
+                )
+            }
+        };
+    }
+}
+
+fn signed_in(accounts: &AccountStore) -> Result<Account> {
+    accounts
+        .resume()
+        .context("resume the account")?
+        .ok_or_else(|| anyhow::anyhow!("not signed in — sign in with `pstr login <address>`"))
+}
+
+/// A node as `browse` prints it and `add-folder` takes it.
+fn format_uid(uid: &NodeUid) -> String {
+    format!("{}:{}", uid.volume_id.as_str(), uid.link_id.as_str())
+}
+
+fn parse_uid(text: &str) -> Result<NodeUid> {
+    let (volume, link) = text
+        .split_once(':')
+        .filter(|(volume, link)| !volume.is_empty() && !link.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("expected VOLUME:LINK, as `pstr browse` prints"))?;
+    Ok(NodeUid::new(
+        VolumeId::new(volume.to_owned()),
+        LinkId::new(link.to_owned()),
+    ))
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

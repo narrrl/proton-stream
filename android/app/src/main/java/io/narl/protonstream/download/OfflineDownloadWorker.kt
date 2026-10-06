@@ -25,20 +25,24 @@ class OfflineDownloadWorker(
 ) : CoroutineWorker(appContext, parameters) {
     override suspend fun doWork(): Result {
         createNotificationChannel()
-        setForeground(createForegroundInfo(0))
+        setForeground(createForegroundInfo(null))
         val shareId = inputData.getString(KEY_SHARE_ID) ?: return Result.failure(error("missing share"))
         val volumeId = inputData.getString(KEY_VOLUME_ID) ?: return Result.failure(error("missing volume"))
         val linkId = inputData.getString(KEY_LINK_ID) ?: return Result.failure(error("missing link"))
         val label = inputData.getString(KEY_LABEL) ?: linkId
         val store = DownloadStateStore(applicationContext)
+        // Queued, not running: the engine lets two downloads transfer at once
+        // and holds the rest back, and only the first progress report means
+        // this one has a slot.
         var retained = store.get(shareId, linkId)
             ?: RetainedDownload(shareId, volumeId, linkId, label)
-        retained = retained.copy(status = RetainedDownload.STATUS_RUNNING, error = null)
+        retained = retained.copy(status = RetainedDownload.STATUS_QUEUED, error = null, bytesPerSecond = 0)
         store.put(retained)
 
         val observer = object : DownloadObserver {
             private var reportedAt = 0L
             private var reportedPercent = -1
+            private val rate = TransferRate()
 
             /**
              * Called once per 4 MiB block — a dozen times a second on a fast
@@ -51,6 +55,7 @@ class OfflineDownloadWorker(
                 val percent = if (total == 0UL) 0 else ((downloaded * 100UL) / total).toInt()
                 val now = SystemClock.elapsedRealtime()
                 val complete = total > 0UL && downloaded >= total
+                val bytesPerSecond = rate.sample(downloaded.toLong(), now)
                 if (!complete && percent == reportedPercent && now - reportedAt < PROGRESS_INTERVAL_MS) {
                     return
                 }
@@ -66,6 +71,7 @@ class OfflineDownloadWorker(
                     current.copy(
                         downloaded = downloaded.toLong(),
                         total = total.toLong(),
+                        bytesPerSecond = bytesPerSecond,
                         status = when (current.status) {
                             RetainedDownload.STATUS_PAUSED,
                             RetainedDownload.STATUS_CANCELLED,
@@ -114,11 +120,14 @@ class OfflineDownloadWorker(
         )
     }
 
-    private fun createForegroundInfo(progress: Int): ForegroundInfo {
+    /** [progress] is a percentage, or null while waiting for a download slot. */
+    private fun createForegroundInfo(progress: Int?): ForegroundInfo {
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(io.narl.protonstream.R.drawable.ic_launcher_foreground)
-            .setContentTitle("Making episode available offline")
-            .setProgress(100, progress, progress == 0)
+            .setContentTitle(
+                if (progress == null) "Waiting to download" else "Making episode available offline",
+            )
+            .setProgress(100, progress ?: 0, progress == null || progress == 0)
             .setOngoing(true)
             .build()
         return ForegroundInfo(
@@ -143,6 +152,36 @@ class OfflineDownloadWorker(
 
         /** Shortest gap between two identical-looking progress reports. */
         private const val PROGRESS_INTERVAL_MS = 1_000L
+    }
+}
+
+/**
+ * Bytes per second over roughly the last few seconds.
+ *
+ * Progress arrives once per 4 MiB block, so on a slow link the bar moves in
+ * steps seconds apart; a rate beside it is what tells a slow download from a
+ * stuck one. Smoothed, because one block that took a little longer than the
+ * last would otherwise halve the figure for a moment.
+ */
+internal class TransferRate {
+    private var lastBytes = -1L
+    private var lastAt = 0L
+    private var smoothed = 0.0
+
+    /** Record [bytes] transferred at [now] (milliseconds) and return the rate. */
+    fun sample(bytes: Long, now: Long): Long {
+        if (lastBytes < 0 || bytes < lastBytes) {
+            lastBytes = bytes
+            lastAt = now
+            return smoothed.toLong()
+        }
+        val elapsed = now - lastAt
+        if (elapsed <= 0) return smoothed.toLong()
+        val instant = (bytes - lastBytes) * 1000.0 / elapsed
+        smoothed = if (smoothed > 0.0) 0.7 * smoothed + 0.3 * instant else instant
+        lastBytes = bytes
+        lastAt = now
+        return smoothed.toLong()
     }
 }
 

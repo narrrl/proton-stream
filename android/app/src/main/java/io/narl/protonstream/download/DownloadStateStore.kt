@@ -13,6 +13,8 @@ data class RetainedDownload(
     val total: Long = 0,
     val status: String = STATUS_QUEUED,
     val error: String? = null,
+    /** Recent transfer rate while running; 0 when unknown or not running. */
+    val bytesPerSecond: Long = 0,
 ) {
     val key: String get() = "$shareId\u001f$linkId"
 
@@ -99,6 +101,7 @@ class DownloadStateStore(context: Context) {
         .put("total", record.total)
         .put("status", record.status)
         .put("error", record.error)
+        .put("rate", record.bytesPerSecond)
         .toString()
 
     private fun decode(encoded: String): RetainedDownload {
@@ -112,6 +115,7 @@ class DownloadStateStore(context: Context) {
             total = json.optLong("total"),
             status = json.optString("status", RetainedDownload.STATUS_QUEUED),
             error = json.optString("error").takeIf(String::isNotBlank),
+            bytesPerSecond = json.optLong("rate"),
         )
     }
 

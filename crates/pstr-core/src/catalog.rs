@@ -721,6 +721,46 @@ impl Catalog {
         Ok(())
     }
 
+    /// Take each of `states` that is newer than what is recorded, in one
+    /// transaction, returning how many were taken.
+    ///
+    /// Newer is a later `updated_at`. A tie is broken by the state itself —
+    /// watched over not, then the further position — rather than by who is
+    /// asking, so two devices holding the same tie settle on the same answer
+    /// instead of each keeping its own forever. See [`crate::sync`].
+    pub fn merge_watch_states(&mut self, states: &[(String, String, WatchState)]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let mut taken = 0;
+        {
+            let mut upsert = tx.prepare_cached(
+                "INSERT INTO watch_state (share_id, link_id, position_secs, duration_secs, watched, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (share_id, link_id) DO UPDATE SET
+                     position_secs = excluded.position_secs,
+                     duration_secs = excluded.duration_secs,
+                     watched       = excluded.watched,
+                     updated_at    = excluded.updated_at
+                 WHERE excluded.updated_at > watch_state.updated_at
+                    OR (excluded.updated_at = watch_state.updated_at
+                        AND (excluded.watched > watch_state.watched
+                             OR (excluded.watched = watch_state.watched
+                                 AND excluded.position_secs > watch_state.position_secs)))",
+            )?;
+            for (share_id, link_id, state) in states {
+                taken += upsert.execute(params![
+                    share_id,
+                    link_id,
+                    state.position_secs,
+                    state.duration_secs,
+                    state.watched as i64,
+                    state.updated_at,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(taken)
+    }
+
     /// Where playback left off, if it ever started.
     pub fn watch_state(&self, share_id: &str, link_id: &str) -> Result<Option<WatchState>> {
         let state = self
@@ -2388,6 +2428,69 @@ mod tests {
         let rows = build_rows("share", &nodes);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].link_id, "film");
+    }
+
+    #[test]
+    fn merging_takes_only_states_newer_than_the_recorded_ones() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let at = |position_secs: f64, updated_at: i64| WatchState {
+            position_secs,
+            duration_secs: Some(1440.0),
+            watched: false,
+            updated_at,
+        };
+        catalog
+            .set_watch_state("s1", "kept", &at(100.0, 50))
+            .unwrap();
+        catalog
+            .set_watch_state("s1", "taken", &at(100.0, 50))
+            .unwrap();
+        let taken = catalog
+            .merge_watch_states(&[
+                ("s1".to_owned(), "kept".to_owned(), at(900.0, 40)),
+                ("s1".to_owned(), "taken".to_owned(), at(900.0, 60)),
+                ("s1".to_owned(), "new".to_owned(), at(5.0, 10)),
+            ])
+            .expect("merge");
+        assert_eq!(taken, 2);
+        assert_eq!(
+            catalog.watch_state("s1", "kept").unwrap(),
+            Some(at(100.0, 50))
+        );
+        assert_eq!(
+            catalog.watch_state("s1", "taken").unwrap(),
+            Some(at(900.0, 60))
+        );
+        assert_eq!(catalog.watch_state("s1", "new").unwrap(), Some(at(5.0, 10)));
+    }
+
+    #[test]
+    fn a_merge_tie_settles_the_same_way_whichever_side_holds_it() {
+        let state = |position_secs: f64, watched: bool| WatchState {
+            position_secs,
+            duration_secs: Some(1440.0),
+            watched,
+            updated_at: 70,
+        };
+        for (local, remote) in [
+            (state(300.0, false), state(1440.0, true)),
+            (state(1440.0, true), state(300.0, false)),
+            (state(300.0, false), state(600.0, false)),
+            (state(600.0, false), state(300.0, false)),
+        ] {
+            let mut catalog = Catalog::in_memory().expect("open");
+            catalog.set_watch_state("s1", "a", &local).unwrap();
+            catalog
+                .merge_watch_states(&[("s1".to_owned(), "a".to_owned(), remote)])
+                .unwrap();
+            let winner =
+                if (local.watched, local.position_secs) > (remote.watched, remote.position_secs) {
+                    local
+                } else {
+                    remote
+                };
+            assert_eq!(catalog.watch_state("s1", "a").unwrap(), Some(winner));
+        }
     }
 
     #[test]

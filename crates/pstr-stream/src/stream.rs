@@ -63,6 +63,12 @@ const MAX_CONCURRENT_BLOCKS_PER_READ: usize = 4;
 /// bandwidth on cancelled prefetches. Well past a 1080p bitrate either way.
 pub const DEFAULT_READAHEAD_BLOCKS: usize = 12;
 
+/// How many blocks of one offline copy are fetched at once, for
+/// [`VideoStream::blocks_in_order`]. The same as one read is allowed, for the
+/// same reason: enough to hide a round trip, few enough that a couple of
+/// copies running together do not swamp a player.
+pub const COPY_BLOCKS_IN_FLIGHT: usize = 4;
+
 /// How far a read may land from where the previous one ended and still count as
 /// a continuation rather than a seek.
 ///
@@ -297,6 +303,42 @@ impl VideoStream {
         let read = self.read_at(offset, &mut buf).await?;
         buf.truncate(read);
         Ok(buf)
+    }
+
+    /// Every block from `first` on, fetched `in_flight` at a time and yielded
+    /// in file order.
+    ///
+    /// What an offline copy reads through. File order is what a partial file's
+    /// "its length is a block boundary" resume rule needs, and a few blocks in
+    /// flight is what keeps a copy from running one round trip per block. Use
+    /// it on a stream from [`crate::StreamSource::open_for_copy`]: a playback
+    /// stream would add its own read-ahead on top.
+    pub fn blocks_in_order(
+        &self,
+        first: usize,
+        in_flight: usize,
+    ) -> futures::stream::BoxStream<'static, Result<Vec<u8>>> {
+        let start: u64 = self.block_sizes()[..first.min(self.block_sizes().len())]
+            .iter()
+            .sum();
+        let ranges: Vec<(u64, u64)> = self
+            .block_sizes()
+            .iter()
+            .skip(first)
+            .scan(start, |offset, size| {
+                let range = (*offset, *size);
+                *offset += size;
+                Some(range)
+            })
+            .collect();
+        let stream = self.clone();
+        stream::iter(ranges)
+            .map(move |(offset, size)| {
+                let stream = stream.clone();
+                async move { stream.read_range(offset, size).await }
+            })
+            .buffered(in_flight.max(1))
+            .boxed()
     }
 
     pub fn stats(&self) -> StreamStats {

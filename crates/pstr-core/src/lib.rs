@@ -5,6 +5,7 @@
 //! how a share is opened and how its contents are modelled.
 #![forbid(unsafe_code)]
 
+pub mod account;
 pub mod appearance;
 pub mod browse;
 pub mod catalog;
@@ -18,11 +19,13 @@ pub mod naming;
 pub mod prefs;
 pub mod shares;
 pub mod shelves;
+pub mod sync;
 
+pub use account::{Account, AccountStore};
 pub use error::{Error, Result};
 #[cfg(not(target_os = "android"))]
 pub use shares::KeyringSecretStore;
-pub use shares::{SecretStore, Share, ShareStore, SharedLibrary};
+pub use shares::{SecretStore, Share, ShareClient, ShareStore, SharedLibrary};
 
 pub use proton_drive_rs;
 pub use proton_sdk;

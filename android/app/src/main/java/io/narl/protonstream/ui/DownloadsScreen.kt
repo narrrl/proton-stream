@@ -204,14 +204,7 @@ private fun PartialRow(
         headlineContent = { Text(download.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             Column {
-                Text(
-                    listOfNotNull(
-                        download.status.replaceFirstChar { it.uppercase() },
-                        download.total.takeIf { it > 0L }?.let {
-                            "${formatBytes(download.downloaded.toULong())} of ${formatBytes(it.toULong())}"
-                        },
-                    ).joinToString(" · "),
-                )
+                Text(downloadStatusLine(download))
                 if (download.total > 0L) {
                     AccentProgress(
                         progress = { (download.downloaded.toFloat() / download.total).coerceIn(0f, 1f) },

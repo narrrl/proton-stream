@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use parking_lot::Mutex;
+use pstr_core::account::{DriveEntry, DrivePlace, PendingSignIn, SignIn};
 use pstr_core::appearance::Appearance;
 use pstr_core::catalog::{
     Catalog, CatalogNode, OfflineFile, TitleTrackPrefs, WatchState, build_rows,
@@ -35,13 +36,15 @@ use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, Provider
 use pstr_core::prefs::PlaybackPrefs;
 use pstr_core::proton_drive_rs::ThumbnailType;
 use pstr_core::proton_sdk::ids::{LinkId, NodeUid, VolumeId};
-use pstr_core::{Share, ShareStore, SharedLibrary};
+use pstr_core::shares::AccountFolder;
+use pstr_core::sync::{SyncReport, WatchSync};
+use pstr_core::{Account, AccountStore, KeyringSecretStore, Share, ShareStore, SharedLibrary};
 use pstr_meta::MetadataService;
 
 use crate::desktop_prefs::{DesktopPrefs, DesktopPrefsFile};
 use pstr_stream::{
-    BlockSource, DiskCacheConfig, FileBlocks, LibraryOpener, StreamConfig, StreamSource,
-    VideoStream,
+    BlockSource, COPY_BLOCKS_IN_FLIGHT, DiskCacheConfig, FileBlocks, LibraryOpener, StreamConfig,
+    StreamSource, VideoStream,
 };
 use tokio::runtime::Runtime;
 
@@ -269,6 +272,38 @@ pub enum Event {
     DownloadProgress(Box<DownloadItem>),
     /// Completed local copies, for badges and online-only actions.
     OfflineFiles(HashSet<DownloadKey>),
+    /// The Proton account signed in or out, or a sign-in wants more.
+    Account(AccountStatus),
+    /// A sign-in step was refused, with why.
+    SignInFailed(String),
+    /// Watch history synced with the account's Drive.
+    Synced(SyncReport),
+    /// Watch history did not sync, with why. Not a toast: it is retried on a
+    /// timer, and an offline evening would be a stack of them.
+    SyncFailed(String),
+    /// The account's top-level places, for the Drive browser.
+    Places(Vec<DrivePlace>),
+    /// One folder of the account, for the Drive browser.
+    Folder {
+        uid: NodeUid,
+        entries: Vec<DriveEntry>,
+    },
+    /// The Drive browser's last request failed.
+    BrowseFailed(String),
+}
+
+/// Where the Proton account stands.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AccountStatus {
+    /// The stored session has not been read yet.
+    #[default]
+    Unknown,
+    SignedOut,
+    SignedIn(String),
+    /// A sign-in is waiting for a second-factor code.
+    SecondFactor,
+    /// A sign-in is waiting for the mailbox password.
+    MailboxPassword,
 }
 
 /// The share clients and the block layer, once they exist.
@@ -335,6 +370,17 @@ pub struct Engine {
     desktop_file: Arc<DesktopPrefsFile>,
     /// Bumped to stop the crawls in flight; each watches it from its start.
     crawl_cancel: Arc<tokio::sync::watch::Sender<u64>>,
+    accounts: AccountStore,
+    /// The signed-in Proton account, if any.
+    account: Arc<Mutex<Option<Account>>>,
+    /// False until the stored session has been read. Opening the shares waits
+    /// on it, or a launch would open the account's folders before the account
+    /// and report every one of them as failing to.
+    account_settled: Arc<tokio::sync::watch::Sender<bool>>,
+    /// A sign-in waiting for a code or the mailbox password.
+    pending_sign_in: Arc<Mutex<Option<PendingSignIn>>>,
+    /// `None` when this installation's sync identity could not be written.
+    watch_sync: Option<Arc<WatchSync>>,
     events: Sender<Event>,
     ctx: egui::Context,
 }
@@ -345,10 +391,10 @@ const THUMBNAIL_CONCURRENCY: usize = 6;
 /// How many provider lookups may be in flight at once. See [`Engine::lookups`].
 const LOOKUP_CONCURRENCY: usize = 2;
 const DOWNLOAD_CONCURRENCY: usize = 3;
-/// How many blocks of one download are fetched at once. Four is what the
-/// stream layer itself allows a single read, for the same reason: enough to
-/// hide a round trip, few enough that three downloads do not swamp a player.
-const DOWNLOAD_BLOCKS_IN_FLIGHT: usize = 4;
+
+/// How often watch history is synced while the app is open, on top of at
+/// launch and whenever a player stops.
+const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// Enrichment as currently configured.
 struct Enrichment {
@@ -427,6 +473,11 @@ impl Engine {
             Enrichment::build(config.clone())
         };
 
+        let watch_sync = WatchSync::open(&dirs)
+            .inspect_err(|error| tracing::warn!("watch-history sync unavailable: {error}"))
+            .ok()
+            .map(Arc::new);
+
         let track_prefs = catalog.all_title_track_prefs().unwrap_or_else(|error| {
             tracing::warn!("read show track preferences: {error}");
             HashMap::new()
@@ -449,6 +500,11 @@ impl Engine {
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
             picture_shown: Arc::new(AtomicBool::new(false)),
             crawl_cancel: Arc::new(tokio::sync::watch::channel(0).0),
+            accounts: AccountStore::new(Arc::new(KeyringSecretStore)),
+            account: Arc::new(Mutex::new(None)),
+            account_settled: Arc::new(tokio::sync::watch::channel(false).0),
+            pending_sign_in: Arc::new(Mutex::new(None)),
+            watch_sync,
             desktop: Arc::new(Mutex::new(desktop)),
             desktop_file: Arc::new(desktop_file),
             events,
@@ -460,6 +516,8 @@ impl Engine {
                 deferred.install_enrichment(Enrichment::build(config), true);
             });
         }
+        engine.load_account();
+        engine.sync_periodically();
         Ok((engine, receiver))
     }
 
@@ -591,7 +649,236 @@ impl Engine {
             };
             engine.emit(Event::ShareAdded(share.name.clone()));
             engine.load_shares();
+            // The open connection predates the share, and crawling it through
+            // that would find it "not open".
+            engine.connection.lock().take();
             engine.connect_and_crawl(Some(share.id)).await;
+        });
+    }
+
+    /// Add a folder of the signed-in account as a share, then crawl it.
+    pub fn add_account_folder(&self, name: String, folder: NodeUid) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let folder = AccountFolder {
+                volume_id: folder.volume_id.as_str().to_owned(),
+                link_id: folder.link_id.as_str().to_owned(),
+            };
+            let share = match engine.store.add_folder(&name, folder) {
+                Ok(share) => share,
+                Err(error) => return engine.emit(Event::ShareRejected(error.to_string())),
+            };
+            engine.emit(Event::ShareAdded(share.name.clone()));
+            engine.load_shares();
+            engine.connection.lock().take();
+            engine.connect_and_crawl(Some(share.id)).await;
+        });
+    }
+
+    // --------------------------------------------------------------- account
+
+    /// Read the stored session, off the UI thread — a keyring read can be a
+    /// D-Bus round trip to a keyring that has to unlock first.
+    fn load_account(&self) {
+        let engine = self.clone();
+        self.runtime.spawn_blocking(move || {
+            match engine.accounts.resume() {
+                Ok(Some(account)) => {
+                    let username = account.username().to_owned();
+                    *engine.account.lock() = Some(account);
+                    engine.emit(Event::Account(AccountStatus::SignedIn(username)));
+                    engine.sync_watch_history();
+                }
+                Ok(None) => engine.emit(Event::Account(AccountStatus::SignedOut)),
+                Err(error) => {
+                    engine.emit(Event::Account(AccountStatus::SignedOut));
+                    engine.fail("read the Proton session", error);
+                }
+            }
+            engine.account_settled.send_replace(true);
+        });
+    }
+
+    /// Start signing in. What happens next arrives as [`Event::Account`] or
+    /// [`Event::SignInFailed`].
+    pub fn sign_in(&self, username: String, password: String) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            match engine.accounts.sign_in(&username, &password, None).await {
+                Ok(step) => engine.sign_in_step(step),
+                Err(pstr_core::Error::HumanVerification(_)) => {
+                    engine.emit(Event::SignInFailed(
+                        "Proton wants a CAPTCHA before it accepts this sign-in, and this app \
+                         cannot show one. Try again later, or sign in once from the Android app."
+                            .to_owned(),
+                    ));
+                }
+                Err(error) => engine.emit(Event::SignInFailed(error.to_string())),
+            }
+        });
+    }
+
+    pub fn submit_second_factor(&self, code: String) {
+        let Some(pending) = self.pending_sign_in.lock().take() else {
+            return self.emit(Event::Account(AccountStatus::SignedOut));
+        };
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            match pending.second_factor(&code).await {
+                Ok(step) => engine.sign_in_step(step),
+                Err(error) => {
+                    // The half-made session is spent; the viewer starts over.
+                    engine.emit(Event::Account(AccountStatus::SignedOut));
+                    engine.emit(Event::SignInFailed(error.to_string()));
+                }
+            }
+        });
+    }
+
+    pub fn submit_mailbox_password(&self, password: String) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let Some(pending) = engine.pending_sign_in.lock().take() else {
+                return engine.emit(Event::Account(AccountStatus::SignedOut));
+            };
+            match pending.mailbox_password(&password).await {
+                Ok(account) => engine.signed_in(account),
+                Err(error) => {
+                    // Kept: a mistyped mailbox password can be typed again.
+                    *engine.pending_sign_in.lock() = Some(pending);
+                    engine.emit(Event::SignInFailed(error.to_string()));
+                }
+            }
+        });
+    }
+
+    pub fn cancel_sign_in(&self) {
+        self.pending_sign_in.lock().take();
+        self.emit(Event::Account(AccountStatus::SignedOut));
+    }
+
+    fn sign_in_step(&self, step: SignIn) {
+        match step {
+            SignIn::Done(account) => self.signed_in(account),
+            SignIn::SecondFactor(pending) => {
+                *self.pending_sign_in.lock() = Some(pending);
+                self.emit(Event::Account(AccountStatus::SecondFactor));
+            }
+            SignIn::MailboxPassword(pending) => {
+                *self.pending_sign_in.lock() = Some(pending);
+                self.emit(Event::Account(AccountStatus::MailboxPassword));
+            }
+        }
+    }
+
+    fn signed_in(&self, account: Account) {
+        let username = account.username().to_owned();
+        *self.account.lock() = Some(account);
+        if let Some(sync) = &self.watch_sync {
+            sync.reset();
+        }
+        // Folders of the account that failed to open before are openable now.
+        self.connection.lock().take();
+        self.emit(Event::Account(AccountStatus::SignedIn(username)));
+        self.connect();
+        self.sync_watch_history();
+    }
+
+    /// Sign out and forget the stored session. The library keeps everything
+    /// it has; the account's folders stop opening until the next sign-in.
+    pub fn sign_out(&self) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let account = engine.account.lock().take();
+            if let Err(error) = engine.accounts.sign_out(account.as_ref()).await {
+                engine.fail("forget the Proton session", error);
+            }
+            engine.signed_out();
+        });
+    }
+
+    fn signed_out(&self) {
+        self.account.lock().take();
+        if let Some(sync) = &self.watch_sync {
+            sync.reset();
+        }
+        self.connection.lock().take();
+        self.emit(Event::Account(AccountStatus::SignedOut));
+    }
+
+    /// Sync watch history now, if an account is signed in.
+    pub fn sync_watch_history(&self) {
+        let (Some(account), Some(sync)) = (self.account.lock().clone(), self.watch_sync.clone())
+        else {
+            return;
+        };
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            match sync.sync(&account, &engine.catalog).await {
+                Ok(report) => {
+                    if report.applied > 0 {
+                        engine.load_library();
+                    }
+                    engine.emit(Event::Synced(report));
+                }
+                Err(error) if error.is_signed_out() => {
+                    // The refresh token died — revoked from another device, or
+                    // unused for too long. Signing in again is the only fix,
+                    // and a stored session that can never resume only makes
+                    // every later launch fail the same way.
+                    let _ = engine.accounts.sign_out(None).await;
+                    engine.signed_out();
+                    engine.emit(Event::Error(
+                        "Your Proton session ended. Sign in again to keep syncing watch history."
+                            .to_owned(),
+                    ));
+                }
+                Err(error) => {
+                    tracing::warn!("sync watch history: {error}");
+                    engine.emit(Event::SyncFailed(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn sync_periodically(&self) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let mut ticks = tokio::time::interval(SYNC_INTERVAL);
+            // The first tick is immediate, and launch already syncs.
+            ticks.tick().await;
+            loop {
+                ticks.tick().await;
+                engine.sync_watch_history();
+            }
+        });
+    }
+
+    /// List the account's top-level places, for the Drive browser.
+    pub fn browse_places(&self) {
+        let Some(account) = self.account.lock().clone() else {
+            return self.emit(Event::BrowseFailed("not signed in".to_owned()));
+        };
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            match account.places().await {
+                Ok(places) => engine.emit(Event::Places(places)),
+                Err(error) => engine.emit(Event::BrowseFailed(error.to_string())),
+            }
+        });
+    }
+
+    /// List one folder of the account, for the Drive browser.
+    pub fn browse_folder(&self, uid: NodeUid) {
+        let Some(account) = self.account.lock().clone() else {
+            return self.emit(Event::BrowseFailed("not signed in".to_owned()));
+        };
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            match account.folder_children(&uid).await {
+                Ok(entries) => engine.emit(Event::Folder { uid, entries }),
+                Err(error) => engine.emit(Event::BrowseFailed(error.to_string())),
+            }
         });
     }
 
@@ -696,7 +983,11 @@ impl Engine {
             return Some(opened);
         }
 
-        let (library, failures) = match SharedLibrary::open_all(&self.store).await {
+        let mut settled = self.account_settled.subscribe();
+        let _ = settled.wait_for(|settled| *settled).await;
+        let account = self.account.lock().clone();
+        let (library, failures) = match SharedLibrary::open_all(&self.store, account.as_ref()).await
+        {
             Ok(opened) => opened,
             Err(error) => {
                 self.emit(Event::ConnectFailed(error.to_string()));
@@ -1555,8 +1846,8 @@ impl Engine {
                 return Ok(DownloadEnd::Cancelled);
             }
             let size = block_sizes[block_index];
-            let pending =
-                fetches.get_or_insert_with(|| fetch_in_order(&stream, &block_sizes, block_index));
+            let pending = fetches
+                .get_or_insert_with(|| stream.blocks_in_order(block_index, COPY_BLOCKS_IN_FLIGHT));
             let Some(bytes) = pending.try_next().await? else {
                 anyhow::bail!("block {block_index} never arrived");
             };
@@ -2043,26 +2334,24 @@ impl Engine {
                 return engine.emit(Event::Error(engine.no_service_reason()));
             };
             let name = found.name.clone();
-            let record = service.chosen(title.key.clone(), found.clone());
-            if let Err(error) = engine.catalog.lock().set_metadata(&record) {
+            let outcome = service.choose(&title, found).await;
+            if let Some(record) = &outcome.record
+                && let Err(error) = engine.catalog.lock().set_metadata(record)
+            {
                 return engine.fail("store the match", error);
             }
-
             // A failure leaves the title un-enriched, and the next match run
             // asks again.
-            match service.enrich(&title, &found).await {
-                Ok(enrichment) => {
-                    let stored = engine.catalog.lock().set_enrichment(
-                        &title.key,
-                        service.provider(),
-                        now(),
-                        &enrichment,
-                    );
-                    if let Err(error) = stored {
-                        tracing::warn!("store enrichment for {}: {error}", title.key);
-                    }
+            if let Some(enrichment) = &outcome.enrichment {
+                let stored = engine.catalog.lock().set_enrichment(
+                    &title.key,
+                    service.provider(),
+                    now(),
+                    enrichment,
+                );
+                if let Err(error) = stored {
+                    tracing::warn!("store enrichment for {}: {error}", title.key);
                 }
-                Err(error) => tracing::warn!("enrich {}: {error}", title.key),
             }
 
             engine.emit(Event::Status(format!("{} is now {name}", title.name)));
@@ -2221,35 +2510,6 @@ fn resume_position(existing: u64, block_sizes: &[u64]) -> (usize, u64) {
         offset = next;
     }
     (block_sizes.len(), offset)
-}
-
-/// A file's blocks from `first` on, fetched several at a time and yielded in
-/// file order — which is what the resume marker's "the length is the
-/// boundary" rule needs. One at a time, a download runs at one block per round
-/// trip whatever the link can carry.
-fn fetch_in_order(
-    stream: &VideoStream,
-    block_sizes: &[u64],
-    first: usize,
-) -> futures::stream::BoxStream<'static, pstr_stream::Result<Vec<u8>>> {
-    use futures::StreamExt as _;
-    let start: u64 = block_sizes[..first].iter().sum();
-    let ranges: Vec<(u64, u64)> = block_sizes[first..]
-        .iter()
-        .scan(start, |offset, size| {
-            let range = (*offset, *size);
-            *offset += size;
-            Some(range)
-        })
-        .collect();
-    let stream = stream.clone();
-    futures::stream::iter(ranges)
-        .map(move |(offset, size)| {
-            let stream = stream.clone();
-            async move { stream.read_range(offset, size).await }
-        })
-        .buffered(DOWNLOAD_BLOCKS_IN_FLIGHT)
-        .boxed()
 }
 
 async fn wait_until_runnable(command: &mut tokio::sync::watch::Receiver<DownloadCommand>) -> bool {

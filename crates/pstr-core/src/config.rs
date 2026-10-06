@@ -88,6 +88,12 @@ impl AppDirs {
         self.config.join("shares.json")
     }
 
+    /// This installation's identity for watch-history sync. See
+    /// [`crate::sync`].
+    pub fn sync_file(&self) -> PathBuf {
+        self.config.join("sync.json")
+    }
+
     /// The catalog database.
     pub fn catalog_db(&self) -> PathBuf {
         self.data.join("catalog.db")

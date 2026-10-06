@@ -36,6 +36,10 @@ import uniffi.pstr_android.MetadataSettingsRecord
 import uniffi.pstr_android.StorageUsageRecord
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.WatchStateRecord
+import uniffi.pstr_android.AccountState
+import uniffi.pstr_android.SignInOutcome
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 data class AppUiState(
     val loading: Boolean = true,
@@ -62,6 +66,25 @@ data class AppUiState(
     val message: String? = null,
     /** What Undo on [message] puts back, when the message offers one. */
     val undo: List<WatchSnapshot>? = null,
+    val account: AccountUiState = AccountUiState(),
+)
+
+/** The Proton account: where a sign-in stands, and how sync is doing. */
+data class AccountUiState(
+    /** Null until the bridge has said. */
+    val state: AccountState? = null,
+    /** A sign-in step is out and not answered yet. */
+    val busy: Boolean = false,
+    /** Why the last sign-in step was refused. */
+    val error: String? = null,
+    /** The CAPTCHA page Proton wants solved before it accepts the sign-in. */
+    val verificationUrl: String? = null,
+    /** When watch history last synced, in epoch milliseconds. */
+    val syncedAt: Long? = null,
+    /** Positions the last sync took from other devices. */
+    val applied: Int = 0,
+    /** Why the last sync failed, until one succeeds. */
+    val syncError: String? = null,
 )
 
 /**
@@ -84,6 +107,18 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             }
         }
         reload()
+        viewModelScope.launch {
+            val account = runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().accountState() } }
+                .getOrDefault(AccountState.SignedOut)
+            updateAccount { it.copy(state = account) }
+            // While the app is alive, on top of after sign-in and whenever the
+            // player closes. Cheap when nothing changed: one folder listing,
+            // and no upload.
+            while (isActive) {
+                syncWatchHistory()
+                delay(SYNC_INTERVAL_MS)
+            }
+        }
         viewModelScope.launch {
             searchQuery.debounce(300).distinctUntilChanged().collect { reloadLibrary(it) }
         }
@@ -211,6 +246,148 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     }
 
     fun dismissMessage() = mutableState.update { it.copy(message = null, undo = null) }
+
+    private fun updateAccount(change: (AccountUiState) -> AccountUiState) =
+        mutableState.update { it.copy(account = change(it.account)) }
+
+    /**
+     * Start signing in, or start again with [verificationToken] once the
+     * CAPTCHA from a first try is solved.
+     */
+    fun signIn(username: String, password: String, verificationToken: String? = null) =
+        signInStep { engine -> engine.signIn(username, password, verificationToken) }
+
+    fun submitSecondFactor(code: String) = signInStep { engine -> engine.submitSecondFactor(code) }
+
+    fun submitMailboxPassword(password: String) =
+        signInStep(keepStepOnFailure = true) { engine -> engine.submitMailboxPassword(password) }
+
+    fun cancelSignIn() {
+        updateAccount { AccountUiState(state = AccountState.SignedOut) }
+        viewModelScope.launch { runCatching { NativeRuntime.engine().cancelSignIn() } }
+    }
+
+    /** The CAPTCHA page closed without a token. */
+    fun dismissVerification() = updateAccount { it.copy(verificationUrl = null, busy = false) }
+
+    private fun signInStep(
+        keepStepOnFailure: Boolean = false,
+        step: suspend (uniffi.pstr_android.AndroidEngine) -> SignInOutcome,
+    ) {
+        updateAccount { it.copy(busy = true, error = null, verificationUrl = null) }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { step(NativeRuntime.engine()) } }
+                .onSuccess { outcome ->
+                    when (outcome) {
+                        is SignInOutcome.Done -> {
+                            updateAccount {
+                                AccountUiState(state = AccountState.SignedIn(outcome.username))
+                            }
+                            mutableState.update { it.copy(message = "Signed in as ${outcome.username}") }
+                            syncWatchHistory()
+                            reload()
+                        }
+                        SignInOutcome.SecondFactor ->
+                            updateAccount { it.copy(state = AccountState.SecondFactor, busy = false) }
+                        SignInOutcome.MailboxPassword ->
+                            updateAccount { it.copy(state = AccountState.MailboxPassword, busy = false) }
+                        is SignInOutcome.HumanVerification ->
+                            updateAccount { it.copy(verificationUrl = outcome.url) }
+                    }
+                }
+                .onFailure { error ->
+                    updateAccount {
+                        it.copy(
+                            busy = false,
+                            error = error.message ?: "Sign-in failed",
+                            // A refused code spends the half-made session.
+                            state = if (keepStepOnFailure) it.state else AccountState.SignedOut,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun signOut() {
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().signOut() } }
+                .onFailure(::reportError)
+            updateAccount { AccountUiState(state = AccountState.SignedOut) }
+            reload()
+        }
+    }
+
+    /** Sync now, from a tap: says so when it is done. */
+    fun syncNow() {
+        viewModelScope.launch {
+            if (syncWatchHistory()) {
+                val applied = mutableState.value.account.applied
+                mutableState.update {
+                    it.copy(
+                        message = if (applied > 0) {
+                            "Watch history synced, $applied from other devices"
+                        } else {
+                            "Watch history is up to date"
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Pull other devices' positions in and push this one's out. Quiet: it runs
+     * on a timer, and a failure is shown on the account card rather than as a
+     * snackbar every five minutes of an offline evening. Returns whether it
+     * synced.
+     */
+    private suspend fun syncWatchHistory(): Boolean {
+        if (mutableState.value.account.state !is AccountState.SignedIn) return false
+        return runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().syncWatchHistory() } }
+            .fold(
+                onSuccess = { report ->
+                    if (report == null) return false
+                    updateAccount {
+                        it.copy(
+                            syncedAt = System.currentTimeMillis(),
+                            applied = report.applied.toInt(),
+                            syncError = null,
+                        )
+                    }
+                    if (report.applied > 0u) reload()
+                    true
+                },
+                onFailure = { error ->
+                    val state = runCatching { NativeRuntime.engine().accountState() }.getOrNull()
+                    updateAccount { it.copy(state = state ?: it.state, syncError = error.message) }
+                    // Signed out by the engine: the session ended, and that is
+                    // worth interrupting for, unlike a dropped connection.
+                    if (state == AccountState.SignedOut) reportError(error)
+                    false
+                },
+            )
+    }
+
+    /** After the player closes: where it stopped is what another device wants next. */
+    fun playerClosed() {
+        reload()
+        viewModelScope.launch { syncWatchHistory() }
+    }
+
+    fun addAccountFolder(name: String, volumeId: String, linkId: String) {
+        viewModelScope.launch {
+            mutableState.update { it.copy(refreshing = true) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val engine = NativeRuntime.engine()
+                    val share = engine.addAccountFolder(name, volumeId, linkId)
+                    engine.crawl(share.id)
+                }
+            }.onFailure(::reportError)
+            mutableState.update { it.copy(refreshing = false) }
+            reload()
+        }
+    }
 
     /**
      * Every episode of a title watched or unwatched, with an Undo: a whole
@@ -499,6 +676,10 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }.onSuccess { (titles, arrangement) ->
             mutableState.update { it.copy(titles = titles, arrangement = arrangement) }
         }.onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+    }
+
+    private companion object {
+        const val SYNC_INTERVAL_MS = 5 * 60 * 1000L
     }
 
     class Factory(private val context: Context, private val workManager: WorkManager) : ViewModelProvider.Factory {

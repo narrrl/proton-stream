@@ -104,6 +104,13 @@ an edge case.
   holds only the id, display name and token.
 - Nothing this app holds can write to the share: a viewer link grants
   `MemberRole::Viewer`, and the SDK's public-link write side is unported anyway.
+- Signing in to a Proton account is optional (`pstr-core::account`). The
+  session — tokens, the mailbox password that unlocks the key chain, and the
+  key salts a refreshed token can no longer fetch — is one blob in the same
+  credential store, under `proton-account`. Refresh tokens are single-use, so
+  every refresh is written back. The account writes exactly one thing: the
+  watch-history files on its own `proton-stream` device (`pstr-core::sync`).
+  Folders of the account added as shares are only ever read.
 - Signature verification is absent on the visitor path by design — an anonymous
   visitor cannot read `core/v4/keys/all` to resolve a signer. Decryption still
   proves the bytes were encrypted to the node key. Nodes come back with nothing
@@ -118,7 +125,10 @@ an edge case.
 | Share list | config dir, `shares.json` | **No** — atomic writes, never overwritten when unparseable |
 | Share secrets | OS credential store | **No** |
 | Catalog | data dir, `catalog.db` | Yes — recrawl |
-| Watch state | same DB, own table | **No** — deliberately survives a recrawl |
+| Watch state | same DB, own table | **No** — deliberately survives a recrawl; with an account, mirrored to its Drive |
+| Proton session | OS credential store, `proton-account` | No — sign in again |
+| Sync identity | config dir, `sync.json` | A new id if missing — the old history file is still read |
+| Watch history in Drive | device `proton-stream`, `watch-history/<id>.json` | One file per installation; merged per episode, newer wins |
 | Block cache | cache dir, `blocks/` | Yes — must work correctly after deletion |
 | Poster thumbnails | cache dir, `thumbs/` | Yes — refetched per file, one small decrypt each; stored scaled to 640 px |
 | Provider artwork | cache dir, `posters/` | Yes — refetched by URL; stored scaled to 640 px |

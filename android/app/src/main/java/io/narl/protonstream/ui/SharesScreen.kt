@@ -32,6 +32,7 @@ import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.unit.dp
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.TonalButton
+import uniffi.pstr_android.AccountState
 import uniffi.pstr_android.ShareRecord
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -56,16 +57,40 @@ internal fun SharesScreen(
     incomingLink: String?,
     onIncomingLinkTaken: () -> Unit,
     padding: PaddingValues,
+    account: AccountUiState = AccountUiState(),
+    accountActions: AccountActions? = null,
 ) {
     var showAdd by remember { mutableStateOf(false) }
+    var signingIn by remember { mutableStateOf(false) }
+    var browsing by remember { mutableStateOf(false) }
     var repairing by remember { mutableStateOf<ShareRecord?>(null) }
     var removing by remember { mutableStateOf<ShareRecord?>(null) }
     TabPage("Shares", padding) { body ->
         Box(Modifier.fillMaxSize().padding(body)) {
-            if (shares.isEmpty()) {
+            if (shares.isEmpty() && account.state == null) {
                 EmptyState("No shares yet", "Add a Proton Drive public link to build your library.")
             } else {
                 LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp)) {
+                    if (accountActions != null) {
+                        item(key = "account") {
+                            AccountCard(
+                                account,
+                                accountActions,
+                                onSignIn = { signingIn = true },
+                                onBrowse = { browsing = true },
+                            )
+                        }
+                    }
+                    if (shares.isEmpty()) {
+                        item(key = "empty") {
+                            Text(
+                                "No shares yet. Add a public link, or a folder of your Drive once signed in.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                    }
                     items(shares, key = { it.id }) { share ->
                         ShareRow(
                             share = share,
@@ -94,6 +119,14 @@ internal fun SharesScreen(
             onDismiss = { showAdd = false; onIncomingLinkTaken() },
             onAdd = onAdd,
         )
+    }
+    if (accountActions != null && (signingIn || account.state == AccountState.SecondFactor ||
+            account.state == AccountState.MailboxPassword)
+    ) {
+        SignInDialog(account, accountActions, onDismiss = { signingIn = false })
+    }
+    if (accountActions != null && browsing) {
+        DriveBrowserDialog(accountActions, onDismiss = { browsing = false })
     }
     repairing?.let { share ->
         RepairShareDialog(
@@ -139,7 +172,13 @@ private fun ShareRow(
     ListItem(
         headlineContent = { Text(share.name, fontWeight = FontWeight.SemiBold) },
         supportingContent = {
-            Text(if (share.hasCustomPassword) "Link and custom password, stored securely" else "Public link")
+            Text(
+                when {
+                    share.fromAccount -> "Folder of your Drive"
+                    share.hasCustomPassword -> "Link and custom password, stored securely"
+                    else -> "Public link"
+                },
+            )
         },
         leadingContent = {
             Icon(
@@ -164,11 +203,13 @@ private fun ShareRow(
                     // Not a remove: a share whose secret has become unreadable
                     // cannot be removed either, since removal deletes a secret
                     // the store can no longer touch.
-                    DropdownMenuItem(
-                        text = { Text("Re-enter link") },
-                        leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
-                        onClick = { menu = false; onRepair() },
-                    )
+                    if (!share.fromAccount) {
+                        DropdownMenuItem(
+                            text = { Text("Re-enter link") },
+                            leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
+                            onClick = { menu = false; onRepair() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Remove") },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },

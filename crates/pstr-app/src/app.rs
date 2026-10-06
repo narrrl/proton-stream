@@ -15,7 +15,8 @@ use pstr_core::library::Library;
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, TitleNames};
 
 use crate::engine::{
-    DownloadItem, DownloadKey, Engine, Event, ImageCache, describe_failures, watch_state,
+    AccountStatus, DownloadItem, DownloadKey, Engine, Event, ImageCache, describe_failures,
+    watch_state,
 };
 use crate::pacing::Pacer;
 use crate::playback::{Playback, PlaybackTarget};
@@ -126,6 +127,25 @@ pub enum Action {
         url: String,
         password: Option<String>,
     },
+    /// Add a folder of the signed-in account as a share.
+    AddAccountFolder {
+        name: String,
+        uid: pstr_core::proton_sdk::ids::NodeUid,
+    },
+    SignIn {
+        username: String,
+        password: String,
+    },
+    SubmitSecondFactor(String),
+    SubmitMailboxPassword(String),
+    CancelSignIn,
+    SignOut,
+    /// Sync watch history with the account's Drive now.
+    SyncNow,
+    /// List the account's top-level places in the Drive browser.
+    BrowsePlaces,
+    /// List one folder in the Drive browser.
+    BrowseFolder(pstr_core::proton_sdk::ids::NodeUid),
     /// Ask whether to forget a share. [`Action::ForgetShare`] does it.
     RemoveShare(String),
     ForgetShare(String),
@@ -535,6 +555,8 @@ pub struct App {
     /// library means "not loaded", not "nothing in it".
     pub loaded: bool,
     pub form: ShareForm,
+    /// The Proton account section of the shares page.
+    pub account: ui::account::AccountPanel,
     pub playback: Option<Playback>,
     /// Whether the player page's controls are showing, and why.
     pub overlay: ui::player::Overlay,
@@ -630,6 +652,7 @@ impl App {
             view: LibraryView::default(),
             loaded: false,
             form: ShareForm::default(),
+            account: ui::account::AccountPanel::default(),
             playback: None,
             overlay: ui::player::Overlay::default(),
             up_next: UpNext::default(),
@@ -882,6 +905,9 @@ impl App {
                                 None => Page::Library,
                             };
                         }
+                        // Where it stopped is the position another device
+                        // wants next, so it goes now rather than on the timer.
+                        self.engine.sync_watch_history();
                     }
                 }
                 Event::Watched {
@@ -905,6 +931,23 @@ impl App {
                     }
                 }
                 Event::OfflineFiles(files) => self.offline_files = files,
+                Event::Account(status) => {
+                    if let AccountStatus::SignedIn(username) = &status
+                        && self.account.busy
+                    {
+                        self.note(ctx, format!("signed in as {username}"), false);
+                    }
+                    self.account.set_status(status);
+                }
+                Event::SignInFailed(error) => self.account.refused(error),
+                Event::Synced(report) => {
+                    self.account.sync_error = None;
+                    self.account.synced = Some((ui::account::unix_now(), report));
+                }
+                Event::SyncFailed(error) => self.account.sync_error = Some(error),
+                Event::Places(places) => self.account.browser.places_arrived(places),
+                Event::Folder { uid, entries } => self.account.browser.folder_arrived(uid, entries),
+                Event::BrowseFailed(error) => self.account.browser.failed(error),
             }
         }
         // Pictures become textures a few per frame; the rest wait for the next.
@@ -1369,6 +1412,20 @@ impl App {
                 self.form.error = None;
                 self.engine.add_share(name, url, password);
             }
+            Action::AddAccountFolder { name, uid } => {
+                self.crawling = true;
+                self.engine.add_account_folder(name, uid);
+            }
+            Action::SignIn { username, password } => self.engine.sign_in(username, password),
+            Action::SubmitSecondFactor(code) => self.engine.submit_second_factor(code),
+            Action::SubmitMailboxPassword(password) => {
+                self.engine.submit_mailbox_password(password)
+            }
+            Action::CancelSignIn => self.engine.cancel_sign_in(),
+            Action::SignOut => self.engine.sign_out(),
+            Action::SyncNow => self.engine.sync_watch_history(),
+            Action::BrowsePlaces => self.engine.browse_places(),
+            Action::BrowseFolder(uid) => self.engine.browse_folder(uid),
             Action::RemoveShare(id) => self.confirm_remove_share = Some(id),
             Action::ForgetShare(id) => {
                 self.confirm_remove_share = None;
@@ -1868,6 +1925,7 @@ impl eframe::App for App {
                 view,
                 loaded,
                 form,
+                account,
                 matcher,
                 playback,
                 opening,
@@ -1964,7 +2022,9 @@ impl eframe::App for App {
                             },
                             &mut actions,
                         ),
-                        Page::Shares => ui::shares::show(ui, shares, library, form, &mut actions),
+                        Page::Shares => {
+                            ui::shares::show(ui, shares, library, form, account, &mut actions)
+                        }
                         Page::Settings => {
                             ui::settings::show(ui, settings, prefs, api_key, &mut actions)
                         }

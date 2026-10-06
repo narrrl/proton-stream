@@ -18,6 +18,7 @@ pub fn show(
     shares: &[Share],
     library: &Library,
     form: &mut ShareForm,
+    account: &mut ui::account::AccountPanel,
     actions: &mut Vec<Action>,
 ) {
     egui::ScrollArea::vertical()
@@ -40,6 +41,10 @@ pub fn show(
 
             ui.add_space(theme::space::XXL);
             add_form(ui, shares, form, actions);
+
+            ui.add_space(theme::space::XXL);
+            ui::account::section(ui, account, actions);
+            ui::account::browser(ui, account, shares, actions);
         });
 }
 
@@ -56,6 +61,9 @@ fn share_row(ui: &mut egui::Ui, share: &Share, titles: usize, actions: &mut Vec<
                     // What is in it, rather than what it is called inside the
                     // app. The id is still a hover away for a bug report.
                     let mut detail = ui::library::plural(titles, "title");
+                    if share.folder.is_some() {
+                        detail.push_str("  ·  from your Drive");
+                    }
                     if share.has_custom_password {
                         detail.push_str("  ·  password protected");
                     }
@@ -211,6 +219,7 @@ mod tests {
             name: "anime".into(),
             token: token.into(),
             has_custom_password: false,
+            folder: None,
         }
     }
 

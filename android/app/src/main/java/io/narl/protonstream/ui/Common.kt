@@ -19,6 +19,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import io.narl.protonstream.download.RetainedDownload
 import uniffi.pstr_android.EpisodeRecord
 
 /**
@@ -119,6 +120,20 @@ internal fun formatBytes(bytes: ULong): String {
         else -> "$bytes bytes"
     }
 }
+
+/**
+ * One line under a download that has not finished: "Running · 120.0 MiB of
+ * 1.2 GiB · 2.4 MiB/s", or "Queued" while it waits for a slot.
+ */
+internal fun downloadStatusLine(download: RetainedDownload): String = listOfNotNull(
+    download.status.replaceFirstChar { it.uppercase() },
+    download.total.takeIf { it > 0L && download.downloaded > 0L }?.let {
+        "${formatBytes(download.downloaded.toULong())} of ${formatBytes(it.toULong())}"
+    },
+    download.bytesPerSecond
+        .takeIf { it > 0L && download.status == RetainedDownload.STATUS_RUNNING }
+        ?.let { "${formatBytes(it.toULong())}/s" },
+).joinToString(" · ")
 
 /**
  * What an episode row is headed with: "1. Mother and Children".

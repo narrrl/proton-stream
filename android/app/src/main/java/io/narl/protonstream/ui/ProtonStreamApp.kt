@@ -270,6 +270,18 @@ fun ProtonStreamApp(
                         shareLink,
                         onShareLinkTaken,
                         body,
+                        account = state.account,
+                        accountActions = AccountActions(
+                            signIn = model::signIn,
+                            submitSecondFactor = model::submitSecondFactor,
+                            submitMailboxPassword = model::submitMailboxPassword,
+                            cancelSignIn = model::cancelSignIn,
+                            dismissVerification = model::dismissVerification,
+                            signOut = model::signOut,
+                            syncNow = model::syncNow,
+                            addFolder = model::addAccountFolder,
+                            onError = model::reportError,
+                        ),
                     )
                     Destination.History -> HistoryScreen(
                         state,
@@ -308,7 +320,7 @@ fun ProtonStreamApp(
                     onClose = {
                         playingTitleKey = null
                         playerMinimized = false
-                        model.reloadAfterMetadataChange()
+                        model.playerClosed()
                     },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -338,7 +350,7 @@ fun ProtonStreamApp(
             onClose = {
                 playingTitleKey = null
                 playerMinimized = false
-                model.reloadAfterMetadataChange()
+                model.playerClosed()
             },
         )
     }
