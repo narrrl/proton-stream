@@ -208,10 +208,10 @@ fn code_form(ui: &mut egui::Ui, panel: &mut AccountPanel, actions: &mut Vec<Acti
     );
     field.request_focus();
     ui.add_space(theme::space::S);
-    // Security keys need WebAuthn, which the sign-in here does not speak.
+    // Security keys need WebAuthn, which the sign-in here does not speak. An
+    // account with nothing else is refused before this form (`AccountStore`).
     ui.label(ui::muted(
-        "Security keys are not supported. If your account has only a security key, add an \
-         authenticator app in your Proton account settings to sign in here.",
+        "Security keys are not supported here — use the code from your authenticator app.",
     ));
     ui.add_space(theme::space::L);
     error_line(ui, panel);

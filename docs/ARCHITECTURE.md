@@ -105,9 +105,11 @@ an edge case.
 - Nothing this app holds can write to the share: a viewer link grants
   `MemberRole::Viewer`, and the SDK's public-link write side is unported anyway.
 - Signing in to a Proton account is optional (`pstr-core::account`). The
-  session — tokens, the mailbox password that unlocks the key chain, and the
-  key salts a refreshed token can no longer fetch — is one blob in the same
-  credential store, under `proton-account`. Refresh tokens are single-use, so
+  session — tokens, and per account key the passphrase that unlocks it,
+  derived at sign-in — is one blob in the same credential store, under
+  `proton-account`. The mailbox password itself is never stored. Only TOTP
+  second factors are spoken; an account whose only one is a security key is
+  refused with a reason before the code prompt. Refresh tokens are single-use, so
   every refresh is written back. On the desktop the blob can outgrow one
   credential entry — Windows caps one at 1280 UTF-16 units — so
   `KeyringSecretStore` splits a long value across `key#0`, `key#1`, … under a

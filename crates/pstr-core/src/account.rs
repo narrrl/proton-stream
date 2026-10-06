@@ -8,13 +8,15 @@
 //!
 //! ## What is kept, and where
 //!
-//! Following `proton-drive-linux`: one JSON blob in the [`SecretStore`] holding
-//! the session tokens, the mailbox password and the account's key salts. The
-//! mailbox password is what unlocks the key chain, so without it a resumed
-//! session could list nothing. The key salts are kept because
-//! `core/v4/keys/salts` needs a scope only a password sign-in grants: after the
-//! first token refresh it answers 403, and a session resumed without them
-//! could never unlock its keys again.
+//! One JSON blob in the [`SecretStore`] holding the session tokens and, per
+//! account key, the passphrase that unlocks it. Those passphrases are derived
+//! at sign-in from the mailbox password and the key salts, and kept *instead*
+//! of the password: they unlock the key chain just the same, but a store that
+//! leaks gives away this app's access to the account rather than the password
+//! — which, on a single-password account, is the login password itself.
+//! Deriving them later is not an option either way: `core/v4/keys/salts`
+//! needs a scope only a password sign-in grants, and answers 403 after the
+//! first token refresh.
 //!
 //! Proton refresh tokens are single-use, so every refresh is written back
 //! (see [`persist_refreshed_tokens`]). A refresh that is not leaves the store
@@ -27,9 +29,10 @@
 //! way, so [`AccountStore::sign_in`] returns a [`SignIn`] saying what it needs
 //! next and holding the half-made session until it is given.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use proton_drive_rs::{KeySalt, NodeKind, ProtonDriveClient};
+use proton_drive_rs::{NodeKind, ProtonDriveClient};
 use proton_sdk::api::HumanVerificationCredential;
 use proton_sdk::error::ProtonError;
 use proton_sdk::ids::NodeUid;
@@ -42,6 +45,11 @@ use crate::shares::{SecretStore, client_configuration};
 /// The secret-store key the session is kept under. Share secrets are keyed
 /// `share-…`, so the two cannot collide.
 const SESSION_KEY: &str = "proton-account";
+
+/// Why an account whose only second factor is a security key cannot sign in.
+const SECURITY_KEY_ONLY: &str = "This account's only second factor is a security key, which this \
+     app cannot use yet. Add an authenticator app in your Proton account settings, then sign in \
+     with its code.";
 
 /// Blocks in flight for streaming from the account, as for a public link —
 /// see `ShareStore::open`.
@@ -58,16 +66,15 @@ struct StoredSession {
     scopes: Vec<String>,
     /// `1` single password, `2` separate mailbox password — Proton's values.
     password_mode: u8,
-    mailbox_password: String,
-    key_salts: Vec<KeySalt>,
+    /// Key id → the passphrase that unlocks it. ASCII: they are bcrypt output.
+    key_passphrases: HashMap<String, String>,
 }
 
 impl StoredSession {
     fn capture(
         session: &ProtonApiSession,
         tokens: proton_sdk::http::Tokens,
-        mailbox_password: &str,
-        key_salts: Vec<KeySalt>,
+        key_passphrases: HashMap<String, String>,
     ) -> Self {
         Self {
             session_id: session.session_id().as_str().to_owned(),
@@ -80,9 +87,15 @@ impl StoredSession {
                 PasswordMode::Single => 1,
                 PasswordMode::Dual => 2,
             },
-            mailbox_password: mailbox_password.to_owned(),
-            key_salts,
+            key_passphrases,
         }
+    }
+
+    fn unlock(&self) -> HashMap<String, Vec<u8>> {
+        self.key_passphrases
+            .iter()
+            .map(|(id, passphrase)| (id.clone(), passphrase.as_bytes().to_vec()))
+            .collect()
     }
 
     fn resume_parameters(&self) -> ResumeParameters {
@@ -354,6 +367,13 @@ impl AccountStore {
             password: password.to_owned(),
         };
         if pending.session.is_waiting_for_second_factor() {
+            let methods = pending.session.second_factor_methods();
+            if methods.fido2 && !methods.totp {
+                // A security key needs WebAuthn, which this sign-in does not
+                // speak; asking for a code would only fail as a wrong one.
+                pending.session.end().await.ok();
+                return Err(Error::SignIn(SECURITY_KEY_ONLY.to_owned()));
+            }
             return Ok(SignIn::SecondFactor(pending));
         }
         pending.after_second_factor().await
@@ -368,17 +388,8 @@ impl AccountStore {
             return Ok(None);
         };
         let session = ProtonApiSession::resume(client_configuration(), stored.resume_parameters())?;
-        persist_refreshed_tokens(
-            &self.secrets,
-            &session,
-            stored.mailbox_password.clone(),
-            stored.key_salts.clone(),
-        );
-        let drive = ProtonDriveClient::with_key_salts(
-            &session,
-            stored.mailbox_password.into_bytes(),
-            stored.key_salts,
-        );
+        persist_refreshed_tokens(&self.secrets, &session, stored.key_passphrases.clone());
+        let drive = ProtonDriveClient::with_key_passphrases(&session, stored.unlock());
         Ok(Some(account(session, drive)))
     }
 
@@ -393,29 +404,35 @@ impl AccountStore {
         self.secrets.delete(SESSION_KEY)
     }
 
+    /// The stored session, or `None` for none — or for one this build cannot
+    /// read, such as the shape development builds before 1.2.0 stored, which
+    /// kept the mailbox password. Signing in again is the only fix for either,
+    /// and it replaces what is there.
     fn load(&self) -> Result<Option<StoredSession>> {
         let Some(encoded) = self.secrets.get(SESSION_KEY)? else {
             return Ok(None);
         };
-        serde_json::from_str(&encoded)
-            .map(Some)
-            .map_err(|e| Error::Config(format!("the stored Proton session is unreadable: {e}")))
+        Ok(serde_json::from_str(&encoded)
+            .inspect_err(|error| {
+                tracing::warn!(%error, "the stored Proton session is unreadable; sign in again");
+            })
+            .ok())
     }
 }
 
 /// Unlock the key chain with `mailbox_password`, store the session, and hand
 /// back the account.
 ///
-/// The key salts are read here, while the token still has the scope that
-/// endpoint needs. Loading the addresses is what proves the mailbox password:
-/// it unlocks the user keys, and a wrong password unlocks none of them.
+/// The key passphrases are derived here, while the token still has the scope
+/// the key salts need. Loading the addresses is what proves the mailbox
+/// password: it unlocks the user keys, and a wrong password unlocks none of
+/// them. Only the passphrases are stored; the password goes no further.
 async fn finish(
     secrets: Arc<dyn SecretStore>,
     session: ProtonApiSession,
     mailbox_password: &str,
 ) -> Result<Account> {
     let probe = ProtonDriveClient::new(&session, mailbox_password.as_bytes().to_vec());
-    let key_salts = probe.account().key_salts().await?;
     probe
         .account()
         .addresses()
@@ -426,28 +443,29 @@ async fn finish(
             }
             other => other.into(),
         })?;
+    let key_passphrases = probe
+        .account()
+        .key_passphrases()
+        .await?
+        .into_iter()
+        .map(|(id, passphrase)| {
+            String::from_utf8(passphrase)
+                .map(|passphrase| (id, passphrase))
+                .map_err(|_| Error::Config("a derived key passphrase is not text".to_owned()))
+        })
+        .collect::<Result<HashMap<_, _>>>()?;
 
     let stored = StoredSession::capture(
         &session,
         session.current_tokens().await,
-        mailbox_password,
-        key_salts.clone(),
+        key_passphrases.clone(),
     );
     let encoded = serde_json::to_string(&stored)
         .map_err(|e| Error::Config(format!("serialize the Proton session: {e}")))?;
     secrets.set(SESSION_KEY, &encoded)?;
-    persist_refreshed_tokens(
-        &secrets,
-        &session,
-        mailbox_password.to_owned(),
-        key_salts.clone(),
-    );
+    persist_refreshed_tokens(&secrets, &session, key_passphrases);
 
-    let drive = ProtonDriveClient::with_key_salts(
-        &session,
-        mailbox_password.as_bytes().to_vec(),
-        key_salts,
-    );
+    let drive = ProtonDriveClient::with_key_passphrases(&session, stored.unlock());
     Ok(account(session, drive))
 }
 
@@ -467,14 +485,12 @@ fn account(session: ProtonApiSession, drive: ProtonDriveClient) -> Account {
 fn persist_refreshed_tokens(
     secrets: &Arc<dyn SecretStore>,
     session: &ProtonApiSession,
-    mailbox_password: String,
-    key_salts: Vec<KeySalt>,
+    key_passphrases: HashMap<String, String>,
 ) {
     let secrets = Arc::clone(secrets);
     let template = session.clone();
     session.http().set_on_tokens_refreshed(move |tokens| {
-        let stored =
-            StoredSession::capture(&template, tokens, &mailbox_password, key_salts.clone());
+        let stored = StoredSession::capture(&template, tokens, key_passphrases.clone());
         let written = serde_json::to_string(&stored)
             .map_err(|e| Error::Config(e.to_string()))
             .and_then(|encoded| secrets.set(SESSION_KEY, &encoded));
@@ -566,8 +582,7 @@ mod tests {
             refresh_token: "refresh".to_owned(),
             scopes: vec!["drive".to_owned()],
             password_mode: 2,
-            mailbox_password: "mailbox".to_owned(),
-            key_salts: Vec::new(),
+            key_passphrases: HashMap::from([("key-1".to_owned(), "derived".to_owned())]),
         }
     }
 
@@ -602,6 +617,29 @@ mod tests {
         let store = AccountStore::new(secrets);
         store.sign_out(None).await.expect("sign out");
         assert_eq!(store.username().expect("read"), None);
+    }
+
+    #[test]
+    fn the_stored_session_holds_no_password() {
+        let encoded = serde_json::to_string(&stored()).unwrap();
+        assert!(!encoded.contains("password\""), "{encoded}");
+        assert!(!encoded.contains("key_salts"), "{encoded}");
+    }
+
+    #[test]
+    fn a_session_stored_by_an_older_build_reads_as_signed_out() {
+        let secrets = Arc::new(MemorySecrets::default());
+        secrets
+            .set(
+                SESSION_KEY,
+                r#"{"session_id":"s","username":"u","user_id":"i","access_token":"a",
+                    "refresh_token":"r","scopes":[],"password_mode":1,
+                    "mailbox_password":"hunter2","key_salts":[]}"#,
+            )
+            .unwrap();
+        let store = AccountStore::new(secrets);
+        assert_eq!(store.username().expect("read"), None);
+        assert!(store.resume().expect("resume").is_none());
     }
 
     #[test]

@@ -28,8 +28,8 @@ authors = ["Nils Pukropp <contact@narl.io>"]
 opt-level = 2
 
 [workspace.dependencies]
-proton-sdk = { version = "0.7.2" }
-proton-drive-rs = { version = "0.7.2" }
+proton-sdk = { version = "0.7.3" }
+proton-drive-rs = { version = "0.7.3" }
 
 # Internal crates.
 pstr-core = { path = "crates/pstr-core" }

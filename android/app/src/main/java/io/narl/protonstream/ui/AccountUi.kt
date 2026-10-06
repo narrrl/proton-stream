@@ -332,10 +332,12 @@ private fun VerificationDialog(url: String, onToken: (String) -> Unit, onDismiss
     }
 }
 
-/** Security keys need WebAuthn, which the sign-in here does not speak. */
+/**
+ * Security keys need WebAuthn, which the sign-in here does not speak. An account
+ * with nothing else is refused before this form (`AccountStore::sign_in`).
+ */
 private const val SECURITY_KEY_NOTE =
-    "Security keys are not supported. If your account has only a security key, add an " +
-        "authenticator app in your Proton account settings to sign in here."
+    "Security keys are not supported here — use the code from your authenticator app."
 
 /** Installed once per page, at start and again at finish in case the first ran too early. */
 private const val VERIFICATION_BRIDGE = """
