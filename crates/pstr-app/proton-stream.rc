@@ -1,0 +1,4 @@
+// The exe's icon. The window sets one at runtime too, but that only lasts as
+// long as the window: Explorer, the Start menu and a taskbar pin read the icon
+// out of the file, and without this one they fall back to the generic one.
+1 ICON "../../packaging/windows/proton-stream.ico"

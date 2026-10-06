@@ -146,6 +146,54 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B63 — a taskbar pin on Windows lost its icon
+
+**Symptom.** Proton Stream pinned to the Windows taskbar showed its icon at
+first, then after a while — reliably after an update — the generic program
+icon.
+
+**Cause.** Two, each enough on its own. `proton-stream.exe` carried no icon
+resource: the window sets one at runtime, which is what a pin shows while the
+icon cache still holds it, but a pin made from the running window points at
+the exe, and once the cache is rebuilt the exe has nothing to give. A pin made
+from the Start Menu shortcut instead took the shortcut's `Icon`, which Windows
+Installer keeps in `C:\Windows\Installer\{ProductCode}`. Every upgrade has a
+new ProductCode and deletes the old product's folder, icon included.
+
+**Fix.** `crates/pstr-app/build.rs` compiles `proton-stream.rc`, which embeds
+`packaging/windows/proton-stream.ico`, into the GUI exe: `rc.exe` on MSVC,
+mingw's `windres` on the cross build. Both installer definitions drop the
+shortcut's `Icon` (and the WiX one `Advertise`), so the shortcut shows the
+exe's icon too. A pin that already lost its icon keeps the dead reference;
+unpin and pin again once.
+
+**Verified.** `objdump -p` on the cross-built exe lists the `RT_ICON` entries,
+all seven sizes. `msiinfo export … Shortcut` on a wixl build has an empty
+`Icon_` column. Not yet checked on a Windows taskbar across an upgrade.
+
+### B62 — an MSI upgrade left the app without libmpv
+
+**Symptom.** Installing a new `.msi` over an old one ended with an app that
+would not start for want of mpv. Installing the same `.msi` a second time
+fixed it.
+
+**Cause.** Both installers remove the old product early — the wixl one at
+`RemoveExistingProducts` after `InstallInitialize`, WiX's `MajorUpgrade` by
+default after `InstallValidate` — but costing runs before either, at
+`CostFinalize`. Costing found the old `libmpv-2.dll` on disk with the same
+version as the new one, since mpv is pinned, and decided not to copy it. Then
+removing the old product deleted it. The second install found no DLL on disk,
+so it copied one.
+
+**Fix.** `REINSTALLMODE=amus` in both installer definitions, which copies every
+file whatever is on disk. Every file is private to the install directory, so
+the forced overwrite can downgrade nothing shared.
+
+**Verified.** `msiinfo export … InstallExecuteSequence` on a wixl build shows
+`FileCost` 900 and `CostFinalize` 1000 ahead of `RemoveExistingProducts` 1501,
+and `msiinfo export … Property` has `REINSTALLMODE amus`. Not yet checked as an
+upgrade on Windows.
+
 ### B61 — later seasons were captioned with season one's episode names
 
 **Symptom.** On a 42-title AniList library, Attack on Titan seasons 2–4 and

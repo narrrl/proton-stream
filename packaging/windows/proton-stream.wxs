@@ -26,6 +26,15 @@
                   DowngradeErrorMessage="A newer version of Proton Stream is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- Copy every file on an upgrade, whatever is on disk. Costing runs
+         before RemoveExistingProducts, so it sees the old libmpv-2.dll — the
+         same version, since mpv is pinned — and decides not to copy it. The
+         removal of the old product then deletes it, and the upgrade ends with
+         no DLL: "mpv missing" until a second install, which finds nothing on
+         disk and copies it. Every file here is private to INSTALLFOLDER, so
+         overwriting unconditionally downgrades nothing shared. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
+
     <Icon Id="AppIcon" SourceFile="$(var.IconFile)" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/narrrl/proton-stream" />
@@ -45,12 +54,16 @@
     <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
       <Component Guid="623c8cb8-b826-4d57-a054-e5be56f24c19">
         <File Id="AppExe" Source="$(var.BinDir)\proton-stream.exe" KeyPath="yes" />
+        <!-- Not advertised, and no Icon: either one puts the shortcut's icon
+             in C:\Windows\Installer\{ProductCode}, which the next upgrade
+             deletes along with the icon of every taskbar pin made from the
+             shortcut. This way it shows the exe's own icon resource. -->
         <Shortcut Id="StartMenuShortcut"
                   Directory="ProgramMenuFolder"
                   Name="Proton Stream"
                   Description="Browse and stream a Proton Drive public link"
-                  Icon="AppIcon"
-                  Advertise="yes" />
+                  Target="[#AppExe]"
+                  WorkingDirectory="INSTALLFOLDER" />
       </Component>
 
       <!-- The CLI, and the PATH entry that makes it worth installing. Tied to

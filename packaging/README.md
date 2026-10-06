@@ -124,7 +124,7 @@ The `.icns` is rasterized from `io.narl.proton-stream.svg` when `rsvg-convert` o
 | `io.narl.proton-stream.desktop` / `.svg` | Freedesktop entry and icon |
 | `macos/Info.plist.in` | `.app` bundle plist; `@VERSION@`/`@BIN@`/`@APP_ID@` substituted at build time |
 | `windows/proton-stream.wxs` | WiX v4+ installer definition |
-| `windows/proton-stream.ico` | MSI and shortcut icon, rasterized from the SVG |
+| `windows/proton-stream.ico` | Exe and Add/Remove Programs icon, rasterized from the SVG; `crates/pstr-app/build.rs` compiles it into `proton-stream.exe` |
 | `windows/license.rtf` | Fallback for the installer's license dialog; the repo's own `LICENSE` is preferred when it exists |
 
 The Debian `control` file has no template — `scripts/build.sh` writes it, because

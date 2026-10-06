@@ -34,6 +34,9 @@ directories.workspace = true
 chrono.workspace = true
 souvlaki.workspace = true
 
+[build-dependencies]
+embed-resource.workspace = true
+
 [dev-dependencies]
 skrifa.workspace = true
 

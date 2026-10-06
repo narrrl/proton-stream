@@ -78,6 +78,15 @@
       <RemoveExistingProducts After="InstallInitialize" />
     </InstallExecuteSequence>
 
+    <!-- Copy every file on an upgrade, whatever is on disk. Costing runs
+         before RemoveExistingProducts, so it sees the old libmpv-2.dll — the
+         same version, since mpv is pinned — and decides not to copy it. The
+         removal of the old product then deletes it, and the upgrade ends with
+         no DLL: "mpv missing" until a second install, which finds nothing on
+         disk and copies it. Every file here is private to INSTALLDIR, so
+         overwriting unconditionally downgrades nothing shared. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
+
     <Media Id="1" Cabinet="proton_stream.cab" EmbedCab="yes" />
 
     <Icon Id="proton-stream.ico" SourceFile="$(var.IconFile)" />
@@ -98,14 +107,19 @@
                  and writes the advertised form anyway, with the feature name in
                  Shortcut/Target. What selects the non-advertised form is being
                  a child of the Component rather than of the File, plus an
-                 explicit formatted Target. Keep it out of the <File>. -->
+                 explicit formatted Target. Keep it out of the <File>.
+
+                 No Icon either. A shortcut's Icon is copied to
+                 C:\Windows\Installer\{ProductCode}, and every upgrade has a
+                 new ProductCode and deletes the old folder — taking the icon
+                 of every taskbar pin made from the shortcut with it. Without
+                 one, the shortcut shows the exe's own icon resource. -->
             <Shortcut Id="StartMenuShortcut"
                       Directory="ProgramMenuFolder"
                       Name="Proton Stream"
                       Description="Browse and stream a Proton Drive public link"
                       Target="[INSTALLDIR]proton-stream.exe"
-                      WorkingDirectory="INSTALLDIR"
-                      Icon="proton-stream.ico" />
+                      WorkingDirectory="INSTALLDIR" />
           </Component>
 
           <!-- The CLI, and the PATH entry that makes it worth installing. Tied
