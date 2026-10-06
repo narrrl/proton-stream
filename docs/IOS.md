@@ -50,8 +50,8 @@ gets few app IDs, and each extension costs one.
 
 `.github/workflows/ios.yml` runs the tests and builds the `.ipa` on `macos-15` for
 every push to `main` and every pull request that touches the iOS sources or the Rust
-crates under them. It is not yet part of `release.yml`: add it there, and the `ios`
-artifact to `publish`, once it has passed on `main`.
+crates under them. `release.yml` calls it too, and publishes the `.ipa` next to the
+other artifacts.
 
 `scripts/render-ios-icon.sh` renders `ios/ProtonStream/Resources/AppIcon.svg`, which
 is Android's adaptive launcher icon with both layers on one canvas, into the asset

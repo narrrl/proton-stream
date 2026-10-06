@@ -150,10 +150,17 @@ jobs:
       signed_release: true
     secrets: inherit
 
+  # The unsigned .ipa: SideStore and AltStore re-sign it with the viewer's own
+  # Apple ID when they install it.
+  ios:
+    name: iOS
+    needs: verify
+    uses: ./.github/workflows/ios.yml
+
   publish:
     name: Publish
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows, android]
+    needs: [linux, windows, android, ios]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -171,6 +178,10 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: android
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: ios
           path: artifacts
 
       - name: Checksums
