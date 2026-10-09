@@ -75,7 +75,7 @@ Each of these is the platform's doing, not a choice to diverge.
   boundary and is queued again; it resumes from its `.part` file when the app next
   comes forward. "Download on Wi-Fi only" stops transfers on a cellular or
   otherwise expensive network rather than holding them back.
-- **Watch history syncs when the app leaves the screen**, inside the same grace, in
+- **Sync runs when the app leaves the screen**, inside the same grace, in
   place of Android's `WatchSyncWorker`, and every five minutes while it is open.
 - **Background audio off pauses** the episode when the app leaves the screen, where
   Android stops it.

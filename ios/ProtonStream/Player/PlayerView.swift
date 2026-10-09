@@ -567,9 +567,9 @@ struct MpvView: UIViewRepresentable {
     func updateUIView(_: LayerView, context _: Context) {}
 
     final class LayerView: UIView {
-        private let video: CALayer
+        private let video: CAMetalLayer
 
-        init(layer video: CALayer) {
+        init(layer video: CAMetalLayer) {
             self.video = video
             super.init(frame: .zero)
             backgroundColor = .black
@@ -580,13 +580,29 @@ struct MpvView: UIViewRepresentable {
         @available(*, unavailable)
         required init?(coder _: NSCoder) { nil }
 
+        /// The drawable is sized here, not left to the layer. MoltenVK sets
+        /// `drawableSize` once when it builds the swapchain and Core Animation
+        /// stops tracking the bounds from then on, while mpv decides its
+        /// output size from `drawableSize` alone. Left alone, a rotation, a
+        /// Split View resize or the player reopening at another size kept the
+        /// old drawable, which Core Animation stretched over the new bounds —
+        /// a squashed or cropped picture until something else resized it.
         override func layoutSubviews() {
             super.layoutSubviews()
+            let scale = window?.screen.nativeScale ?? UIScreen.main.nativeScale
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             video.frame = bounds
-            video.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+            video.contentsScale = scale
+            video.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
             CATransaction.commit()
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            // Reattached after the player was minimised: the layer is the one
+            // from before, still sized for wherever it last was.
+            setNeedsLayout()
         }
     }
 }

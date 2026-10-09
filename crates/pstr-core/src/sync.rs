@@ -1,5 +1,7 @@
 //! Watch history kept in the viewer's own Drive, so every device resumes where
-//! another left off.
+//! another left off — and, in the same file, the shares, settings and
+//! hand-picked matches that make the library look the same on every device
+//! (see [`crate::profile`]).
 //!
 //! ## Layout
 //!
@@ -17,7 +19,8 @@
 //! nothing is overwritten and there is no write conflict to resolve.
 //!
 //! Each file carries the installation's whole watch table, and merging is per
-//! episode: the newer `updated_at` wins. That is idempotent and order-free, so
+//! episode: the newer `updated_at` wins. The profile's registers merge the same
+//! way, per key. That is idempotent and order-free, so
 //! it does not matter how many devices there are, which synced first, or that
 //! a device writes back entries it learned from another. A device whose clock
 //! runs ahead wins ties it should not, which is the price of not having a
@@ -25,11 +28,11 @@
 //!
 //! The keys travel: `share-{token}` is derived from the link and a folder's
 //! `drive-…` id from its node, so the same library added on two devices has
-//! the same `(share_id, link_id)` on both. Nothing secret is in a file — the
-//! link token decrypts nothing without the fragment — and the file is
-//! end-to-end encrypted by Drive regardless.
+//! the same `(share_id, link_id)` on both. The watch entries carry nothing
+//! secret; the profile's share registers do carry each link and its password,
+//! which is why they live only here, end-to-end encrypted by Drive.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use parking_lot::Mutex;
 use proton_drive_rs::{DeviceType, NodeKind, ProtonDriveClient};
@@ -40,6 +43,8 @@ use crate::account::Account;
 use crate::catalog::{Catalog, WatchState};
 use crate::config::{AppDirs, read_json, write_json};
 use crate::error::{Error, Result};
+use crate::profile::{Profile, ProfileChanges, Registers};
+use crate::shares::ShareStore;
 
 /// The Drive device watch history is kept on.
 pub const DEVICE_NAME: &str = "proton-stream";
@@ -48,7 +53,8 @@ pub const DEVICE_NAME: &str = "proton-stream";
 const FOLDER: &str = "watch-history";
 
 /// Bumped only for a change an older build would misread. A file of a newer
-/// version is skipped rather than half-understood.
+/// version is skipped rather than half-understood. The profile's registers
+/// were added without a bump: a build that predates them ignores the field.
 const FORMAT_VERSION: u32 = 1;
 
 /// One installation's watch history, as stored in Drive.
@@ -57,6 +63,15 @@ struct HistoryFile {
     version: u32,
     installation: String,
     entries: Vec<HistoryEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    registers: Registers,
+}
+
+/// What one history file holds.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Contents {
+    entries: Vec<HistoryEntry>,
+    registers: Registers,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,7 +127,7 @@ struct Identity {
 }
 
 /// What one [`WatchSync::sync`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SyncReport {
     /// Episodes whose position another device had newer.
     pub applied: usize,
@@ -123,6 +138,8 @@ pub struct SyncReport {
     /// Files of installations gone quiet that were moved to the trash, their
     /// history now carried in this installation's own file.
     pub retired: usize,
+    /// What other devices' shares and settings changed here.
+    pub profile: ProfileChanges,
 }
 
 /// How long an installation's file may go unwritten before another
@@ -243,10 +260,10 @@ impl HistoryDrive for ProtonDriveClient {
 }
 
 /// A history file as last read, by the revision it was read at. `None`
-/// entries for one this build could not read.
+/// contents for one this build could not read.
 struct Seen {
     revision: Option<String>,
-    entries: Option<Vec<HistoryEntry>>,
+    contents: Option<Contents>,
 }
 
 /// Syncs the catalog's watch table with the account's Drive.
@@ -257,8 +274,9 @@ pub struct WatchSync {
     seen: Mutex<HashMap<String, Seen>>,
     /// What this installation's own file holds, once known: what was read
     /// back at the first sync, then what was last written. Compared against
-    /// the catalog so an unchanged history is not uploaded as a new revision.
-    own: Mutex<Option<Vec<HistoryEntry>>>,
+    /// the catalog and the profile so an unchanged history is not uploaded as
+    /// a new revision.
+    own: Mutex<Option<Contents>>,
     /// The history folders, resolved once per account. Usually one; see
     /// [`HistoryDrive::history_folders`].
     folders: Mutex<Option<Vec<NodeUid>>>,
@@ -303,25 +321,34 @@ impl WatchSync {
         *self.folders.lock() = None;
     }
 
-    /// Pull every other installation's history into `catalog`, write this
-    /// one's if it changed, then retire the files of installations gone quiet.
+    /// Pull every other installation's history, shares and settings in, write
+    /// this one's if it changed, then retire the files of installations gone
+    /// quiet.
     ///
     /// The catalog is locked only around its own reads and writes, never
     /// across a request, so playback can keep saving its position while this
-    /// runs.
-    pub async fn sync(&self, account: &Account, catalog: &Mutex<Catalog>) -> Result<SyncReport> {
+    /// runs. Shares that arrive are configured but not opened or crawled; see
+    /// [`SyncReport::profile`] for what the front end has to do about them.
+    pub async fn sync(
+        &self,
+        account: &Account,
+        catalog: &Mutex<Catalog>,
+        store: &ShareStore,
+    ) -> Result<SyncReport> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs() as i64);
-        self.sync_with(account.drive(), catalog, now).await
+        let profile = Profile { store, catalog };
+        self.sync_with(account.drive(), &profile, now).await
     }
 
     pub(crate) async fn sync_with<D: HistoryDrive>(
         &self,
         drive: &D,
-        catalog: &Mutex<Catalog>,
+        profile: &Profile<'_>,
         now: i64,
     ) -> Result<SyncReport> {
+        let catalog = profile.catalog;
         let _running = self.running.lock().await;
         let folders = self.folders(drive).await?;
         let own_name = format!("{}.json", self.installation);
@@ -339,12 +366,14 @@ impl WatchSync {
         }
 
         let mut remote = Vec::new();
+        let mut registers = Vec::new();
         // Files whose every entry has been read, and so can be retired once
         // this installation's file carries them.
         let mut readable = Vec::new();
         for file in &others {
-            if let Some(entries) = self.read(drive, file).await {
-                remote.extend(entries);
+            if let Some(contents) = self.read(drive, file).await {
+                remote.extend(contents.entries);
+                registers.push(contents.registers);
                 readable.push(file);
             }
         }
@@ -355,18 +384,21 @@ impl WatchSync {
         // less than it holds, and read again next time.
         let mut own_unreadable = false;
         if self.own.lock().is_none() {
-            let entries = match &own_file {
+            let contents = match &own_file {
                 Some(file) => self.read(drive, file).await,
-                None => Some(Vec::new()),
+                None => Some(Contents::default()),
             };
-            match entries {
-                Some(entries) => {
-                    remote.extend(entries.iter().cloned());
-                    *self.own.lock() = Some(entries);
+            match contents {
+                Some(contents) => {
+                    remote.extend(contents.entries.iter().cloned());
+                    registers.push(contents.registers.clone());
+                    *self.own.lock() = Some(contents);
                 }
                 None => own_unreadable = true,
             }
         }
+
+        let (registers, profile_changes) = profile.sync(&registers, now)?;
 
         let incoming: Vec<(String, String, WatchState)> = remote
             .iter()
@@ -388,15 +420,17 @@ impl WatchSync {
         // A file that is missing is written even when what it would hold has
         // not changed: another installation retired it, or it was deleted by
         // hand, and either way the history it carried lives only here now.
-        let unchanged = own_file.is_some() && self.own.lock().as_ref() == Some(&entries);
-        let uploaded = if own_unreadable || unchanged || (entries.is_empty() && own_file.is_none())
-        {
+        let contents = Contents { entries, registers };
+        let unchanged = own_file.is_some() && self.own.lock().as_ref() == Some(&contents);
+        let empty = contents.entries.is_empty() && contents.registers.is_empty();
+        let uploaded = if own_unreadable || unchanged || (empty && own_file.is_none()) {
             false
         } else {
             let file = HistoryFile {
                 version: FORMAT_VERSION,
                 installation: self.installation.clone(),
-                entries: entries.clone(),
+                entries: contents.entries.clone(),
+                registers: contents.registers.clone(),
             };
             let bytes = serde_json::to_vec(&file)
                 .map_err(|e| Error::Config(format!("serialize watch history: {e}")))?;
@@ -404,7 +438,7 @@ impl WatchSync {
                 Some(file) => drive.replace(&file.uid, &bytes).await?,
                 None => drive.create(&folders[0], &own_name, &bytes).await?,
             }
-            *self.own.lock() = Some(entries);
+            *self.own.lock() = Some(contents);
             true
         };
 
@@ -435,34 +469,31 @@ impl WatchSync {
             uploaded,
             devices: others.len(),
             retired: retired.len(),
+            profile: profile_changes,
         })
     }
 
-    /// The entries of one history file, from the cache when its revision has
+    /// The contents of one history file, from the cache when its revision has
     /// not moved, or `None` when it cannot be read.
     ///
     /// A file that will not download or parse is logged and skipped: it is
     /// another device's, and one bad file must not stop the rest syncing.
-    async fn read<D: HistoryDrive>(
-        &self,
-        drive: &D,
-        file: &RemoteFile,
-    ) -> Option<Vec<HistoryEntry>> {
+    async fn read<D: HistoryDrive>(&self, drive: &D, file: &RemoteFile) -> Option<Contents> {
         let key = file.uid.link_id.as_str().to_owned();
         if let Some(seen) = self.seen.lock().get(&key)
             && file.revision.is_some()
             && seen.revision == file.revision
         {
-            return seen.entries.clone();
+            return seen.contents.clone();
         }
         let uid = &file.uid;
-        let entries = match drive.download(uid).await {
+        let contents = match drive.download(uid).await {
             Ok(bytes) => {
-                let entries = parse(&bytes);
-                if entries.is_none() {
+                let contents = parse(&bytes);
+                if contents.is_none() {
                     tracing::warn!(%uid, "skipping a watch-history file this build cannot read");
                 }
-                entries
+                contents
             }
             Err(error) => {
                 // Not cached: a download that failed is tried again next time.
@@ -474,10 +505,10 @@ impl WatchSync {
             key,
             Seen {
                 revision: file.revision.clone(),
-                entries: entries.clone(),
+                contents: contents.clone(),
             },
         );
-        entries
+        contents
     }
 
     /// The history folders, resolved once per account.
@@ -491,10 +522,13 @@ impl WatchSync {
     }
 }
 
-/// A history file's entries, or `None` for one this build cannot read.
-fn parse(bytes: &[u8]) -> Option<Vec<HistoryEntry>> {
+/// A history file's contents, or `None` for one this build cannot read.
+fn parse(bytes: &[u8]) -> Option<Contents> {
     let file: HistoryFile = serde_json::from_slice(bytes).ok()?;
-    (file.version <= FORMAT_VERSION).then_some(file.entries)
+    (file.version <= FORMAT_VERSION).then_some(Contents {
+        entries: file.entries,
+        registers: file.registers,
+    })
 }
 
 /// The kind of device to register, which is only the icon the web app draws.
@@ -518,6 +552,7 @@ fn new_installation_id() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::tests::Device;
 
     fn entry(link: &str, position: f64, updated_at: i64) -> HistoryEntry {
         HistoryEntry {
@@ -655,11 +690,8 @@ mod tests {
     }
 
     /// An installation: its sync and its catalog.
-    fn device(id: &str) -> (WatchSync, Mutex<Catalog>) {
-        (
-            WatchSync::with_installation(id.to_owned()),
-            Mutex::new(Catalog::in_memory().unwrap()),
-        )
+    fn device(id: &str) -> (WatchSync, Device) {
+        (WatchSync::with_installation(id.to_owned()), Device::new(id))
     }
 
     fn watched_at(position_secs: f64, updated_at: i64) -> WatchState {
@@ -684,11 +716,14 @@ mod tests {
             .unwrap();
 
         let first = laptop
-            .sync_with(&drive, &laptop_catalog, 100)
+            .sync_with(&drive, &laptop_catalog.profile(), 100)
             .await
             .unwrap();
         assert!(first.uploaded);
-        let second = phone.sync_with(&drive, &phone_catalog, 110).await.unwrap();
+        let second = phone
+            .sync_with(&drive, &phone_catalog.profile(), 110)
+            .await
+            .unwrap();
 
         assert_eq!(second.applied, 1);
         assert_eq!(second.devices, 1);
@@ -714,12 +749,15 @@ mod tests {
             .unwrap();
 
         laptop
-            .sync_with(&drive, &laptop_catalog, 300)
+            .sync_with(&drive, &laptop_catalog.profile(), 300)
             .await
             .unwrap();
-        phone.sync_with(&drive, &phone_catalog, 300).await.unwrap();
+        phone
+            .sync_with(&drive, &phone_catalog.profile(), 300)
+            .await
+            .unwrap();
         laptop
-            .sync_with(&drive, &laptop_catalog, 300)
+            .sync_with(&drive, &laptop_catalog.profile(), 300)
             .await
             .unwrap();
 
@@ -740,8 +778,14 @@ mod tests {
             .set_watch_state("share-a", "ep1", &watched_at(60.0, 100))
             .unwrap();
 
-        laptop.sync_with(&drive, &catalog, 100).await.unwrap();
-        let again = laptop.sync_with(&drive, &catalog, 200).await.unwrap();
+        laptop
+            .sync_with(&drive, &catalog.profile(), 100)
+            .await
+            .unwrap();
+        let again = laptop
+            .sync_with(&drive, &catalog.profile(), 200)
+            .await
+            .unwrap();
 
         assert!(!again.uploaded);
         assert_eq!(drive.uploads(), 1);
@@ -751,7 +795,10 @@ mod tests {
     async fn nothing_is_uploaded_before_anything_was_watched() {
         let drive = FakeDrive::default();
         let (laptop, catalog) = device("laptop");
-        let report = laptop.sync_with(&drive, &catalog, 100).await.unwrap();
+        let report = laptop
+            .sync_with(&drive, &catalog.profile(), 100)
+            .await
+            .unwrap();
         assert!(!report.uploaded);
         assert!(drive.names().is_empty());
     }
@@ -764,11 +811,17 @@ mod tests {
             .lock()
             .set_watch_state("share-a", "ep1", &watched_at(60.0, 100))
             .unwrap();
-        laptop.sync_with(&drive, &catalog, 100).await.unwrap();
+        laptop
+            .sync_with(&drive, &catalog.profile(), 100)
+            .await
+            .unwrap();
 
         let own: Vec<NodeUid> = drive.files.lock().iter().map(|f| f.uid.clone()).collect();
         drive.trash(&own).await.unwrap();
-        let report = laptop.sync_with(&drive, &catalog, 200).await.unwrap();
+        let report = laptop
+            .sync_with(&drive, &catalog.profile(), 200)
+            .await
+            .unwrap();
 
         assert!(report.uploaded);
         assert_eq!(drive.names(), ["laptop.json"]);
@@ -782,11 +835,17 @@ mod tests {
             .lock()
             .set_watch_state("share-a", "ep1", &watched_at(60.0, 100))
             .unwrap();
-        laptop.sync_with(&drive, &catalog, 100).await.unwrap();
+        laptop
+            .sync_with(&drive, &catalog.profile(), 100)
+            .await
+            .unwrap();
 
         // The catalog was deleted; the config, and with it the id, was not.
         let (relaunched, empty) = device("laptop");
-        let report = relaunched.sync_with(&drive, &empty, 200).await.unwrap();
+        let report = relaunched
+            .sync_with(&drive, &empty.profile(), 200)
+            .await
+            .unwrap();
 
         assert_eq!(report.applied, 1);
         assert!(!report.uploaded);
@@ -804,7 +863,10 @@ mod tests {
             .lock()
             .set_watch_state("share-a", "ep1", &watched_at(60.0, 100))
             .unwrap();
-        laptop.sync_with(&drive, &catalog, 100).await.unwrap();
+        laptop
+            .sync_with(&drive, &catalog.profile(), 100)
+            .await
+            .unwrap();
 
         let (relaunched, other) = device("laptop");
         other
@@ -814,13 +876,19 @@ mod tests {
         drive
             .offline
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        let report = relaunched.sync_with(&drive, &other, 200).await.unwrap();
+        let report = relaunched
+            .sync_with(&drive, &other.profile(), 200)
+            .await
+            .unwrap();
         assert!(!report.uploaded);
 
         drive
             .offline
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        relaunched.sync_with(&drive, &other, 300).await.unwrap();
+        relaunched
+            .sync_with(&drive, &other.profile(), 300)
+            .await
+            .unwrap();
         let state = other.lock().all_watch_states().unwrap();
         assert_eq!(state.len(), 2, "both episodes survive: {state:?}");
     }
@@ -832,6 +900,7 @@ mod tests {
             version: FORMAT_VERSION + 1,
             installation: "future".to_owned(),
             entries: vec![entry("ep1", 60.0, 100)],
+            registers: Registers::new(),
         };
         drive.put("future.json", serde_json::to_vec(&future).unwrap());
         let (laptop, catalog) = device("laptop");
@@ -841,7 +910,7 @@ mod tests {
             .unwrap();
 
         let report = laptop
-            .sync_with(&drive, &catalog, RETIRE_AFTER_SECS + DAY)
+            .sync_with(&drive, &catalog.profile(), RETIRE_AFTER_SECS + DAY)
             .await
             .unwrap();
 
@@ -860,21 +929,24 @@ mod tests {
             .unwrap();
         drive.at(100);
         old_phone
-            .sync_with(&drive, &old_catalog, 100)
+            .sync_with(&drive, &old_catalog.profile(), 100)
             .await
             .unwrap();
 
         let (phone, catalog) = device("phone");
         let later = 100 + RETIRE_AFTER_SECS;
         drive.at(later);
-        let report = phone.sync_with(&drive, &catalog, later).await.unwrap();
+        let report = phone
+            .sync_with(&drive, &catalog.profile(), later)
+            .await
+            .unwrap();
 
         assert_eq!(report.retired, 1);
         assert_eq!(drive.names(), ["phone.json"]);
         // Nothing was lost: the newcomer's file carries it now.
         let (fresh, fresh_catalog) = device("fresh");
         fresh
-            .sync_with(&drive, &fresh_catalog, later)
+            .sync_with(&drive, &fresh_catalog.profile(), later)
             .await
             .unwrap();
         assert_eq!(
@@ -893,13 +965,13 @@ mod tests {
             .unwrap();
         drive.at(100);
         laptop
-            .sync_with(&drive, &laptop_catalog, 100)
+            .sync_with(&drive, &laptop_catalog.profile(), 100)
             .await
             .unwrap();
 
         let (phone, catalog) = device("phone");
         let report = phone
-            .sync_with(&drive, &catalog, 100 + RETIRE_AFTER_SECS - DAY)
+            .sync_with(&drive, &catalog.profile(), 100 + RETIRE_AFTER_SECS - DAY)
             .await
             .unwrap();
 
@@ -925,9 +997,13 @@ mod tests {
             version: FORMAT_VERSION,
             installation: "abc".to_owned(),
             entries: vec![entry("a", 12.5, 100)],
+            registers: Registers::new(),
         };
         let bytes = serde_json::to_vec(&file).unwrap();
-        assert_eq!(parse(&bytes), Some(file.entries));
+        assert_eq!(
+            parse(&bytes).map(|contents| contents.entries),
+            Some(file.entries)
+        );
     }
 
     #[test]
@@ -936,6 +1012,7 @@ mod tests {
             version: FORMAT_VERSION + 1,
             installation: "abc".to_owned(),
             entries: vec![entry("a", 12.5, 100)],
+            registers: Registers::new(),
         };
         assert_eq!(parse(&serde_json::to_vec(&file).unwrap()), None);
         assert_eq!(parse(b"not json"), None);

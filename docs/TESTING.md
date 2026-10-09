@@ -255,10 +255,9 @@ three dispositions, and the third is the one to read:
 | `pending` | specified but not implemented. Never passes, and the summary reports the matrix as incomplete until it is gone |
 | `skip` | needs a share that was not configured |
 
-Today `process-recreation` is `xfail` against B35, and `picture-in-picture` is
-`pending` against B40 — asserting today's behaviour would encode the bug rather
-than catch it. **The matrix is not complete, and the runner says so on every
-run.**
+Today `process-recreation` is `xfail` against B35 — asserting today's behaviour
+would encode the bug rather than catch it. The `picture-in-picture` case went
+with Picture-in-Picture itself, so nothing is `pending`.
 
 The five live cases need a share, given as environment variables that reach the
 device as instrumentation arguments and are written nowhere:

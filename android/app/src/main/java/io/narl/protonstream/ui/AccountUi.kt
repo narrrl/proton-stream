@@ -143,8 +143,9 @@ internal fun AccountCard(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Proton account", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Optional. Signed in, watch history is kept in your own Drive so every device " +
-                        "resumes where another left off, and folders of your Drive can join the library.",
+                    "Optional. Signed in, your shares, settings and watch history are kept in your own " +
+                        "Drive, so every device shows the same library and resumes where another left off, " +
+                        "and folders of your Drive can join the library.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -156,8 +157,8 @@ internal fun AccountCard(
 
 /** "Synced 3 min ago · 2 from other devices", or why it did not. */
 internal fun syncLine(account: AccountUiState, now: Long): String {
-    account.syncError?.let { return "Watch history did not sync: $it" }
-    val at = account.syncedAt ?: return "Watch history syncs with your Drive"
+    account.syncError?.let { return "Did not sync: $it" }
+    val at = account.syncedAt ?: return "Library, settings and watch history sync through your Drive"
     val minutes = ((now - at).coerceAtLeast(0) / 60_000).toInt()
     val ago = when {
         minutes < 1 -> "just now"

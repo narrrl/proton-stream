@@ -109,6 +109,9 @@ final class MpvPlayer {
     private init() {
         layer.framebufferOnly = true
         layer.backgroundColor = UIColor.black.cgColor
+        // For the frames between a resize and mpv's next one: a drawable of
+        // the old shape is letterboxed rather than stretched.
+        layer.contentsGravity = .resizeAspect
         guard let mpv = mpv_create() else { return }
         // mpv takes the layer's address as an int64, not a Swift reference.
         var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(layer).toOpaque()))

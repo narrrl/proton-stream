@@ -793,6 +793,10 @@ impl App {
                     self.view.stale = true;
                 }
                 Event::EpisodeMetadata(episodes) => self.episodes = episodes,
+                Event::Appearance(appearance) => {
+                    theme::apply(ctx, appearance);
+                    self.view.stale = true;
+                }
                 Event::MetadataConfig(config) => {
                     self.settings = config;
                     self.posters.clear();

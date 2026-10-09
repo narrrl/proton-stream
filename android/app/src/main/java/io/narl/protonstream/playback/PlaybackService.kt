@@ -35,7 +35,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Owns libmpv so audio survives Activity recreation, rotation and PiP. */
+/** Owns libmpv so audio survives Activity recreation and rotation. */
 class PlaybackService : Service() {
     inner class PlaybackBinder : Binder() {
         val host: NativeMpvHost? get() = this@PlaybackService.host

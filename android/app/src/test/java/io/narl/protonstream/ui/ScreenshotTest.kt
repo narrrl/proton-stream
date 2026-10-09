@@ -137,22 +137,22 @@ class ScreenshotTest {
 
     @Test
     fun `the shares page`() = capture("shares-phone") {
-        SharesScreen(LIBRARY.shares, { _, _, _ -> }, { _, _, _ -> }, {}, {}, null, {}, PaddingValues())
+        SharesScreen(LIBRARY.shares, { _, _, _ -> null }, { _, _, _ -> }, {}, {}, null, {}, PaddingValues())
     }
 
     @Test
     fun `the settings page`() = capture("settings-phone") {
-        SettingsScreen(LIBRARY, { _, _, _, _ -> }, {}, {}, {}, PaddingValues(), version = "1.0.0")
+        SettingsScreen(LIBRARY, { _, _, _, _ -> null }, {}, {}, {}, PaddingValues(), version = "1.0.0")
     }
 
     @Test
     fun `the playback settings`() = capture("settings-playback") {
-        SettingsScreen(LIBRARY, { _, _, _, _ -> }, {}, {}, {}, PaddingValues(), SettingsPage.Playback)
+        SettingsScreen(LIBRARY, { _, _, _, _ -> null }, {}, {}, {}, PaddingValues(), SettingsPage.Playback)
     }
 
     @Test
     fun `the storage settings`() = capture("settings-storage") {
-        SettingsScreen(LIBRARY, { _, _, _, _ -> }, {}, {}, {}, PaddingValues(), SettingsPage.Storage)
+        SettingsScreen(LIBRARY, { _, _, _, _ -> null }, {}, {}, {}, PaddingValues(), SettingsPage.Storage)
     }
 
     @Test

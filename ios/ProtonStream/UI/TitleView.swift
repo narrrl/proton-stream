@@ -465,6 +465,9 @@ struct ChangeMatchSheet: View {
     // Choosing fetches the entry's episodes too, which is a few requests.
     @State private var choosing = false
     @State private var options: [MatchRecord] = []
+    /// Said here rather than in the snackbar, which this sheet covers.
+    @State private var failure: String?
+    @State private var searched = false
 
     init(title: TitleRecord, onDone: @escaping () -> Void) {
         self.title = title
@@ -481,7 +484,17 @@ struct ChangeMatchSheet: View {
                 .buttonStyle(.accent)
                 .disabled(term.trimmingCharacters(in: .whitespaces).isEmpty || searching)
             if choosing {
-                Text("Fetching its episodes…").textStyle(.bodySmall).padding(.top, 8)
+                HStack(spacing: 12) {
+                    ProgressView().controlSize(.small).tint(scheme.primary)
+                    Text("Fetching its episodes…").textStyle(.bodySmall)
+                }
+                .padding(.top, 8)
+            }
+            if let failure {
+                Text(failure).foregroundStyle(scheme.error)
+            }
+            if !searching, options.isEmpty, searched {
+                Text("Nothing found. Try the title's original or English name.").textStyle(.bodySmall)
             }
             ForEach(options, id: \.remoteId) { option in
                 Button { choose(option) } label: {
@@ -503,7 +516,7 @@ struct ChangeMatchSheet: View {
                         try await model.run { try $0.forgetMatch(titleKey: title.key) }
                         changed()
                     } catch {
-                        model.reportError(error)
+                        failure = errorMessage(error)
                     }
                 }
             }
@@ -516,24 +529,27 @@ struct ChangeMatchSheet: View {
         let term = term
         guard !term.trimmingCharacters(in: .whitespaces).isEmpty, !searching else { return }
         searching = true
+        failure = nil
         Task {
             do {
                 options = try await NativeRuntime.engine().searchMatches(titleKey: title.key, term: term)
             } catch {
-                model.reportError(error)
+                failure = errorMessage(error)
             }
             searching = false
+            searched = true
         }
     }
 
     private func choose(_ option: MatchRecord) {
         choosing = true
+        failure = nil
         Task {
             do {
                 try await NativeRuntime.engine().chooseMatch(titleKey: title.key, found: option)
                 changed()
             } catch {
-                model.reportError(error)
+                failure = errorMessage(error)
             }
             choosing = false
         }

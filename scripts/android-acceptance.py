@@ -604,23 +604,6 @@ for _name, _what, _method in (
 ):
     REGISTRY.append(Case(name=_name, what=_what, run=_live(_method), needs_share=True))
 
-# Still unimplemented, and the only case left that is. No longer blocked on the
-# app: B40 landed, so there is correct behaviour to assert. What is missing is a
-# driver — every live case here reads the engine and libmpv directly, and this
-# one needs the activity with the player composed on screen before PiP means
-# anything.
-REGISTRY.append(
-    Case(
-        name="picture-in-picture",
-        what="entering PiP keeps playing and shows only video",
-        run=_pending(
-            "needs an activity-level driver: the live suite exercises the engine "
-            "and libmpv, not the composition, and PiP is a property of the window"
-        ),
-        needs_share=True,
-    )
-)
-
 
 # --------------------------------------------------------------------------
 # runner

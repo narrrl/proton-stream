@@ -256,8 +256,9 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
             } else {
                 None
             };
-            let share = store
-                .add(&name, &url, password.as_deref())
+            let (share, _) = store
+                .add_verified(&name, &url, password.as_deref())
+                .await
                 .context("add share")?;
             println!("added {} ({})", share.name, share.id);
         }
@@ -323,11 +324,29 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
             let sync = WatchSync::open(&dirs).context("open sync state")?;
             let catalog =
                 parking_lot::Mutex::new(Catalog::open(&dirs.catalog_db()).context("open catalog")?);
-            let report = sync.sync(&account, &catalog).await.context("sync")?;
+            let report = sync
+                .sync(&account, &catalog, &store)
+                .await
+                .context("sync")?;
+            let profile = &report.profile;
+            for id in &profile.shares_removed {
+                catalog
+                    .lock()
+                    .remove_share(id)
+                    .context("drop a removed share")?;
+            }
             println!(
-                "read {} other device(s), took {} newer position(s), {}",
+                "read {} other device(s), took {} newer position(s), \
+                 {} share(s) added, {} removed, settings {}, {}",
                 report.devices,
                 report.applied,
+                profile.shares_added.len() + profile.shares_changed.len(),
+                profile.shares_removed.len(),
+                if profile.settings {
+                    "updated"
+                } else {
+                    "unchanged"
+                },
                 if report.uploaded {
                     "uploaded this device's history"
                 } else {

@@ -35,7 +35,6 @@
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|uiMode|density|fontScale|locale|layoutDirection|keyboardHidden"
             android:exported="true"
             android:launchMode="singleTask"
-            android:supportsPictureInPicture="true"
             android:resizeableActivity="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

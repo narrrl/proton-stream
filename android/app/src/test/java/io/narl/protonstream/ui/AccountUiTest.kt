@@ -9,7 +9,7 @@ class AccountUiTest {
     @Test
     fun `the sync line says how long ago and what came in`() {
         val minute = 60_000L
-        assertEquals("Watch history syncs with your Drive", syncLine(AccountUiState(), 0))
+        assertEquals("Library, settings and watch history sync through your Drive", syncLine(AccountUiState(), 0))
         assertEquals("Synced just now", syncLine(AccountUiState(syncedAt = 0), 30_000))
         assertEquals("Synced 5 min ago", syncLine(AccountUiState(syncedAt = 0), 5 * minute))
         assertEquals(
@@ -21,7 +21,7 @@ class AccountUiTest {
     @Test
     fun `a failed sync is said in place of when it last worked`() {
         assertEquals(
-            "Watch history did not sync: offline",
+            "Did not sync: offline",
             syncLine(AccountUiState(syncedAt = 0, syncError = "offline"), 0),
         )
     }

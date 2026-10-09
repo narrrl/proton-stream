@@ -118,6 +118,18 @@ an edge case.
   including trashing the file of an installation quiet for 90 days once its
   history is merged into this one's. Folders of the account added as shares
   are only ever read.
+- The same file carries the rest of what makes every device look alike
+  (`pstr-core::profile`): the shares, with each link and custom password so
+  another device can open them; the playback, appearance and metadata settings
+  except volume and mute; the TMDB key; hand-picked matches; per-show track
+  choices. Each is a register merged per key, newer wins, a removed share being
+  a register with no value. `sync-state.json` holds the registers as last
+  synced, and a sync stamps whatever differs from it, so nothing that writes a
+  setting has to know about sync. A first sync stamps what it finds at zero, so
+  a fresh install's defaults never outrank the library everyone else agreed on.
+  Automatic matches are not synced: every device with enrichment on finds them
+  again. The front end crawls what arrived (`uncrawled_shares` covers a sync
+  that ran in the background) and drops what was removed with its files.
 - A CAPTCHA in front of a sign-in is shown in a webview, because the page
   reports success by posting a message to its host. On the desktop that is a
   child process of the app (`pstr-app::verify`, wry): WebKitGTK on Linux,
@@ -139,7 +151,8 @@ an edge case.
 | Watch state | same DB, own table | **No** — deliberately survives a recrawl and removing the share; with an account, mirrored to its Drive |
 | Proton session | OS credential store, `proton-account` | No — sign in again |
 | Sync identity | config dir, `sync.json` | A new id if missing — the old history file is still read |
-| Watch history in Drive | device `proton-stream`, `watch-history/<id>.json` | One file per installation; merged per episode, newer wins. A file unwritten for 90 days is retired by the next installation to sync, after merging it; a live installation whose file was retired writes it again |
+| Sync state | config dir, `sync-state.json` | Yes — a missing one is a first sync, which takes everything other devices have |
+| Watch history and profile in Drive | device `proton-stream`, `watch-history/<id>.json` | One file per installation; merged per episode and per register, newer wins. Holds share links and passwords, end-to-end encrypted by Drive. A file unwritten for 90 days is retired by the next installation to sync, after merging it; a live installation whose file was retired writes it again |
 | Block cache | cache dir, `blocks/` | Yes — must work correctly after deletion |
 | Poster thumbnails | cache dir, `thumbs/` | Yes — refetched per file, one small decrypt each; stored scaled to 640 px |
 | Provider artwork | cache dir, `posters/` | Yes — refetched by URL; stored scaled to 640 px |

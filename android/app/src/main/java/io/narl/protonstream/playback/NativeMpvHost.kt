@@ -85,9 +85,9 @@ data class MpvPlaybackState(
 /**
  * What is on screen, for the surfaces that are not the player.
  *
- * The media session, its notification and Picture-in-Picture all have to name
- * the episode, and none of them can reach the composition that knows it. The
- * player publishes this once per episode and they read it.
+ * The media session and its notification have to name the episode, and
+ * neither can reach the composition that knows it. The player publishes this
+ * once per episode and they read it.
  */
 data class NowPlaying(
     val media: String,
@@ -134,8 +134,8 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
     /**
      * Where a transport outside the player sends previous/next.
      *
-     * The player owns which episode is open, so the notification, the lock
-     * screen and Picture-in-Picture cannot walk the playlist themselves. Both
+     * The player owns which episode is open, so the notification and the lock
+     * screen cannot walk the playlist themselves. Both
      * run on the main thread, which is where the player's state lives.
      */
     var onSkipPrevious: (() -> Unit)? = null

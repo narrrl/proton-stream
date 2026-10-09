@@ -55,15 +55,15 @@ installs the signed minified APK and runs instrumentation against it, which is
 the only path that exercises R8 — the step that has broken this app five distinct
 ways that a debug build cannot reproduce. Without the `ANDROID_RELEASE_*`
 variables below, drop `--release` and the debug APK is used instead. The matrix — phone and tablet layouts, rotation,
-process recreation, playback and background controls, Picture-in-Picture,
+process recreation, playback and background controls,
 download cancellation/resume, and an offline launch with networking disabled —
 is `scripts/android-acceptance.sh`; `--list` prints every case and what it
 needs, and `PSTR_ACCEPTANCE_ONLY=name` runs one. Five cases need a real share,
 given as `PSTR_ACCEPTANCE_SHARE_URL` and `PSTR_ACCEPTANCE_SHARE_PASSWORD`; they
 reach the device as instrumentation arguments and are stored nowhere. Without
-them those cases report `skip`. `picture-in-picture` is still `pending`, so the
-run tells you the matrix is incomplete — but no longer because of B40, which is
-fixed; the case now just needs writing. `docs/TESTING.md` has the layer-by-layer
+them those cases report `skip`. There is no Picture-in-Picture: it was removed
+after a PiP window that never sized its video right proved less use than
+background audio and the lock-screen transport. `docs/TESTING.md` has the layer-by-layer
 detail, including why lint runs against a baseline.
 
 Requires JDK 17. `build-android.sh` locates it, because a newer JVM does not
@@ -110,6 +110,6 @@ ABIs, plus a source archive and revision record, under
 packages the staged libraries, and compiles `pstr_mpv`, the JNI/EGL adapter. It
 feeds libmpv through the Rust stream C ABI; decrypted bytes remain in native
 memory. `PlaybackService` owns the mpv core for background audio and media
-controls, while the activity supplies the current `Surface` and enters PiP.
+controls, while the activity supplies the current `Surface`.
 Do not publish an Android binary until this exact pipeline is verified on real
 arm64 hardware and an x86_64 emulator.

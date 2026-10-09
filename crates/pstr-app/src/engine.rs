@@ -34,6 +34,7 @@ use pstr_core::config::AppDirs;
 use pstr_core::library::{Library, Title, TitleKind};
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId};
 use pstr_core::prefs::PlaybackPrefs;
+use pstr_core::profile::ProfileChanges;
 use pstr_core::proton_drive_rs::ThumbnailType;
 use pstr_core::proton_sdk::api::HumanVerificationCredential;
 use pstr_core::proton_sdk::ids::{LinkId, NodeUid, VolumeId};
@@ -215,6 +216,8 @@ pub enum Event {
     EpisodeMetadata(HashMap<String, EpisodeGuide>),
     /// The enrichment settings changed, on disk.
     MetadataConfig(MetadataConfig),
+    /// Another device's appearance arrived through sync.
+    Appearance(Appearance),
     /// A matching run finished, with how it went.
     Matched {
         matched: usize,
@@ -279,7 +282,7 @@ pub enum Event {
     SignInFailed(String),
     /// Watch history synced with the account's Drive.
     Synced(SyncReport),
-    /// Watch history did not sync, with why. Not a toast: it is retried on a
+    /// Sync did not run, with why. Not a toast: it is retried on a
     /// timer, and an offline evening would be a stack of them.
     SyncFailed(String),
     /// The account's top-level places, for the Drive browser.
@@ -640,12 +643,17 @@ impl Engine {
     }
 
     /// Add a share, then open and crawl it — which is what "add" means to
-    /// someone who just pasted a link.
+    /// someone who just pasted a link. A link that will not open is refused
+    /// before anything is stored, so trying again is not "already configured".
     pub fn add_share(&self, name: String, url: String, password: Option<String>) {
         let engine = self.clone();
         self.runtime.spawn(async move {
-            let share = match engine.store.add(&name, &url, password.as_deref()) {
-                Ok(share) => share,
+            let share = match engine
+                .store
+                .add_verified(&name, &url, password.as_deref())
+                .await
+            {
+                Ok((share, _)) => share,
                 Err(error) => return engine.emit(Event::ShareRejected(error.to_string())),
             };
             engine.emit(Event::ShareAdded(share.name.clone()));
@@ -836,9 +844,10 @@ impl Engine {
         };
         let engine = self.clone();
         self.runtime.spawn(async move {
-            match sync.sync(&account, &engine.catalog).await {
+            match sync.sync(&account, &engine.catalog, &engine.store).await {
                 Ok(report) => {
-                    if report.applied > 0 {
+                    engine.take_synced_profile(&report.profile).await;
+                    if report.applied > 0 || report.profile.titles > 0 {
                         engine.load_library();
                     }
                     engine.emit(Event::Synced(report));
@@ -875,13 +884,66 @@ impl Engine {
             return;
         };
         let catalog = Arc::clone(&self.catalog);
+        let store = Arc::clone(&self.store);
         self.runtime.block_on(async move {
-            match tokio::time::timeout(timeout, sync.sync(&account, &catalog)).await {
+            match tokio::time::timeout(timeout, sync.sync(&account, &catalog, &store)).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => tracing::warn!("sync watch history on exit: {error}"),
                 Err(_) => tracing::warn!("sync watch history on exit: timed out"),
             }
         });
+    }
+
+    /// Act on what sync brought from other devices: reread the settings it
+    /// rewrote, crawl the shares it added, drop the ones it removed.
+    async fn take_synced_profile(&self, profile: &ProfileChanges) {
+        if profile.settings {
+            match pstr_core::prefs::load(&self.dirs) {
+                // The volume is this device's and was not synced; the file
+                // still holds it.
+                Ok(prefs) => *self.prefs.lock() = prefs,
+                Err(error) => tracing::warn!("reread the playback preferences: {error}"),
+            }
+            match pstr_core::appearance::load(&self.dirs) {
+                Ok(appearance) => {
+                    *self.appearance.lock() = appearance;
+                    self.emit(Event::Appearance(appearance));
+                }
+                Err(error) => tracing::warn!("reread the appearance: {error}"),
+            }
+            match pstr_meta::settings::load(&self.dirs) {
+                Ok(config) => {
+                    let engine = self.clone();
+                    let _ = self
+                        .runtime
+                        .spawn_blocking(move || {
+                            engine.install_enrichment(Enrichment::build(config.clone()), false);
+                            engine.emit(Event::MetadataConfig(config));
+                        })
+                        .await;
+                }
+                Err(error) => tracing::warn!("reread the metadata settings: {error}"),
+            }
+        }
+        if profile.titles > 0 {
+            match self.catalog.lock().all_title_track_prefs() {
+                Ok(prefs) => *self.track_prefs.lock() = prefs,
+                Err(error) => tracing::warn!("reread show track preferences: {error}"),
+            }
+            self.load_metadata();
+        }
+        for id in &profile.shares_removed {
+            self.forget_share(id.clone(), false).await;
+        }
+        if !profile.shares() {
+            return;
+        }
+        self.connection.lock().take();
+        self.load_shares();
+        self.load_library();
+        for id in profile.shares_added.iter().chain(&profile.shares_changed) {
+            self.connect_and_crawl(Some(id.clone())).await;
+        }
     }
 
     fn sync_periodically(&self) {
@@ -929,6 +991,19 @@ impl Engine {
     pub fn remove_share(&self, id: String) {
         let engine = self.clone();
         self.runtime.spawn(async move {
+            engine.forget_share(id, true).await;
+            engine.connection.lock().take();
+            engine.load_library();
+            engine.emit(Event::Status("removed".into()));
+        });
+    }
+
+    /// Stop a share's downloads and delete its files and catalog rows, and,
+    /// when it is still `configured` — not already removed by sync — its
+    /// entry and secrets.
+    async fn forget_share(&self, id: String, configured: bool) {
+        let engine = self;
+        {
             let keys: Vec<_> = engine
                 .downloads
                 .lock()
@@ -971,7 +1046,7 @@ impl Engine {
             if let Err(error) = engine.catalog.lock().remove_share(&id) {
                 return engine.fail("drop that share's catalog rows", error);
             }
-            if let Err(error) = engine.store.remove(&id) {
+            if configured && let Err(error) = engine.store.remove(&id) {
                 return engine.fail("remove that share", error);
             }
             {
@@ -983,9 +1058,7 @@ impl Engine {
             engine.load_shares();
             // Its clients are stale now; the next action reopens what is left.
             engine.connection.lock().take();
-            engine.load_library();
-            engine.emit(Event::Status("removed".into()));
-        });
+        }
     }
 
     // ------------------------------------------------------------ connection

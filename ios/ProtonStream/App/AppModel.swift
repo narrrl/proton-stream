@@ -52,12 +52,18 @@ final class AppModel {
     var storage = StorageUsageRecord(offlineBytes: 0, offlineCount: 0, partialBytes: 0, cacheBytes: 0)
     /// What the snackbar says.
     var message: String?
+    /// What is running in the background right now, said in a banner for as
+    /// long as it runs: an add, a crawl, a match, a sync. Without it a
+    /// minute-long crawl looked like a tap that did nothing.
+    private(set) var activity: String?
     /// What Undo on `message` puts back, when the message offers one.
     var undo: [WatchSnapshot]?
     var account = AccountUiState()
 
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var started = false
+    /// Launch and the first `.active` both ask; one crawl answers.
+    @ObservationIgnored private var catchingUp = false
 
     /// Five minutes, as on Android: cheap when nothing changed — one folder
     /// listing, and no upload.
@@ -67,6 +73,7 @@ final class AppModel {
         if started { return }
         started = true
         reload()
+        enteredForeground()
         DownloadCoordinator.shared.onFinished = { [weak self] in self?.reload() }
         DownloadCoordinator.shared.resumeQueued()
         Task {
@@ -126,46 +133,95 @@ final class AppModel {
     /// The crawl itself, for pull to refresh, which holds its spinner until
     /// this returns.
     func crawlNow(_ shareId: String?) async {
-        refreshing = true
-        message = nil
-        do {
-            try await NativeRuntime.engine().crawl(shareId: shareId)
-        } catch {
-            message = errorMessage(error)
+        let name = shareId.flatMap { id in shares.first { $0.id == id }?.name }
+        await busy(name.map { "Reading \($0)…" } ?? "Refreshing the library…") {
+            message = nil
+            do {
+                try await NativeRuntime.engine().crawl(shareId: shareId)
+            } catch {
+                message = errorMessage(error)
+            }
         }
-        refreshing = false
         reload()
     }
 
     /// Run enrichment again. With `force` every title is looked up afresh,
     /// including ones that already matched.
     func matchTitles(force: Bool) {
-        Task {
-            refreshing = true
-            message = nil
+        Task { await match(force: force) }
+    }
+
+    private func match(force: Bool) async {
+        await busy("Looking up titles…") {
             do {
                 let summary = try await NativeRuntime.engine().matchTitles(force: force)
                 message = Self.describe(summary)
             } catch {
                 message = errorMessage(error)
             }
-            refreshing = false
-            reload()
         }
+        reload()
+    }
+
+    /// Say `what` in the activity banner while `work` runs. Nested work keeps
+    /// the outer line once the inner one is done.
+    private func busy(_ what: String, _ work: () async -> Void) async {
+        let outer = activity
+        activity = what
+        refreshing = true
+        await work()
+        activity = outer
+        refreshing = outer != nil
     }
 
     // MARK: - Shares
 
-    func addShare(name: String, url: String, password: String?) {
-        Task {
-            do {
-                let password = password.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
-                _ = try await run { try $0.addShare(name: name, url: url, customPassword: password) }
-                try await NativeRuntime.engine().crawl(shareId: nil)
-            } catch {
-                message = errorMessage(error)
+    /// Add a link, and return why it was refused, if it was.
+    ///
+    /// The link is opened before anything is stored, so the form can stay up
+    /// with the reason under it and a retry is a retry — not "already in the
+    /// library" for a share that never opened. Only the new share is crawled:
+    /// another share that fails to open must not make this one look broken.
+    func addShare(name: String, url: String, password: String?) async -> String? {
+        let password = password.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+        let share: ShareRecord
+        do {
+            share = try await NativeRuntime.engine().addShare(name: name, url: url, customPassword: password)
+        } catch {
+            return errorMessage(error)
+        }
+        reload()
+        Task { await crawlAdded([share.id], announce: true) }
+        return nil
+    }
+
+    /// Crawl shares that are new here — added on this device or by sync —
+    /// then match them when enrichment is on.
+    private func crawlAdded(_ ids: [String], announce: Bool) async {
+        guard !ids.isEmpty else { return }
+        let before = Set(titles.map(\.key))
+        var failed: [String] = []
+        for id in ids {
+            let name = shares.first { $0.id == id }?.name ?? "the new share"
+            await busy("Reading \(name)…") {
+                do {
+                    try await NativeRuntime.engine().crawl(shareId: id)
+                } catch {
+                    failed.append("\(name): \(errorMessage(error))")
+                }
             }
-            reload()
+        }
+        await reloadNow()
+        if !failed.isEmpty {
+            message = failed.joined(separator: "\n")
+            return
+        }
+        if metadataSettings.enabled {
+            await match(force: false)
+        }
+        if announce {
+            let added = Set(titles.map(\.key)).subtracting(before).count
+            message = added == 1 ? "1 title added" : "\(added) titles added"
         }
     }
 
@@ -283,16 +339,18 @@ final class AppModel {
     /// Sync now, from a tap: says so when it is done.
     func syncNow() {
         Task {
-            guard await syncWatchHistory() else { return }
+            var synced = false
+            await busy("Syncing with your other devices…") { synced = await syncWatchHistory() }
+            guard synced else { return }
             let applied = account.applied
-            message = applied > 0 ? "Watch history synced, \(applied) from other devices" : "Watch history is up to date"
+            message = applied > 0 ? "Synced, \(applied) positions from other devices" : "Everything is up to date"
         }
     }
 
-    /// Pull other devices' positions in and push this one's out. Quiet: it runs
-    /// on a timer, and a failure is shown on the account card rather than as a
-    /// snackbar every five minutes of an offline evening. Returns whether it
-    /// synced.
+    /// Pull other devices' positions, shares and settings in and push this
+    /// one's out. Quiet: it runs on a timer, and a failure is shown on the
+    /// account card rather than as a snackbar every five minutes of an offline
+    /// evening. Returns whether it synced.
     @discardableResult
     func syncWatchHistory() async -> Bool {
         guard case .signedIn = account.state else { return false }
@@ -301,7 +359,7 @@ final class AppModel {
             account.syncedAt = Date()
             account.applied = Int(report.applied)
             account.syncError = nil
-            if report.applied > 0 { reload() }
+            await takeSynced(report)
             return true
         } catch {
             let state = try? await run { $0.accountState() }
@@ -311,6 +369,40 @@ final class AppModel {
             // interrupting for, unlike a dropped connection.
             if state == .signedOut { reportError(error) }
             return false
+        }
+    }
+
+    /// What another device changed: its shares crawled or dropped here, its
+    /// settings repainted.
+    private func takeSynced(_ report: SyncRecord) async {
+        for id in report.sharesRemoved {
+            await DownloadCoordinator.shared.cancelShare(id)
+            DownloadStateStore.shared.removeShare(id)
+        }
+        if report.settingsChanged {
+            await AppearanceState.shared.reload()
+        }
+        if report.applied > 0 || report.titles > 0 || report.settingsChanged || !report.sharesRemoved.isEmpty {
+            await reloadNow()
+        }
+        // A crawl takes longer than the grace iOS gives a backgrounded app.
+        // What is left uncrawled is picked up on the way back.
+        if !report.sharesAdded.isEmpty, UIApplication.shared.applicationState != .background {
+            await crawlAdded(report.sharesAdded, announce: false)
+            message = report.sharesAdded.count == 1 ? "A share arrived from another device" : "\(report.sharesAdded.count) shares arrived from other devices"
+        }
+    }
+
+    /// On launch and back on screen: crawl shares the catalog has nothing of —
+    /// brought by a sync that ran in the background, or an add whose crawl
+    /// never finished.
+    func enteredForeground() {
+        guard !catchingUp else { return }
+        catchingUp = true
+        Task {
+            defer { catchingUp = false }
+            guard let ids = try? await run({ try $0.uncrawledShares() }), !ids.isEmpty else { return }
+            await crawlAdded(ids, announce: false)
         }
     }
 
@@ -333,15 +425,13 @@ final class AppModel {
 
     func addAccountFolder(name: String, volumeId: String, linkId: String) {
         Task {
-            refreshing = true
             do {
                 let share = try await run { try $0.addAccountFolder(name: name, volumeId: volumeId, linkId: linkId) }
-                try await NativeRuntime.engine().crawl(shareId: share.id)
+                reload()
+                await crawlAdded([share.id], announce: true)
             } catch {
                 reportError(error)
             }
-            refreshing = false
-            reload()
         }
     }
 
@@ -437,24 +527,29 @@ final class AppModel {
 
     // MARK: - Metadata
 
-    func saveMetadataSettings(enabled: Bool, provider: MetadataProvider, language: String, apiKey: String) {
-        Task {
-            do {
-                let engine = try await NativeRuntime.engine()
-                try await run { engine in
-                    if provider == .tmdb, !apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
-                        try engine.setMetadataApiKey(provider: provider, key: apiKey)
-                    }
-                    try engine.setMetadataSettings(settings: MetadataSettingsRecord(enabled: enabled, provider: provider, language: language, ready: true))
+    /// Store the enrichment settings, and return why not, if they were not.
+    ///
+    /// The page shows the new settings as soon as they are stored; the match
+    /// run that follows can take minutes and says so in the activity banner.
+    /// Before, the page only changed once that run had finished, so a save
+    /// looked like it had done nothing.
+    func saveMetadataSettings(enabled: Bool, provider: MetadataProvider, language: String, apiKey: String) async -> String? {
+        do {
+            metadataSettings = try await run { engine in
+                if provider == .tmdb, !apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+                    try engine.setMetadataApiKey(provider: provider, key: apiKey)
                 }
-                if enabled {
-                    message = Self.describe(try await engine.matchTitles(force: false))
-                }
-            } catch {
-                reportError(error)
+                try engine.setMetadataSettings(settings: MetadataSettingsRecord(enabled: enabled, provider: provider, language: language, ready: true))
+                return try engine.metadataSettings()
             }
-            reload()
+        } catch {
+            return errorMessage(error)
         }
+        await reloadNow()
+        if enabled {
+            Task { await match(force: false) }
+        }
+        return nil
     }
 
     func reloadAfterMetadataChange() { reload() }
@@ -578,36 +673,39 @@ final class AppModel {
     // MARK: - Reload
 
     func reload() {
+        Task { await reloadNow() }
+    }
+
+    /// `reload`, for a caller that goes on to read what it loaded.
+    func reloadNow() async {
         let query = query.trimmingCharacters(in: .whitespaces).isEmpty ? nil : self.query
         let sort = sort
         let grouped = grouped
-        Task {
-            do {
-                let result = try await run { engine in
-                    // Here rather than inside `library()`, which is read-only
-                    // and cached: a full reload is the one place that has
-                    // already paid for a walk of the offline files.
-                    _ = try engine.pruneOfflineFiles()
-                    return Reloaded(
-                        shares: try engine.shares(),
-                        titles: try engine.library(search: query),
-                        arrangement: try engine.arrangement(search: query, sort: sort, grouped: grouped),
-                        offline: try engine.offlineFiles(),
-                        metadataSettings: try engine.metadataSettings(),
-                        storage: try engine.storageUsage()
-                    )
-                }
-                loading = false
-                shares = result.shares
-                titles = result.titles
-                arrangement = result.arrangement
-                offline = result.offline
-                metadataSettings = result.metadataSettings
-                storage = result.storage
-            } catch {
-                loading = false
-                message = errorMessage(error)
+        do {
+            let result = try await run { engine in
+                // Here rather than inside `library()`, which is read-only
+                // and cached: a full reload is the one place that has
+                // already paid for a walk of the offline files.
+                _ = try engine.pruneOfflineFiles()
+                return Reloaded(
+                    shares: try engine.shares(),
+                    titles: try engine.library(search: query),
+                    arrangement: try engine.arrangement(search: query, sort: sort, grouped: grouped),
+                    offline: try engine.offlineFiles(),
+                    metadataSettings: try engine.metadataSettings(),
+                    storage: try engine.storageUsage()
+                )
             }
+            loading = false
+            shares = result.shares
+            titles = result.titles
+            arrangement = result.arrangement
+            offline = result.offline
+            metadataSettings = result.metadataSettings
+            storage = result.storage
+        } catch {
+            loading = false
+            message = errorMessage(error)
         }
     }
 

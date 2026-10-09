@@ -1,5 +1,10 @@
 package io.narl.protonstream.ui
 
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -50,7 +55,8 @@ import androidx.compose.ui.graphics.Color
 @Composable
 internal fun SharesScreen(
     shares: List<ShareRecord>,
-    onAdd: (String, String, String?) -> Unit,
+    /** Resolves to why the link was refused, or null once it is added. */
+    onAdd: suspend (String, String, String?) -> String?,
     onRepair: (String, String, String?) -> Unit,
     onRefresh: (String) -> Unit,
     onRemove: (String) -> Unit,
@@ -277,17 +283,25 @@ private fun RepairShareDialog(
     )
 }
 
+/**
+ * Add a link. The form stays up while the link is opened, and with the reason
+ * under it when the link is refused, so fixing a typo is a retry rather than
+ * starting over.
+ */
 @Composable
 private fun AddShareDialog(
     initialUrl: String,
     onDismiss: () -> Unit,
-    onAdd: (String, String, String?) -> Unit,
+    onAdd: suspend (String, String, String?) -> String?,
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember(initialUrl) { mutableStateOf(initialUrl) }
     var password by remember { mutableStateOf("") }
+    var adding by remember { mutableStateOf(false) }
+    var refusal by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!adding) onDismiss() },
         properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("Add Proton Drive share") },
         text = {
@@ -312,14 +326,30 @@ private fun AddShareDialog(
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
+                if (adding) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Text("Opening the link…")
+                    }
+                } else {
+                    refusal?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
             }
         },
         confirmButton = {
             AccentButton(
-                onClick = { onAdd(name.trim(), url.trim(), password); onDismiss() },
-                enabled = name.isNotBlank() && url.isNotBlank(),
-            ) { Text("Add") }
+                onClick = {
+                    adding = true
+                    refusal = null
+                    scope.launch {
+                        refusal = onAdd(name.trim(), url.trim(), password)
+                        adding = false
+                        if (refusal == null) onDismiss()
+                    }
+                },
+                enabled = name.isNotBlank() && url.isNotBlank() && !adding,
+            ) { Text(if (adding) "Adding…" else "Add") }
         },
-        dismissButton = { TonalButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TonalButton(onClick = onDismiss, enabled = !adding) { Text("Cancel") } },
     )
 }

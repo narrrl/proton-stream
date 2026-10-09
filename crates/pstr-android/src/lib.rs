@@ -187,6 +187,16 @@ pub struct SyncRecord {
     pub uploaded: bool,
     /// Other installations whose history was read.
     pub devices: u32,
+    /// Shares another device added or changed, configured here and not yet
+    /// crawled. Crawl each.
+    pub shares_added: Vec<String>,
+    /// Shares another device removed, gone here with their offline files.
+    /// Drop any download state kept for them.
+    pub shares_removed: Vec<String>,
+    /// Whether settings changed: repaint, and re-read the metadata settings.
+    pub settings_changed: bool,
+    /// Hand-picked matches and per-show track choices taken.
+    pub titles: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -704,6 +714,22 @@ impl<T> Drop for AbortOnDrop<T> {
     }
 }
 
+/// Why a link could not be added, in words a viewer can act on.
+///
+/// A link that is already in the library and one that is not a link at all
+/// say so themselves; anything else failed at the handshake, where a wrong
+/// custom password and an expired link look the same from here.
+fn add_share_failure(error: &pstr_core::Error) -> String {
+    match error {
+        pstr_core::Error::Config(reason) => reason.clone(),
+        pstr_core::Error::Drive(_) => format!(
+            "Could not open that link: {error}. Check that it is complete, \
+             still shared, and that the password is right."
+        ),
+        other => other.to_string(),
+    }
+}
+
 /// `runtime.spawn(task)`, with the handle wrapped so the task is aborted if the
 /// caller stops waiting. Awaits to exactly what `JoinHandle` does.
 fn spawned<T: Send + 'static>(
@@ -1143,12 +1169,31 @@ impl AndroidEngine {
             else {
                 return Ok(None);
             };
-            match sync.sync(&account, &self.catalog).await {
-                Ok(report) => Ok(Some(SyncRecord {
-                    applied: u32::try_from(report.applied).unwrap_or(u32::MAX),
-                    uploaded: report.uploaded,
-                    devices: u32::try_from(report.devices).unwrap_or(u32::MAX),
-                })),
+            match sync.sync(&account, &self.catalog, &self.store).await {
+                Ok(report) => {
+                    let profile = report.profile;
+                    for id in profile.shares_added.iter().chain(&profile.shares_changed) {
+                        self.invalidate_connection(id);
+                    }
+                    for id in &profile.shares_removed {
+                        if let Err(error) = self.forget_synced_share(id) {
+                            log::warn!("files of {id}, a share removed elsewhere: {error}");
+                        }
+                    }
+                    Ok(Some(SyncRecord {
+                        applied: u32::try_from(report.applied).unwrap_or(u32::MAX),
+                        uploaded: report.uploaded,
+                        devices: u32::try_from(report.devices).unwrap_or(u32::MAX),
+                        shares_added: profile
+                            .shares_added
+                            .into_iter()
+                            .chain(profile.shares_changed)
+                            .collect(),
+                        shares_removed: profile.shares_removed,
+                        settings_changed: profile.settings,
+                        titles: u32::try_from(profile.titles).unwrap_or(u32::MAX),
+                    }))
+                }
                 Err(error) if error.is_signed_out() => {
                     let _ = self.accounts.sign_out(None).await;
                     self.signed_out();
@@ -1223,6 +1268,26 @@ impl AndroidEngine {
         Ok(share_record(share))
     }
 
+    /// Configured shares with nothing in the catalog: brought in by sync,
+    /// possibly while the app was in the background, or added here and never
+    /// crawled to the end. Crawl each. An empty share is crawled every time,
+    /// which costs one listing.
+    pub fn uncrawled_shares(&self) -> Result<Vec<String>, BridgeError> {
+        let shares = self.store.list().map_err(BridgeError::from_display)?;
+        let catalog = self.catalog.lock();
+        let mut uncrawled = Vec::new();
+        for share in shares {
+            if catalog
+                .files(&share.id)
+                .map_err(BridgeError::from_display)?
+                .is_empty()
+            {
+                uncrawled.push(share.id);
+            }
+        }
+        Ok(uncrawled)
+    }
+
     pub fn shares(&self) -> Result<Vec<ShareRecord>, BridgeError> {
         self.store
             .list()
@@ -1230,18 +1295,34 @@ impl AndroidEngine {
             .map(|shares| shares.into_iter().map(share_record).collect())
     }
 
-    pub fn add_share(
-        &self,
+    /// Add a public link, once it has opened with the password given. A link
+    /// that will not open is refused and leaves nothing behind. Crawl the
+    /// returned share next.
+    pub async fn add_share(
+        self: Arc<Self>,
         name: String,
         url: String,
         custom_password: Option<String>,
     ) -> Result<ShareRecord, BridgeError> {
-        let share = self
-            .store
-            .add(&name, &url, custom_password.as_deref())
-            .map_err(BridgeError::from_display)?;
-        self.invalidate_connection(&share.id);
-        Ok(share_record(share))
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let (share, client) = self
+                .store
+                .add_verified(&name, &url, custom_password.as_deref())
+                .await
+                .map_err(|error| BridgeError::Failure {
+                    reason: add_share_failure(&error),
+                })?;
+            self.invalidate_connection(&share.id);
+            // The handshake that proved the link is the one the crawl uses.
+            self.reusable_clients
+                .lock()
+                .get_or_insert_with(Default::default)
+                .insert(share.id.clone(), client);
+            Ok(share_record(share))
+        })
+        .await
+        .map_err(BridgeError::from_display)?
     }
 
     /// Re-supply the link behind a share whose stored secret is unreadable.
@@ -1291,28 +1372,7 @@ impl AndroidEngine {
         // when secret cleanup fails, old authenticated clients and catalog
         // rows must not remain usable.
         self.invalidate_connection(&share_id);
-
-        for ((stored_share_id, link_id), file) in offline {
-            if stored_share_id == share_id {
-                let path = self
-                    .dirs
-                    .offline_file(&share_id, &link_id, &file.revision_id);
-                match std::fs::remove_file(&path) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(BridgeError::from_display(error)),
-                }
-            }
-        }
-        for link_id in links {
-            let (partial, marker) = self.partial_paths(&share_id, &link_id);
-            let _ = std::fs::remove_file(partial);
-            let _ = std::fs::remove_file(marker);
-        }
-        self.catalog
-            .lock()
-            .remove_share(&share_id)
-            .map_err(BridgeError::from_display)?;
+        self.forget_share_files(&share_id, offline, links)?;
         store_result.map_err(BridgeError::from_display)
     }
 
@@ -1901,6 +1961,56 @@ impl AndroidEngine {
 }
 
 impl AndroidEngine {
+    /// Delete a removed share's offline and partial files, then its catalog
+    /// rows. Watch state stays; see `Catalog::remove_share`.
+    fn forget_share_files(
+        &self,
+        share_id: &str,
+        offline: HashMap<(String, String), OfflineFile>,
+        links: Vec<String>,
+    ) -> Result<(), BridgeError> {
+        for ((stored_share_id, link_id), file) in offline {
+            if stored_share_id == share_id {
+                let path = self
+                    .dirs
+                    .offline_file(share_id, &link_id, &file.revision_id);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(BridgeError::from_display(error)),
+                }
+            }
+        }
+        for link_id in links {
+            let (partial, marker) = self.partial_paths(share_id, &link_id);
+            let _ = std::fs::remove_file(partial);
+            let _ = std::fs::remove_file(marker);
+        }
+        self.catalog
+            .lock()
+            .remove_share(share_id)
+            .map_err(BridgeError::from_display)
+    }
+
+    /// [`Self::forget_share_files`] for a share another device removed, which
+    /// sync has already taken out of the configuration.
+    fn forget_synced_share(&self, share_id: &str) -> Result<(), BridgeError> {
+        let _publication = self.share_publication.lock();
+        let catalog = self.catalog.lock();
+        let offline = catalog
+            .all_offline_files()
+            .map_err(BridgeError::from_display)?;
+        let links: Vec<String> = catalog
+            .files(share_id)
+            .map_err(BridgeError::from_display)?
+            .into_iter()
+            .map(|node| node.link_id)
+            .collect();
+        drop(catalog);
+        self.invalidate_connection(share_id);
+        self.forget_share_files(share_id, offline, links)
+    }
+
     /// One enrichment pass over the whole library.
     ///
     /// What to do per title is decided by `pstr_meta::service::plan`, the same
@@ -3765,13 +3875,13 @@ mod tests {
         )
         .expect("engine");
 
+        // Stored directly: `add_share` opens the link first, and a test has
+        // no network to open it over.
         let share = engine
-            .add_share(
-                "test".to_owned(),
-                "https://drive.proton.me/urls/ABC123#s3cr3t".to_owned(),
-                None,
-            )
+            .store
+            .add("test", "https://drive.proton.me/urls/ABC123#s3cr3t", None)
             .expect("add share");
+        engine.invalidate_connection(&share.id);
         assert_eq!(engine.share_generation.load(Ordering::Acquire), 1);
         assert!(
             engine

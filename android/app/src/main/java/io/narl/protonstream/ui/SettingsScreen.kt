@@ -86,7 +86,8 @@ import io.narl.protonstream.ui.theme.AccentProgress
 @Composable
 internal fun SettingsScreen(
     state: AppUiState,
-    onSaveMetadata: (Boolean, MetadataProvider, String, String) -> Unit,
+    /** Resolves to why the settings were not stored, or null once they are. */
+    onSaveMetadata: suspend (Boolean, MetadataProvider, String, String) -> String?,
     onMatchAgain: () -> Unit,
     onClearCache: () -> Unit,
     onRemoveAllOffline: () -> Unit,
@@ -327,10 +328,7 @@ internal fun SettingsScreen(
         MetadataSettingsDialog(
             current = state.metadataSettings,
             onDismiss = { showMetadata = false },
-            onSave = { enabled, provider, language, key ->
-                onSaveMetadata(enabled, provider, language, key)
-                showMetadata = false
-            },
+            onSave = onSaveMetadata,
         )
     }
 }
@@ -411,14 +409,18 @@ private fun SettingAction(
 private fun MetadataSettingsDialog(
     current: uniffi.pstr_android.MetadataSettingsRecord,
     onDismiss: () -> Unit,
-    onSave: (Boolean, MetadataProvider, String, String) -> Unit,
+    onSave: suspend (Boolean, MetadataProvider, String, String) -> String?,
 ) {
     var enabled by remember { mutableStateOf(current.enabled) }
     var provider by remember { mutableStateOf(current.provider) }
     var language by remember { mutableStateOf(current.language) }
     var apiKey by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var refusal by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val needsKey = enabled && provider == MetadataProvider.TMDB && !current.ready && apiKey.isBlank()
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("Metadata enrichment") },
         text = {
@@ -447,15 +449,25 @@ private fun MetadataSettingsDialog(
                         singleLine = true,
                     )
                 }
+                if (needsKey) Text("Enter a TMDB API key to save.", color = MaterialTheme.colorScheme.error)
+                refusal?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             AccentButton(
-                enabled = !enabled || provider != MetadataProvider.TMDB || current.ready || apiKey.isNotBlank(),
-                onClick = { onSave(enabled, provider, language.ifBlank { "en" }, apiKey) },
-            ) { Text("Save") }
+                enabled = !needsKey && !saving,
+                onClick = {
+                    saving = true
+                    refusal = null
+                    scope.launch {
+                        refusal = onSave(enabled, provider, language.ifBlank { "en" }, apiKey)
+                        saving = false
+                        if (refusal == null) onDismiss()
+                    }
+                },
+            ) { Text(if (saving) "Saving…" else "Save") }
         },
-        dismissButton = { TonalButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TonalButton(onClick = onDismiss, enabled = !saving) { Text("Cancel") } },
     )
 }
 

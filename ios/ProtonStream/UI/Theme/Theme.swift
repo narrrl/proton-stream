@@ -33,6 +33,13 @@ final class AppearanceState {
         }
     }
 
+    /// Read the stored choice again, after sync rewrote it.
+    func reload() async {
+        if let read = try? await Task.detached(operation: { try NativeRuntime.blockingEngine().palette() }).value {
+            palette = read
+        }
+    }
+
     /// Repaint immediately, before the write that stores the choice lands.
     func apply(_ palette: PaletteRecord) {
         self.palette = palette

@@ -355,19 +355,19 @@ impl AccountFolder {
 }
 
 /// The secrets for one share, as held in the credential store.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ShareSecrets {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ShareSecrets {
     /// The full share URL, fragment included.
-    url: String,
+    pub(crate) url: String,
     /// The custom password, when the link has one.
     #[serde(default)]
-    custom_password: Option<String>,
+    pub(crate) custom_password: Option<String>,
 }
 
 /// The configured shares, and their secrets.
 pub struct ShareStore {
-    dirs: AppDirs,
-    secrets: Arc<dyn SecretStore>,
+    pub(crate) dirs: AppDirs,
+    pub(crate) secrets: Arc<dyn SecretStore>,
 }
 
 impl ShareStore {
@@ -396,9 +396,9 @@ impl ShareStore {
 
         let mut shares = self.list()?;
         if shares.iter().any(|share| share.id == id) {
-            return Err(Error::Config(format!(
-                "a share for token {token} is already configured"
-            )));
+            return Err(Error::Config(
+                "that link is already in the library".to_owned(),
+            ));
         }
 
         let secrets = ShareSecrets {
@@ -419,6 +419,53 @@ impl ShareStore {
         shares.push(share.clone());
         write_json(&self.dirs.shares_file(), &shares)?;
         Ok(share)
+    }
+
+    /// [`Self::add`], but only once the link has been opened with the
+    /// password given.
+    ///
+    /// A link that is mistyped, expired or behind the wrong password used to
+    /// be stored anyway, so the first try failed on the crawl and every retry
+    /// failed on "already configured" — the only way out was to remove a share
+    /// that had never worked. Opening first means a refused link leaves
+    /// nothing behind, and the client it opened is handed back for the crawl.
+    pub async fn add_verified(
+        &self,
+        name: &str,
+        url: &str,
+        custom_password: Option<&str>,
+    ) -> Result<(Share, ShareClient)> {
+        let token = token_from_url(url)?;
+        let id = format!("share-{token}");
+        if self.list()?.iter().any(|share| share.id == id) {
+            return Err(Error::Config(
+                "that link is already in the library".to_owned(),
+            ));
+        }
+        let custom_password = custom_password.filter(|password| !password.is_empty());
+        let client = open_link(url, custom_password).await?;
+        let share = self.add(name, url, custom_password)?;
+        Ok((share, client))
+    }
+
+    /// Record a share another installation has, with the secrets it opens
+    /// with, replacing what this one holds under the same id. See
+    /// [`crate::profile`].
+    pub(crate) fn put_synced(&self, share: Share, secrets: Option<&ShareSecrets>) -> Result<()> {
+        if let Some(secrets) = secrets {
+            self.store_secrets(&share.id, secrets)?;
+        }
+        let mut shares = self.list()?;
+        match shares.iter_mut().find(|existing| existing.id == share.id) {
+            Some(existing) => *existing = share,
+            None => shares.push(share),
+        }
+        write_json(&self.dirs.shares_file(), &shares)
+    }
+
+    /// A share's secrets, for syncing them to another installation.
+    pub(crate) fn secrets_of(&self, id: &str) -> Result<ShareSecrets> {
+        self.load_secrets(id)
     }
 
     /// Record a folder of the signed-in account as a share.
@@ -526,17 +573,7 @@ impl ShareStore {
             });
         }
         let secrets = self.load_secrets(&share.id)?;
-        let client = ProtonDrivePublicLinkClient::open(
-            client_configuration(),
-            &secrets.url,
-            secrets.custom_password.as_deref(),
-        )
-        .await?
-        // The SDK default is sized for a background sync daemon. A player that
-        // seeks wants more blocks in flight; at 4 MiB each this is a 192 MiB
-        // ceiling, which is unremarkable for a desktop app.
-        .with_max_inflight_blocks(48);
-        Ok(ShareClient::PublicLink(Box::new(client)))
+        open_link(&secrets.url, secrets.custom_password.as_deref()).await
     }
 
     fn store_secrets(&self, id: &str, secrets: &ShareSecrets) -> Result<()> {
@@ -554,6 +591,17 @@ impl ShareStore {
         serde_json::from_str(&encoded)
             .map_err(|e| Error::Config(format!("stored share secrets are unreadable: {e}")))
     }
+}
+
+/// Open a public link as a visitor.
+async fn open_link(url: &str, custom_password: Option<&str>) -> Result<ShareClient> {
+    let client = ProtonDrivePublicLinkClient::open(client_configuration(), url, custom_password)
+        .await?
+        // The SDK default is sized for a background sync daemon. A player that
+        // seeks wants more blocks in flight; at 4 MiB each this is a 192 MiB
+        // ceiling, which is unremarkable for a desktop app.
+        .with_max_inflight_blocks(48);
+    Ok(ShareClient::PublicLink(Box::new(client)))
 }
 
 /// Several opened shares, presented as one library.

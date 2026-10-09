@@ -131,18 +131,14 @@ private val VOLUME_SLIDER_MIN_WIDTH = 600.dp
 /**
  * The player, as its own screen on the activity's own window.
  *
- * Not a dialog: a dialog window has its own insets, cannot be told to draw into
- * the display cutout, and hands Picture-in-Picture the wrong window. Owning the
- * activity window is what makes "fullscreen" mean the whole panel, notch
- * included.
+ * Not a dialog: a dialog window has its own insets and cannot be told to draw
+ * into the display cutout. Owning the activity window is what makes
+ * "fullscreen" mean the whole panel, notch included.
  *
  * [episodes] is the title's episodes in display order and [index] the one that is
  * open, which is what previous/next and autoplay walk. The index is hoisted so
  * that it survives process recreation with the rest of the navigation state —
  * this screen is destroyed and rebuilt by a dark-mode toggle like any other.
- *
- * In [inPictureInPicture] the window is a thumbnail with the system's own
- * controls over it, so this screen draws the picture and nothing else.
  */
 @Composable
 fun PlayerScreen(
@@ -150,7 +146,6 @@ fun PlayerScreen(
     episodes: List<EpisodeRecord>,
     index: Int,
     host: LibmpvHost?,
-    inPictureInPicture: Boolean,
     minimized: Boolean,
     onIndexChange: (Int) -> Unit,
     onSaveProgress: (EpisodeRecord, Double, Double, Boolean) -> Unit,
@@ -294,9 +289,8 @@ fun PlayerScreen(
         onIndexChange(target)
     }
 
-    // What the media notification, the lock screen and Picture-in-Picture show.
-    // None of them can reach this composition, and all three have to name the
-    // episode rather than the app.
+    // What the media notification and the lock screen show. Neither can reach
+    // this composition, and both have to name the episode rather than the app.
     LaunchedEffect(key, index, episodes.size, title.key) {
         nativeHost.publish(
             NowPlaying(
@@ -359,12 +353,6 @@ fun PlayerScreen(
             showControls = false
         }
     }
-    // Everything this screen draws over the picture is sized for a phone panel
-    // and unreadable in a thumbnail, and Android supplies its own transport
-    // there. Leaving PiP must find the controls up rather than mid-timeout.
-    val overlays = !inPictureInPicture
-    LaunchedEffect(inPictureInPicture) { if (!inPictureInPicture) showControls = true }
-
     if (minimized) return
 
     Box(
@@ -374,7 +362,6 @@ fun PlayerScreen(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                enabled = overlays,
                 onClick = { showControls = !showControls },
             ),
     ) {
@@ -393,7 +380,7 @@ fun PlayerScreen(
         )
 
         AnimatedVisibility(
-            visible = overlays && showControls,
+            visible = showControls,
             modifier = Modifier.align(Alignment.TopStart),
             enter = fadeIn(),
             exit = fadeOut(),
@@ -450,7 +437,7 @@ fun PlayerScreen(
         }
 
         AnimatedVisibility(
-            visible = overlays && showControls,
+            visible = showControls,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = fadeIn(),
             exit = fadeOut(),
@@ -476,7 +463,7 @@ fun PlayerScreen(
         // Drawn whether or not the rest of the controls are up: an opening lasts
         // ninety seconds, and a button you have to wake with a tap is one nobody
         // reaches in time.
-        offer?.takeIf { overlays && !autoSkip }?.let { skip ->
+        offer?.takeIf { !autoSkip }?.let { skip ->
             TonalButton(
                 onClick = { nativeHost.seek(skip.target) },
                 modifier = Modifier
@@ -488,7 +475,7 @@ fun PlayerScreen(
 
         UpNextCard(
             next = next,
-            visible = overlays && autoplay && !state.paused &&
+            visible = autoplay && !state.paused &&
                 chapters.creditsStart?.let { state.position >= it } == true,
             onPlayNow = { advance() },
             modifier = Modifier

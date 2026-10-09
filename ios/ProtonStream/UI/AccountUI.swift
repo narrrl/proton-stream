@@ -44,7 +44,7 @@ struct AccountCard: View {
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Proton account").textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
-                        Text("Optional. Signed in, watch history is kept in your own Drive so every device resumes where another left off, and folders of your Drive can join the library.")
+                        Text("Optional. Signed in, your shares, settings and watch history are kept in your own Drive, so every device shows the same library and resumes where another left off, and folders of your Drive can join the library.")
                             .textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
                         Button("Sign in", action: onSignIn).buttonStyle(.tonal)
                     }
@@ -61,8 +61,8 @@ struct AccountCard: View {
 
 /// "Synced 3 min ago · 2 from other devices", or why it did not.
 func syncLine(_ account: AccountUiState, now: Date) -> String {
-    if let error = account.syncError { return "Watch history did not sync: \(error)" }
-    guard let at = account.syncedAt else { return "Watch history syncs with your Drive" }
+    if let error = account.syncError { return "Did not sync: \(error)" }
+    guard let at = account.syncedAt else { return "Library, settings and watch history sync through your Drive" }
     let minutes = Int(max(now.timeIntervalSince(at), 0) / 60)
     let ago = minutes < 1 ? "just now" : minutes < 60 ? "\(minutes) min ago" : "\(minutes / 60) h ago"
     let applied = account.applied > 0 ? " · \(account.applied) from other devices" : ""

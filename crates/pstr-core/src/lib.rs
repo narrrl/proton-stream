@@ -17,6 +17,7 @@ pub mod library;
 pub mod metadata;
 pub mod naming;
 pub mod prefs;
+pub mod profile;
 pub mod shares;
 pub mod shelves;
 pub mod sync;

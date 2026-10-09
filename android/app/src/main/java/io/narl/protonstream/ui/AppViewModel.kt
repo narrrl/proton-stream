@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.withContext
 import io.narl.protonstream.native.NativeRuntime
+import io.narl.protonstream.ui.theme.AppearanceState
 import uniffi.pstr_android.ArrangementRecord
 import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.ShareRecord
@@ -38,6 +39,7 @@ import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.WatchStateRecord
 import uniffi.pstr_android.AccountState
 import uniffi.pstr_android.SignInOutcome
+import uniffi.pstr_android.SyncRecord
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -64,6 +66,12 @@ data class AppUiState(
     ),
     val storage: StorageUsageRecord = StorageUsageRecord(0uL, 0uL, 0uL, 0uL),
     val message: String? = null,
+    /**
+     * What is running in the background right now, said in a banner for as
+     * long as it runs: an add, a crawl, a match, a sync. Without it a
+     * minute-long crawl looked like a tap that did nothing.
+     */
+    val activity: String? = null,
     /** What Undo on [message] puts back, when the message offers one. */
     val undo: List<WatchSnapshot>? = null,
     val account: AccountUiState = AccountUiState(),
@@ -99,6 +107,8 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     private val mutableState = MutableStateFlow(AppUiState())
     private val searchQuery = MutableStateFlow("")
     val state: StateFlow<AppUiState> = mutableState.asStateFlow()
+    /** Launch and coming back both ask; one crawl answers. */
+    private var catchingUp = false
 
     init {
         if (!NativeRuntime.tlsReady) {
@@ -107,6 +117,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             }
         }
         reload()
+        catchUp()
         viewModelScope.launch {
             val account = runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().accountState() } }
                 .getOrDefault(AccountState.SignedOut)
@@ -116,6 +127,9 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             // and no upload.
             while (isActive) {
                 syncWatchHistory()
+                // A sync WatchSyncWorker ran while the app was away may have
+                // brought shares this one has not crawled.
+                catchUp()
                 delay(SYNC_INTERVAL_MS)
             }
         }
@@ -144,11 +158,26 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
 
     fun refresh() {
         viewModelScope.launch {
-            mutableState.update { it.copy(refreshing = true, message = null) }
-            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(null) } }
-                .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
-            mutableState.update { it.copy(refreshing = false) }
+            busy("Refreshing the library…") {
+                mutableState.update { it.copy(message = null) }
+                runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(null) } }
+                    .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+            }
             reload()
+        }
+    }
+
+    /**
+     * Say [what] in the activity banner while [work] runs. Nested work keeps
+     * the outer line once the inner one is done.
+     */
+    private suspend fun busy(what: String, work: suspend () -> Unit) {
+        val outer = mutableState.value.activity
+        mutableState.update { it.copy(activity = what, refreshing = true) }
+        try {
+            work()
+        } finally {
+            mutableState.update { it.copy(activity = outer, refreshing = outer != null) }
         }
     }
 
@@ -162,10 +191,12 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
      */
     fun refreshShare(id: String) {
         viewModelScope.launch {
-            mutableState.update { it.copy(refreshing = true, message = null) }
-            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) } }
-                .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
-            mutableState.update { it.copy(refreshing = false) }
+            val name = mutableState.value.shares.firstOrNull { it.id == id }?.name ?: "the share"
+            busy("Reading $name…") {
+                mutableState.update { it.copy(message = null) }
+                runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) } }
+                    .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+            }
             reload()
         }
     }
@@ -179,26 +210,80 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
      * changed.
      */
     fun matchTitles(force: Boolean) {
-        viewModelScope.launch {
-            mutableState.update { it.copy(refreshing = true, message = null) }
+        viewModelScope.launch { match(force) }
+    }
+
+    private suspend fun match(force: Boolean) {
+        busy("Looking up titles…") {
             runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().matchTitles(force) } }
                 .onSuccess { summary -> mutableState.update { it.copy(message = describe(summary)) } }
                 .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
-            mutableState.update { it.copy(refreshing = false) }
-            reload()
+        }
+        reloadNow()
+    }
+
+    /**
+     * Add a link, and return why it was refused, if it was.
+     *
+     * The link is opened before anything is stored, so the form can stay up
+     * with the reason under it and a retry is a retry — not "already in the
+     * library" for a share that never opened. Only the new share is crawled:
+     * another share that fails to open must not make this one look broken.
+     */
+    suspend fun addShare(name: String, url: String, password: String?): String? {
+        val share = runCatching {
+            withContext(Dispatchers.IO) {
+                NativeRuntime.engine().addShare(name, url, password?.takeIf(String::isNotBlank))
+            }
+        }.getOrElse { return it.message ?: "That link could not be added" }
+        reload()
+        viewModelScope.launch { crawlAdded(listOf(share.id), announce = true) }
+        return null
+    }
+
+    /**
+     * Crawl shares that are new here — added on this device or by sync — then
+     * match them when enrichment is on.
+     */
+    private suspend fun crawlAdded(ids: List<String>, announce: Boolean) {
+        if (ids.isEmpty()) return
+        val before = mutableState.value.titles.map { it.key }.toSet()
+        val failed = mutableListOf<String>()
+        for (id in ids) {
+            val name = mutableState.value.shares.firstOrNull { it.id == id }?.name ?: "the new share"
+            busy("Reading $name…") {
+                runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) } }
+                    .onFailure { failed += "$name: ${it.message}" }
+            }
+        }
+        reloadNow()
+        if (failed.isNotEmpty()) {
+            mutableState.update { it.copy(message = failed.joinToString("\n")) }
+            return
+        }
+        if (mutableState.value.metadataSettings.enabled) match(force = false)
+        if (announce) {
+            val added = (mutableState.value.titles.map { it.key }.toSet() - before).size
+            mutableState.update { it.copy(message = if (added == 1) "1 title added" else "$added titles added") }
         }
     }
 
-    fun addShare(name: String, url: String, password: String?) {
+    /**
+     * Crawl shares the catalog has nothing of: brought by a sync that ran in
+     * [io.narl.protonstream.sync.WatchSyncWorker], or an add whose crawl never
+     * finished.
+     */
+    fun catchUp() {
+        if (catchingUp) return
+        catchingUp = true
         viewModelScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val engine = NativeRuntime.engine()
-                    engine.addShare(name, url, password?.takeIf(String::isNotBlank))
-                    engine.crawl(null)
-                }
-            }.onFailure { error -> mutableState.update { it.copy(message = error.message) } }
-            reload()
+            try {
+                val ids = runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().uncrawledShares() } }
+                    .getOrDefault(emptyList())
+                crawlAdded(ids, announce = false)
+            } finally {
+                catchingUp = false
+            }
         }
     }
 
@@ -354,7 +439,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                             syncError = null,
                         )
                     }
-                    if (report.applied > 0u) reload()
+                    takeSynced(report)
                     true
                 },
                 onFailure = { error ->
@@ -368,6 +453,33 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             )
     }
 
+    /**
+     * What another device changed: its shares crawled or dropped here, its
+     * settings repainted.
+     */
+    private suspend fun takeSynced(report: SyncRecord) {
+        if (report.sharesRemoved.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                val downloads = DownloadStateStore(appContext)
+                report.sharesRemoved.forEach { id ->
+                    workManager.cancelAllWorkByTag(DownloadCoordinator.shareTag(id)).result.get()
+                    downloads.removeShare(id)
+                }
+            }
+        }
+        if (report.settingsChanged) AppearanceState.reload()
+        if (report.applied > 0u || report.titles > 0u || report.settingsChanged || report.sharesRemoved.isNotEmpty()) {
+            reloadNow()
+        }
+        if (report.sharesAdded.isNotEmpty()) {
+            crawlAdded(report.sharesAdded, announce = false)
+            val count = report.sharesAdded.size
+            mutableState.update {
+                it.copy(message = if (count == 1) "A share arrived from another device" else "$count shares arrived from other devices")
+            }
+        }
+    }
+
     /** After the player closes: where it stopped is what another device wants next. */
     fun playerClosed() {
         reload()
@@ -376,16 +488,12 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
 
     fun addAccountFolder(name: String, volumeId: String, linkId: String) {
         viewModelScope.launch {
-            mutableState.update { it.copy(refreshing = true) }
             runCatching {
-                withContext(Dispatchers.IO) {
-                    val engine = NativeRuntime.engine()
-                    val share = engine.addAccountFolder(name, volumeId, linkId)
-                    engine.crawl(share.id)
-                }
+                withContext(Dispatchers.IO) { NativeRuntime.engine().addAccountFolder(name, volumeId, linkId) }
+            }.onSuccess { share ->
+                reload()
+                crawlAdded(listOf(share.id), announce = true)
             }.onFailure(::reportError)
-            mutableState.update { it.copy(refreshing = false) }
-            reload()
         }
     }
 
@@ -487,22 +595,27 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         mutableState.update { it.copy(message = error.message ?: "Unexpected error") }
     }
 
-    fun saveMetadataSettings(enabled: Boolean, provider: MetadataProvider, language: String, apiKey: String) {
-        viewModelScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val engine = NativeRuntime.engine()
-                    if (provider == MetadataProvider.TMDB && apiKey.isNotBlank()) {
-                        engine.setMetadataApiKey(provider, apiKey)
-                    }
-                    engine.setMetadataSettings(MetadataSettingsRecord(enabled, provider, language, true))
-                    if (enabled) engine.matchTitles(false) else null
+    /**
+     * Store the enrichment settings, and return why not, if they were not.
+     *
+     * The page shows the new settings as soon as they are stored; the match
+     * run that follows can take minutes and says so in the activity banner.
+     */
+    suspend fun saveMetadataSettings(enabled: Boolean, provider: MetadataProvider, language: String, apiKey: String): String? {
+        val stored = runCatching {
+            withContext(Dispatchers.IO) {
+                val engine = NativeRuntime.engine()
+                if (provider == MetadataProvider.TMDB && apiKey.isNotBlank()) {
+                    engine.setMetadataApiKey(provider, apiKey)
                 }
-            }.onSuccess { summary ->
-                summary?.let { mutableState.update { state -> state.copy(message = describe(it)) } }
-            }.onFailure(::reportError)
-            reload()
-        }
+                engine.setMetadataSettings(MetadataSettingsRecord(enabled, provider, language, true))
+                engine.metadataSettings()
+            }
+        }.getOrElse { return it.message ?: "The settings could not be saved" }
+        mutableState.update { it.copy(metadataSettings = stored) }
+        reloadNow()
+        if (enabled) viewModelScope.launch { match(force = false) }
+        return null
     }
 
     fun reloadAfterMetadataChange() = reload()
@@ -629,40 +742,43 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     }
 
     private fun reload() {
-        viewModelScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val engine = NativeRuntime.engine()
-                    // Here rather than inside `library()`, which is read-only
-                    // and cached: a full reload is the one place that has
-                    // already paid for a walk of the offline files.
-                    engine.pruneOfflineFiles()
-                    val current = mutableState.value
-                    val query = current.query.takeIf(String::isNotBlank)
-                    Reloaded(
-                        engine.shares(),
-                        engine.library(query),
-                        engine.arrangement(query, current.sort, current.grouped),
-                        engine.offlineFiles(),
-                        engine.metadataSettings(),
-                        engine.storageUsage(),
-                    )
-                }
-            }.onSuccess { result ->
-                    mutableState.update { it.copy(
-                        loading = false,
-                        shares = result.shares,
-                        titles = result.titles,
-                        arrangement = result.arrangement,
-                        offline = result.offline,
-                        metadataSettings = result.metadataSettings,
-                        storage = result.storage,
-                    ) }
-                }
-                .onFailure { error ->
-                    mutableState.update { it.copy(loading = false, message = error.message) }
-                }
-        }
+        viewModelScope.launch { reloadNow() }
+    }
+
+    /** [reload], for a caller that goes on to read what it loaded. */
+    private suspend fun reloadNow() {
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val engine = NativeRuntime.engine()
+                // Here rather than inside `library()`, which is read-only
+                // and cached: a full reload is the one place that has
+                // already paid for a walk of the offline files.
+                engine.pruneOfflineFiles()
+                val current = mutableState.value
+                val query = current.query.takeIf(String::isNotBlank)
+                Reloaded(
+                    engine.shares(),
+                    engine.library(query),
+                    engine.arrangement(query, current.sort, current.grouped),
+                    engine.offlineFiles(),
+                    engine.metadataSettings(),
+                    engine.storageUsage(),
+                )
+            }
+        }.onSuccess { result ->
+                mutableState.update { it.copy(
+                    loading = false,
+                    shares = result.shares,
+                    titles = result.titles,
+                    arrangement = result.arrangement,
+                    offline = result.offline,
+                    metadataSettings = result.metadataSettings,
+                    storage = result.storage,
+                ) }
+            }
+            .onFailure { error ->
+                mutableState.update { it.copy(loading = false, message = error.message) }
+            }
     }
 
     private suspend fun reloadLibrary(query: String) {

@@ -57,7 +57,7 @@ struct SharesView: View {
         }
         .sheet(isPresented: Binding(get: { showAdd || incomingLink != nil }, set: { if !$0 { showAdd = false; incomingLink = nil } })) {
             AddShareSheet(initialUrl: incomingLink ?? "") { name, url, password in
-                model.addShare(name: name, url: url, password: password)
+                await model.addShare(name: name, url: url, password: password)
             }
         }
         .sheet(isPresented: Binding(
@@ -166,16 +166,27 @@ private struct RepairShareSheet: View {
     }
 }
 
+/// Add a link. The form stays up while the link is opened, and with the
+/// reason under it when the link is refused, so fixing a typo is a retry
+/// rather than starting over.
 private struct AddShareSheet: View {
-    let onAdd: (String, String, String?) -> Void
+    /// Resolves to why the link was refused, or nil once it is added.
+    let onAdd: (String, String, String?) async -> String?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scheme) private var scheme
     @State private var name = ""
     @State private var url: String
     @State private var password = ""
+    @State private var adding = false
+    @State private var refusal: String?
 
-    init(initialUrl: String, onAdd: @escaping (String, String, String?) -> Void) {
+    init(initialUrl: String, onAdd: @escaping (String, String, String?) async -> String?) {
         self.onAdd = onAdd
         _url = State(initialValue: initialUrl)
+    }
+
+    private var ready: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && !url.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     var body: some View {
@@ -195,15 +206,29 @@ private struct AddShareSheet: View {
                 .buttonStyle(.quiet)
             }
             Field(label: "Custom password (optional)", text: $password, secret: true)
+            if adding {
+                HStack(spacing: 12) {
+                    ProgressView().controlSize(.small).tint(scheme.primary)
+                    Text("Opening the link…")
+                }
+            } else if let refusal {
+                Text(refusal).foregroundStyle(scheme.error)
+            }
         } buttons: {
             Button("Cancel") { dismiss() }.buttonStyle(.tonal)
-            Button("Add") {
-                onAdd(name.trimmingCharacters(in: .whitespaces), url.trimmingCharacters(in: .whitespaces), password)
-                dismiss()
+            Button(adding ? "Adding…" : "Add") {
+                adding = true
+                refusal = nil
+                Task {
+                    refusal = await onAdd(name.trimmingCharacters(in: .whitespaces), url.trimmingCharacters(in: .whitespaces), password)
+                    adding = false
+                    if refusal == nil { dismiss() }
+                }
             }
             .buttonStyle(.accent)
-            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || url.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(!ready || adding)
         }
+        .interactiveDismissDisabled(adding)
         .secureContent()
     }
 }

@@ -56,6 +56,12 @@ object AppearanceState {
             .onSuccess { current.value = it }
     }
 
+    /** Read the stored choice again, after sync rewrote it. */
+    suspend fun reload() {
+        runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().palette() } }
+            .onSuccess { current.value = it }
+    }
+
     /** Repaint immediately, before the write that stores the choice lands. */
     fun apply(palette: PaletteRecord) {
         current.value = palette

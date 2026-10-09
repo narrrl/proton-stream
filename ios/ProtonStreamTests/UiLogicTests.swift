@@ -51,7 +51,7 @@ final class IncomingShareLinkTests: XCTestCase {
 final class AccountUiTests: XCTestCase {
     func testTheSyncLineSaysHowLongAgoAndWhatCameIn() {
         let zero = Date(timeIntervalSince1970: 0)
-        XCTAssertEqual(syncLine(AccountUiState(), now: zero), "Watch history syncs with your Drive")
+        XCTAssertEqual(syncLine(AccountUiState(), now: zero), "Library, settings and watch history sync through your Drive")
         XCTAssertEqual(syncLine(AccountUiState(syncedAt: zero), now: zero.addingTimeInterval(30)), "Synced just now")
         XCTAssertEqual(syncLine(AccountUiState(syncedAt: zero), now: zero.addingTimeInterval(300)), "Synced 5 min ago")
         XCTAssertEqual(
@@ -64,7 +64,7 @@ final class AccountUiTests: XCTestCase {
         let zero = Date(timeIntervalSince1970: 0)
         XCTAssertEqual(
             syncLine(AccountUiState(syncedAt: zero, syncError: "offline"), now: zero),
-            "Watch history did not sync: offline"
+            "Did not sync: offline"
         )
     }
 

@@ -63,8 +63,15 @@ struct SettingsView: View {
                 }
             }
         }
-        .task {
-            prefs = try? await model.run { try $0.playbackPrefs() }
+        // Read again whenever the list is shown, not once: sync can rewrite
+        // them while the page is open, and a page holding the old copy would
+        // write it back over the new one on the next switch.
+        .task(id: page) {
+            do {
+                prefs = try await model.run { try $0.playbackPrefs() }
+            } catch {
+                model.reportError(error)
+            }
         }
         .alert("Delete all offline episodes?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive, action: model.removeAllOffline)
@@ -75,8 +82,7 @@ struct SettingsView: View {
         .sheet(item: $legalDocument) { LegalDocumentSheet(document: $0) }
         .sheet(isPresented: $showMetadata) {
             MetadataSettingsSheet(current: model.metadataSettings) { enabled, provider, language, key in
-                model.saveMetadataSettings(enabled: enabled, provider: provider, language: language, apiKey: key)
-                showMetadata = false
+                await model.saveMetadataSettings(enabled: enabled, provider: provider, language: language, apiKey: key)
             }
         }
     }
@@ -216,12 +222,23 @@ struct SettingsView: View {
         Binding(get: { value }, set: { on in update { change(&$0, on) } })
     }
 
+    /// Change a preference on screen at once, and store it. A store that
+    /// fails says so and puts the switch back, rather than leaving one that
+    /// looks saved and is not.
     private func update(_ change: (inout PlaybackPrefsRecord) -> Void) {
         guard var next = prefs else { return }
+        let before = next
         change(&next)
         prefs = next
         let stored = next
-        Task.detached { try? NativeRuntime.blockingEngine().setPlaybackPrefs(prefs: stored) }
+        Task {
+            do {
+                try await model.run { try $0.setPlaybackPrefs(prefs: stored) }
+            } catch {
+                if prefs == stored { prefs = before }
+                model.reportError(error)
+            }
+        }
     }
 }
 
@@ -258,15 +275,18 @@ private struct SettingAction: View {
 
 private struct MetadataSettingsSheet: View {
     let current: MetadataSettingsRecord
-    let onSave: (Bool, MetadataProvider, String, String) -> Void
+    /// Resolves to why the settings were not stored, or nil once they are.
+    let onSave: (Bool, MetadataProvider, String, String) async -> String?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scheme) private var scheme
     @State private var enabled: Bool
     @State private var provider: MetadataProvider
     @State private var language: String
     @State private var apiKey = ""
+    @State private var saving = false
+    @State private var refusal: String?
 
-    init(current: MetadataSettingsRecord, onSave: @escaping (Bool, MetadataProvider, String, String) -> Void) {
+    init(current: MetadataSettingsRecord, onSave: @escaping (Bool, MetadataProvider, String, String) async -> String?) {
         self.current = current
         self.onSave = onSave
         _enabled = State(initialValue: current.enabled)
@@ -290,14 +310,27 @@ private struct MetadataSettingsSheet: View {
                 Field(label: "Language", text: $language)
                 Field(label: current.ready ? "TMDB API key (leave blank to keep)" : "TMDB API key", text: $apiKey, secret: true)
             }
+            if enabled, provider == .tmdb, !current.ready, apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+                Text("Enter a TMDB API key to save.").foregroundStyle(scheme.error)
+            }
+            if let refusal {
+                Text(refusal).foregroundStyle(scheme.error)
+            }
         } buttons: {
             Button("Cancel") { dismiss() }.buttonStyle(.tonal)
-            Button("Save") {
-                onSave(enabled, provider, language.trimmingCharacters(in: .whitespaces).isEmpty ? "en" : language, apiKey)
+            Button(saving ? "Saving…" : "Save") {
+                saving = true
+                refusal = nil
+                Task {
+                    refusal = await onSave(enabled, provider, language.trimmingCharacters(in: .whitespaces).isEmpty ? "en" : language, apiKey)
+                    saving = false
+                    if refusal == nil { dismiss() }
+                }
             }
             .buttonStyle(.accent)
-            .disabled(!(!enabled || provider != .tmdb || current.ready || !apiKey.trimmingCharacters(in: .whitespaces).isEmpty))
+            .disabled(saving || !(!enabled || provider != .tmdb || current.ready || !apiKey.trimmingCharacters(in: .whitespaces).isEmpty))
         }
+        .interactiveDismissDisabled(saving)
         .secureContent()
     }
 }
@@ -408,9 +441,12 @@ private struct AppearancePicker: View {
         }
     }
 
+    /// Selected at once, so a second tap builds on the first rather than on
+    /// what was there before it, and painted when Rust has resolved it.
     private func change(namesChanged: Bool = false, _ edit: (inout AppearanceRecord) -> Void) {
         guard var next = choice else { return }
         edit(&next)
+        choice = next
         let chosen = next
         Task {
             await repaint(chosen, store: true)
@@ -420,20 +456,29 @@ private struct AppearancePicker: View {
 
     private func repaint(_ next: AppearanceRecord, store: Bool) async {
         let accents = Self.accents
-        guard let (palette, row) = try? await model.run({ engine -> (PaletteRecord, [AccentChoice: UInt32]) in
-            if store { try engine.setAppearance(appearance: next) }
-            let palette = engine.previewPalette(appearance: next)
-            // Every accent as it would look in *this* flavour: a swatch row that
-            // keeps Mocha's pastels while Latte is selected lies about what the
-            // next tap does.
-            var row: [AccentChoice: UInt32] = [:]
-            for accent in accents {
-                var variant = next
-                variant.accent = accent
-                row[accent] = engine.previewPalette(appearance: variant).accent
+        let resolved: (PaletteRecord, [AccentChoice: UInt32])
+        do {
+            resolved = try await model.run { engine -> (PaletteRecord, [AccentChoice: UInt32]) in
+                if store { try engine.setAppearance(appearance: next) }
+                let palette = engine.previewPalette(appearance: next)
+                // Every accent as it would look in *this* flavour: a swatch row that
+                // keeps Mocha's pastels while Latte is selected lies about what the
+                // next tap does.
+                var row: [AccentChoice: UInt32] = [:]
+                for accent in accents {
+                    var variant = next
+                    variant.accent = accent
+                    row[accent] = engine.previewPalette(appearance: variant).accent
+                }
+                return (palette, row)
             }
-            return (palette, row)
-        }) else { return }
+        } catch {
+            model.reportError(error)
+            return
+        }
+        // A later tap has already moved on; its own repaint is on the way.
+        if store, choice != next { return }
+        let (palette, row) = resolved
         choice = next
         swatches = row.mapValues(argb)
         AppearanceState.shared.apply(palette)

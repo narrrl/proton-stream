@@ -1,5 +1,16 @@
 package io.narl.protonstream.ui
 
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedVisibility
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -98,7 +109,6 @@ private enum class Destination(val label: String, val icon: ImageVector) {
 @Composable
 fun ProtonStreamApp(
     playerHost: LibmpvHost? = null,
-    inPictureInPicture: Boolean = false,
     shareLink: String? = null,
     onShareLinkTaken: () -> Unit = {},
     model: AppViewModel = viewModel(
@@ -327,22 +337,27 @@ fun ProtonStreamApp(
                         .padding(bottom = padding.calculateBottomPadding() + 8.dp),
                 )
             }
+            ActivityBanner(
+                state.activity,
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = body.calculateBottomPadding() + 8.dp),
+            )
             }
         }
     }
 
     // Drawn over the scaffold rather than instead of it. The player owns the
     // whole window while it is up — it is a screen, not a dialog over one, which
-    // is what lets it draw into the cutout and hand the right window to
-    // Picture-in-Picture — but the page behind it stays composed, so leaving the
-    // player finds the title page where it was rather than rebuilt from the top.
+    // is what lets it draw into the cutout — but the page behind it stays
+    // composed, so leaving the player finds the title page where it was rather
+    // than rebuilt from the top.
     playing?.let { request ->
         PlayerScreen(
             title = request.title,
             episodes = request.episodes,
             index = request.index,
             host = playerHost,
-            inPictureInPicture = inPictureInPicture,
             minimized = playerMinimized,
             onIndexChange = { playingIndex = it },
             onSaveProgress = model::saveProgress,
@@ -397,6 +412,37 @@ private fun MiniTransport(
             IconButton(onClick = onClose) {
                 Icon(Icons.Default.Close, contentDescription = "Stop playback")
             }
+        }
+    }
+}
+
+/**
+ * What the app is busy with, for as long as it is: a spinner and one line.
+ * Not dismissible and not timed — it goes when the work does.
+ */
+@Composable
+private fun ActivityBanner(activity: String?, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = activity != null,
+        modifier = modifier,
+        enter = fadeIn() + slideInVertically { it },
+        exit = fadeOut() + slideOutVertically { it },
+    ) {
+        // Held through the exit, so the line does not blank before it fades.
+        var shown by remember { mutableStateOf(activity.orEmpty()) }
+        if (activity != null) shown = activity
+        Row(
+            Modifier
+                .padding(horizontal = 12.dp)
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.small)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite },
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            Text(shown, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
         }
     }
 }

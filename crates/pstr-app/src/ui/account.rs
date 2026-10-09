@@ -133,9 +133,10 @@ impl DriveBrowser {
 pub fn section(ui: &mut egui::Ui, panel: &mut AccountPanel, actions: &mut Vec<Action>) {
     ui::section(ui, "Proton account");
     ui.label(ui::muted(
-        "Optional. Signed in, your watch history is kept in your own Drive and every device \
-         resumes where another left off, and folders of your Drive — your files, other \
-         devices, what was shared with you — can be added to the library.",
+        "Optional. Signed in, your shares, settings and watch history are kept in your own \
+         Drive, so every device shows the same library and resumes where another left off, \
+         and folders of your Drive — your files, other devices, what was shared with you — \
+         can be added to the library.",
     ));
     ui.add_space(theme::space::L);
 
@@ -281,9 +282,11 @@ fn signed_in(
                 .strong(),
             );
             let status = match (&panel.sync_error, &panel.synced) {
-                (Some(error), _) => format!("Watch history did not sync: {error}"),
+                (Some(error), _) => format!("Did not sync: {error}"),
                 (None, Some((at, report))) => sync_line(*at, report, unix_now()),
-                (None, None) => "Watch history syncs with your Drive".to_owned(),
+                (None, None) => {
+                    "Library, settings and watch history sync through your Drive".to_owned()
+                }
             };
             ui.label(ui::muted(status));
         });

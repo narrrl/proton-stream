@@ -99,8 +99,12 @@ struct RootView: View {
                             }
                         }
                 }
-                Snackbar()
-                    .padding(.bottom, (wide ? 16 : 72) + (host.isOpen && host.minimized ? miniTransportInset : 0))
+                VStack(spacing: 8) {
+                    ActivityBanner()
+                    Snackbar()
+                }
+                .padding(.bottom, (wide ? 16 : 72) + (host.isOpen && host.minimized ? miniTransportInset : 0))
+                .animation(.easeInOut(duration: 0.2), value: model.activity)
             }
             .background(scheme.background.ignoresSafeArea())
         }
@@ -140,6 +144,7 @@ struct RootView: View {
                 model.syncInBackground()
             case .active:
                 host.enteredForeground()
+                model.enteredForeground()
                 DownloadCoordinator.shared.resumeQueued()
             default:
                 break
@@ -298,6 +303,33 @@ private struct NavigationRail: View {
         }
         .padding(.top, 24)
         .background(scheme.surface.ignoresSafeArea())
+    }
+}
+
+/// What the app is busy with, for as long as it is: a spinner and one line.
+/// Not dismissible and not timed — it goes when the work does.
+private struct ActivityBanner: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.scheme) private var scheme
+
+    var body: some View {
+        if let activity = model.activity {
+            HStack(spacing: 12) {
+                ProgressView().controlSize(.small).tint(scheme.primary)
+                Text(activity)
+                    .textStyle(.bodyMedium)
+                    .foregroundStyle(scheme.onSurface)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(scheme.surfaceContainerHighest, in: RoundedRectangle(cornerRadius: Corner.tight))
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
+        }
     }
 }
 
