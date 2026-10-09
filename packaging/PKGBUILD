@@ -14,7 +14,7 @@
 #     builds from the registry alone.
 
 pkgname=proton-stream
-pkgver=1.3.0
+pkgver=1.4.0
 pkgrel=1
 pkgdesc="Netflix-style desktop client for Proton Drive public links: browse and stream a share"
 arch=('x86_64')
