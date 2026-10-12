@@ -682,6 +682,34 @@ impl Engine {
         });
     }
 
+    /// Re-supply the link behind a share whose stored secret is unreadable —
+    /// a keyring that was reset — or whose custom password changed, keeping
+    /// its catalog, watch state and downloads. See
+    /// [`ShareStore::replace_secrets`]. Then crawl it, which is what proves
+    /// the new secret works.
+    pub fn repair_share(&self, id: String, url: String, password: Option<String>) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let share = match engine.store.replace_secrets(&id, &url, password.as_deref()) {
+                Ok(share) => share,
+                Err(error) => {
+                    // The add form is not where this was asked, and nothing
+                    // will be crawled to say the crawl is over.
+                    engine.emit(Event::CrawlFinished);
+                    return engine.fail("update the link", error);
+                }
+            };
+            engine.emit(Event::Status(format!(
+                "updated the link for {}",
+                share.name
+            )));
+            engine.load_shares();
+            // Its client was opened with the old secret.
+            engine.connection.lock().take();
+            engine.connect_and_crawl(Some(vec![share.id]), false).await;
+        });
+    }
+
     /// Add a folder of the signed-in account as a share, then crawl it.
     pub fn add_account_folder(&self, name: String, folder: NodeUid) {
         let engine = self.clone();

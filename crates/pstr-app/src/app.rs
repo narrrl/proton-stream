@@ -131,6 +131,12 @@ pub enum Action {
     PasteShare(String),
     /// Go to the add form, caret in the link field.
     OpenShareForm,
+    /// Store a new link, and password, for a share already in the library.
+    RepairShare {
+        id: String,
+        url: String,
+        password: Option<String>,
+    },
     AddShare {
         name: String,
         url: String,
@@ -531,6 +537,10 @@ pub struct ShareForm {
     pub error: Option<String>,
     /// Put the caret in the link field on the next frame the form is drawn.
     pub focus: bool,
+    /// The share whose link is being re-entered in its own row, if any.
+    pub repairing: Option<String>,
+    pub repair_url: String,
+    pub repair_password: String,
 }
 
 pub struct App {
@@ -1533,6 +1543,13 @@ impl App {
                 self.form.url = url;
                 self.form.error = None;
                 self.note(ctx, "share link pasted — add it, or name it first", false);
+            }
+            Action::RepairShare { id, url, password } => {
+                self.crawling = true;
+                self.form.repairing = None;
+                self.form.repair_url.clear();
+                self.form.repair_password.clear();
+                self.engine.repair_share(id, url, password);
             }
             Action::OpenShareForm => {
                 self.page = Page::Shares;

@@ -40,7 +40,7 @@ pub fn show(
                     .iter()
                     .filter(|title| title.share_ids.contains(&share.id))
                     .count();
-                share_row(ui, share, titles, crawls.get(&share.id), actions);
+                share_row(ui, share, titles, crawls.get(&share.id), form, actions);
             }
 
             ui.add_space(theme::space::XXL);
@@ -57,6 +57,7 @@ fn share_row(
     share: &Share,
     titles: usize,
     crawl: Option<&CrawlRecord>,
+    form: &mut ShareForm,
     actions: &mut Vec<Action>,
 ) {
     egui::Frame::new()
@@ -107,10 +108,75 @@ fn share_row(
                     if ui.button("Crawl").clicked() {
                         actions.push(Action::Crawl(Some(share.id.clone())));
                     }
+                    // Not for a folder of the account, which has no link.
+                    if share.folder.is_none()
+                        && ui
+                            .button("Re-enter link")
+                            .on_hover_text(
+                                "For a keyring that lost the link, or a password that changed. \
+                                 The library, history and downloads stay.",
+                            )
+                            .clicked()
+                    {
+                        form.repairing = Some(share.id.clone());
+                        form.repair_url.clear();
+                        form.repair_password.clear();
+                    }
                 });
             });
+            if form.repairing.as_deref() == Some(share.id.as_str()) {
+                repair_form(ui, share, form, actions);
+            }
         });
     ui.add_space(theme::space::S);
+}
+
+/// The same link again, and a password if it has one, for a share already in
+/// the library.
+fn repair_form(ui: &mut egui::Ui, share: &Share, form: &mut ShareForm, actions: &mut Vec<Action>) {
+    ui.add_space(theme::space::M);
+    ui.add(
+        egui::TextEdit::singleline(&mut form.repair_url)
+            .password(true)
+            .hint_text("The share link, including everything after the #")
+            .desired_width(f32::INFINITY),
+    );
+    ui.add_space(theme::space::S);
+    ui.add(
+        egui::TextEdit::singleline(&mut form.repair_password)
+            .password(true)
+            .hint_text("Link password, if it has one")
+            .desired_width(f32::INFINITY),
+    );
+    ui.add_space(theme::space::S);
+    let problem = (!form.repair_url.trim().is_empty())
+        .then(|| pstr_core::shares::share_token(form.repair_url.trim()).err())
+        .flatten();
+    if let Some(problem) = &problem {
+        ui.label(
+            theme::Role::Caption
+                .rich(problem.to_string())
+                .color(theme::danger()),
+        );
+    }
+    ui.horizontal(|ui| {
+        let ready = !form.repair_url.trim().is_empty() && problem.is_none();
+        if ui
+            .add_enabled_ui(ready, |ui| ui::accent_button(ui, "Save"))
+            .inner
+            .clicked()
+        {
+            actions.push(Action::RepairShare {
+                id: share.id.clone(),
+                url: form.repair_url.trim().to_owned(),
+                password: Some(form.repair_password.clone())
+                    .filter(|password| !password.is_empty()),
+            });
+        }
+        if ui.button("Cancel").clicked() {
+            form.repairing = None;
+        }
+    });
 }
 
 /// The add form's link field, which the library's empty state focuses.
