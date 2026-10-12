@@ -422,7 +422,7 @@ impl ShareStore {
     }
 
     /// [`Self::add`], but only once the link has been opened with the
-    /// password given.
+    /// password given. An empty `name` takes the shared folder's own.
     ///
     /// A link that is mistyped, expired or behind the wrong password used to
     /// be stored anyway, so the first try failed on the crawl and every retry
@@ -444,7 +444,19 @@ impl ShareStore {
         }
         let custom_password = custom_password.filter(|password| !password.is_empty());
         let client = open_link(url, custom_password).await?;
-        let share = self.add(name, url, custom_password)?;
+        // A name is the viewer's to give, not theirs to invent before they
+        // can see anything: without one, the shared folder's own name.
+        let name = match name.trim() {
+            "" => client
+                .root_node()
+                .await
+                .ok()
+                .map(|root| root.name)
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| "Shared folder".to_owned()),
+            given => given.to_owned(),
+        };
+        let share = self.add(&name, url, custom_password)?;
         Ok((share, client))
     }
 

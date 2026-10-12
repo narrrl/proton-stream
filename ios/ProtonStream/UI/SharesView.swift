@@ -211,15 +211,14 @@ private struct AddShareSheet: View {
     }
 
     private var ready: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty && !url.trimmingCharacters(in: .whitespaces).isEmpty
+        !url.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     var body: some View {
         DialogSheet("Add Proton Drive share") {
-            Field(label: "Library name", text: $name)
             // The URL fragment is a secret, so the field is a secure one: no
             // keyboard learning, no suggestions, and paste still works.
-            Field(label: "Public share URL", text: $url, secret: true)
+            Field(label: "Share link", text: $url, secret: true)
             // There is no share sheet into a sideloaded app, so a link copied
             // elsewhere comes in from the clipboard.
             if url.isEmpty {
@@ -230,6 +229,8 @@ private struct AddShareSheet: View {
                 }
                 .buttonStyle(.quiet)
             }
+            // Without one, the shared folder's own name.
+            Field(label: "Name (optional)", text: $name)
             Field(label: "Custom password (optional)", text: $password, secret: true)
             if adding {
                 HStack(spacing: 12) {

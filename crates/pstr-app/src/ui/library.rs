@@ -649,7 +649,7 @@ fn empty_state(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ));
         ui.add_space(theme::space::XL);
         if ui::accent_button(ui, "Add a share").clicked() {
-            actions.push(Action::Goto(Page::Shares));
+            actions.push(Action::OpenShareForm);
         }
     });
 }

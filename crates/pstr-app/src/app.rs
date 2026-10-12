@@ -126,6 +126,8 @@ pub enum Action {
     Screenshot,
     /// A share link was pasted outside the form: open the form with it.
     PasteShare(String),
+    /// Go to the add form, caret in the link field.
+    OpenShareForm,
     AddShare {
         name: String,
         url: String,
@@ -524,6 +526,8 @@ pub struct ShareForm {
     pub sending: bool,
     /// Why the last one was refused.
     pub error: Option<String>,
+    /// Put the caret in the link field on the next frame the form is drawn.
+    pub focus: bool,
 }
 
 pub struct App {
@@ -1512,7 +1516,11 @@ impl App {
                 self.page = Page::Shares;
                 self.form.url = url;
                 self.form.error = None;
-                self.note(ctx, "share link pasted — name it and add it", false);
+                self.note(ctx, "share link pasted — add it, or name it first", false);
+            }
+            Action::OpenShareForm => {
+                self.page = Page::Shares;
+                self.form.focus = true;
             }
             Action::AddShare {
                 name,

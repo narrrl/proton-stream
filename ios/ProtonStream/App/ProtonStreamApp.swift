@@ -194,7 +194,15 @@ struct RootView: View {
     /// tap rather than back and in again.
     @ViewBuilder private func libraryPage(width: CGFloat) -> some View {
         let selected = selectedTitleKey.flatMap { key in model.titles.first { $0.key == key } }
-        let library = LibraryView(onResume: play, onTitle: { title in withAnimation(.easeOut(duration: 0.25)) { selectedTitleKey = title.key } })
+        let library = LibraryView(
+            onResume: play,
+            onTitle: { title in withAnimation(.easeOut(duration: 0.25)) { selectedTitleKey = title.key } },
+            // The form as a pasted link opens it, only with nothing in it.
+            onAddShare: {
+                incomingLink = ""
+                destination = .shares
+            }
+        )
         if width >= twoPaneWidth {
             HStack(spacing: 0) {
                 library.frame(width: width * 0.45)

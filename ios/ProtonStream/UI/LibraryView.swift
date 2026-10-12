@@ -57,6 +57,7 @@ struct LibraryView: View {
     @Environment(\.scheme) private var scheme
     let onResume: (TitleRecord, Int) -> Void
     let onTitle: (TitleRecord) -> Void
+    var onAddShare: () -> Void = {}
 
     // What a long press opened a menu for: a title, or a Continue watching card.
     @State private var menuFor: TitleRecord?
@@ -146,7 +147,11 @@ struct LibraryView: View {
             EmptyState("Nothing matches", "No title in the library is called “\(model.query.trimmingCharacters(in: .whitespaces))”.")
         } else if model.titles.isEmpty {
             ScrollView {
-                EmptyState("Your library is empty", "Add a Proton Drive public link under Shares, then refresh.")
+                EmptyState(
+                    "Your library is empty",
+                    "Add a Proton Drive share link, and everything playable behind it shows up here.",
+                    action: ("Add a share", onAddShare)
+                )
                     .containerRelativeFrame(.vertical)
             }
             .refreshable { await model.crawlNow(nil) }

@@ -79,17 +79,22 @@ struct IconButton: View {
 struct EmptyState: View {
     let title: String
     let body_: String
+    let action: (label: String, run: () -> Void)?
     @Environment(\.scheme) private var scheme
 
-    init(_ title: String, _ body: String) {
+    init(_ title: String, _ body: String, action: (label: String, run: () -> Void)? = nil) {
         self.title = title
         body_ = body
+        self.action = action
     }
 
     var body: some View {
         VStack(spacing: 2) {
             Text(title).textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
-            Text(body_).textStyle(.bodyMedium).foregroundStyle(scheme.onSurface)
+            Text(body_).textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
+            if let action {
+                Button(action.label, action: action.run).buttonStyle(.accent).padding(.top, 16)
+            }
         }
         .multilineTextAlignment(.center)
         .padding(24)

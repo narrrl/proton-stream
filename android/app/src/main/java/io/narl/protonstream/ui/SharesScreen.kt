@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -51,6 +52,8 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderShared
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.ui.graphics.Color
 
 @Composable
@@ -330,6 +333,7 @@ private fun AddShareDialog(
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember(initialUrl) { mutableStateOf(initialUrl) }
+    var showLink by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
     var adding by remember { mutableStateOf(false) }
     var refusal by remember { mutableStateOf<String?>(null) }
@@ -340,17 +344,31 @@ private fun AddShareDialog(
         title = { Text("Add Proton Drive share") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("Library name") }, singleLine = true)
                 OutlinedTextField(
                     url,
                     { url = it },
-                    label = { Text("Public share URL") },
+                    label = { Text("Share link") },
                     singleLine = true,
                     // The URL fragment is a secret. Password input disables
                     // IME learning/suggestions while normal long-press paste
-                    // remains available.
-                    visualTransformation = PasswordVisualTransformation(),
+                    // remains available; the eye shows what was pasted.
+                    visualTransformation = if (showLink) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showLink = !showLink }) {
+                            Icon(
+                                if (showLink) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (showLink) "Hide link" else "Show link",
+                            )
+                        }
+                    },
+                )
+                OutlinedTextField(
+                    name,
+                    { name = it },
+                    label = { Text("Name (optional)") },
+                    supportingText = { Text("Defaults to the shared folder's name") },
+                    singleLine = true,
                 )
                 OutlinedTextField(
                     password,
@@ -381,7 +399,7 @@ private fun AddShareDialog(
                         if (refusal == null) onDismiss()
                     }
                 },
-                enabled = name.isNotBlank() && url.isNotBlank() && !adding,
+                enabled = url.isNotBlank() && !adding,
             ) { Text(if (adding) "Adding…" else "Add") }
         },
         dismissButton = { TonalButton(onClick = onDismiss, enabled = !adding) { Text("Cancel") } },

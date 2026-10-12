@@ -133,6 +133,7 @@ fun ProtonStreamApp(
     // is what says so. Saved, because a rotation must not throw the viewer back
     // into the video they had just left.
     var playerMinimized by rememberSaveable { mutableStateOf(false) }
+    var addingShare by remember { mutableStateOf(false) }
 
     val selectedTitle = state.titles.firstOrNull { it.key == selectedTitleKey }
     val playing = playingTitleKey
@@ -226,6 +227,10 @@ fun ProtonStreamApp(
                                 onMatchChanged = model::reloadAfterMetadataChange,
                                 onError = model::reportError,
                                 onArrange = model::arrange,
+                                onAddShare = {
+                                    destination = Destination.Shares
+                                    addingShare = true
+                                },
                                 )
                         }
                         val titlePane = @Composable { selected: TitleRecord ->
@@ -277,8 +282,10 @@ fun ProtonStreamApp(
                         model::repairShare,
                         model::refreshShare,
                         model::removeShare,
-                        shareLink,
-                        onShareLinkTaken,
+                        // The empty library's button opens the form as a
+                        // pasted link would, only with nothing in it.
+                        shareLink ?: "".takeIf { addingShare },
+                        { addingShare = false; onShareLinkTaken() },
                         body,
                         account = state.account,
                         accountActions = AccountActions(

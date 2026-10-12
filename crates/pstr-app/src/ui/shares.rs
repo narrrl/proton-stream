@@ -113,6 +113,15 @@ fn share_row(
     ui.add_space(theme::space::S);
 }
 
+/// The add form's link field, which the library's empty state focuses.
+pub fn link_field_id() -> egui::Id {
+    egui::Id::new("share-link")
+}
+
+fn ui_enter_pressed(ctx: &egui::Context) -> bool {
+    ctx.input(|input| input.key_pressed(egui::Key::Enter))
+}
+
 fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: &mut Vec<Action>) {
     ui::section(ui, "Add a share");
     ui.label(ui::muted(
@@ -128,24 +137,28 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
         .show(ui, |ui| {
             ui.set_width(ui.available_width().min(640.0));
 
-            ui.label(ui::muted("Name"));
-            ui.add(
-                egui::TextEdit::singleline(&mut form.name)
-                    .hint_text("Anime")
-                    .desired_width(f32::INFINITY),
-            );
-            ui.add_space(theme::space::M);
+            // Enter in any field of the form submits it, as the sign-in
+            // form's do.
+            let mut entered = false;
+            let mut submitted_from = |response: egui::Response| {
+                entered |= response.lost_focus() && ui_enter_pressed(&response.ctx);
+            };
 
             ui.label(ui::muted("Link"));
             ui.horizontal(|ui| {
                 let paste = 60.0;
-                let field = egui::Id::new("share-link");
-                ui.add(
-                    egui::TextEdit::singleline(&mut form.url)
-                        .id(field)
-                        .password(true)
-                        .hint_text("https://drive.proton.me/urls/…#…")
-                        .desired_width(ui.available_width() - paste),
+                let field = link_field_id();
+                if std::mem::take(&mut form.focus) {
+                    ui.memory_mut(|memory| memory.request_focus(field));
+                }
+                submitted_from(
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.url)
+                            .id(field)
+                            .password(true)
+                            .hint_text("https://drive.proton.me/urls/…#…")
+                            .desired_width(ui.available_width() - paste),
+                    ),
                 );
                 // The link is masked, so pasting is the only sensible way in —
                 // and a button says that more plainly than the field does.
@@ -170,20 +183,31 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
             }
             ui.add_space(theme::space::M);
 
+            ui.label(ui::muted("Name (optional)"));
+            submitted_from(
+                ui.add(
+                    egui::TextEdit::singleline(&mut form.name)
+                        .hint_text("The shared folder's own name")
+                        .desired_width(f32::INFINITY),
+                ),
+            );
+            ui.add_space(theme::space::M);
+
             ui::widgets::toggle(ui, &mut form.has_password, "The link asks for a password");
             if form.has_password {
                 ui.add_space(theme::space::S);
-                ui.add(
-                    egui::TextEdit::singleline(&mut form.password)
-                        .password(true)
-                        .hint_text("Link password")
-                        .desired_width(f32::INFINITY),
+                submitted_from(
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.password)
+                            .password(true)
+                            .hint_text("Link password")
+                            .desired_width(f32::INFINITY),
+                    ),
                 );
             }
 
             ui.add_space(theme::space::L);
-            let ready = !form.name.trim().is_empty()
-                && !form.url.trim().is_empty()
+            let ready = !form.url.trim().is_empty()
                 && problem.is_none()
                 && (!form.has_password || !form.password.is_empty())
                 && !form.sending;
@@ -193,11 +217,11 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
                 ui.add_space(theme::space::S);
             }
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled_ui(ready, |ui| ui::accent_button(ui, "Add and crawl"))
+                let clicked = ui
+                    .add_enabled_ui(ready, |ui| ui::accent_button(ui, "Add share"))
                     .inner
-                    .clicked()
-                {
+                    .clicked();
+                if clicked || (ready && entered) {
                     actions.push(Action::AddShare {
                         name: form.name.trim().to_string(),
                         url: form.url.trim().to_string(),
@@ -210,8 +234,8 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
                 if form.sending {
                     ui.add(egui::Spinner::new().size(14.0));
                     ui.label(ui::muted("adding…"));
-                } else if form.name.trim().is_empty() || form.url.trim().is_empty() {
-                    ui.label(ui::muted("A name and a link are needed."));
+                } else if form.url.trim().is_empty() {
+                    ui.label(ui::muted("Paste a share link to add it."));
                 }
             });
         });

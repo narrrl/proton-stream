@@ -124,6 +124,7 @@ internal fun LibraryScreen(
     onMatchChanged: () -> Unit = {},
     onError: (Throwable) -> Unit = {},
     onArrange: (LibrarySort, Boolean) -> Unit = { _, _ -> },
+    onAddShare: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // What a long press opened a menu for: a title, or a Continue watching card.
@@ -189,7 +190,8 @@ internal fun LibraryScreen(
                 )
                 state.titles.isEmpty() -> EmptyState(
                     "Your library is empty",
-                    "Add a Proton Drive public link under Shares, then refresh.",
+                    "Add a Proton Drive share link, and everything playable behind it shows up here.",
+                    action = "Add a share" to onAddShare,
                 )
                 else -> LibraryGrid(
                     state,
