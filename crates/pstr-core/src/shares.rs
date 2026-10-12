@@ -607,6 +607,75 @@ async fn open_link(url: &str, custom_password: Option<&str>) -> Result<ShareClie
 /// Several opened shares, presented as one library.
 pub struct SharedLibrary {
     clients: BTreeMap<String, ShareClient>,
+    sessions: SessionAges,
+}
+
+/// How long a visitor session is assumed good for without a refresh.
+///
+/// A refresh costs one round trip. Not refreshing costs an authentication
+/// failure that the viewer can only clear by restarting or recrawling.
+pub const SESSION_FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// When each share's visitor session was last known good.
+///
+/// Sessions are short-lived and an app routinely sits open, or in the
+/// background, for hours between one episode and the next, so age is a reason
+/// to reauthenticate before opening anything. A share with no entry is stale.
+#[derive(Debug, Default)]
+pub struct SessionAges {
+    refreshed: parking_lot::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+}
+
+impl SessionAges {
+    /// Record that `share_id`'s session was good just now.
+    pub fn mark(&self, share_id: &str) {
+        self.refreshed
+            .lock()
+            .insert(share_id.to_owned(), std::time::Instant::now());
+    }
+
+    fn is_stale(&self, share_id: &str) -> bool {
+        self.refreshed
+            .lock()
+            .get(share_id)
+            .is_none_or(|at| at.elapsed() >= SESSION_FRESH_FOR)
+    }
+
+    /// Run `operation`, reauthenticating around it.
+    ///
+    /// Two guards, because there are two ways to lose a visitor session. Age is
+    /// the common one, and a timestamp catches it before the request. Anything
+    /// else — a session dropped early, a machine that slept through a clock
+    /// change — only shows up as a failure, so a fresh-looking session gets one
+    /// retry behind a refresh. `refresh` is best-effort: when it fails the
+    /// operation reports the real problem, which is more useful than a refresh
+    /// error standing in for it.
+    pub async fn run<T, E, R, RF, O, OF>(
+        &self,
+        share_id: &str,
+        refresh: R,
+        operation: O,
+    ) -> std::result::Result<T, E>
+    where
+        R: Fn() -> RF,
+        RF: std::future::Future<Output = bool>,
+        O: Fn() -> OF,
+        OF: std::future::Future<Output = std::result::Result<T, E>>,
+    {
+        let stale = self.is_stale(share_id);
+        if stale && refresh().await {
+            self.mark(share_id);
+        }
+        match operation().await {
+            Err(_) if !stale => {
+                if refresh().await {
+                    self.mark(share_id);
+                }
+                operation().await
+            }
+            result => result,
+        }
+    }
 }
 
 /// One opened share, whichever kind it is.
@@ -728,6 +797,9 @@ impl SharedLibrary {
     ) -> Result<(Self, Vec<(Share, Error)>)> {
         let mut clients = BTreeMap::new();
         let mut failures = Vec::new();
+        // A reused client's session is of unknown age, so it is left stale; one
+        // opened here has just completed its handshake.
+        let sessions = SessionAges::default();
 
         for share in store.list()? {
             if let Some(client) = reusable.remove(&share.id) {
@@ -736,13 +808,14 @@ impl SharedLibrary {
             }
             match store.open(&share, account).await {
                 Ok(client) => {
+                    sessions.mark(&share.id);
                     clients.insert(share.id.clone(), client);
                 }
                 Err(e) => failures.push((share, e)),
             }
         }
 
-        Ok((Self { clients }, failures))
+        Ok((Self { clients, sessions }, failures))
     }
 
     /// The opened clients, minus `dropping`, ready to hand to
@@ -783,7 +856,35 @@ impl SharedLibrary {
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
         client.refresh_session().await?;
+        self.sessions.mark(share_id);
         Ok(())
+    }
+
+    /// Run `operation` against one share, refreshing its visitor session first
+    /// when it is old and once more if the operation fails. See
+    /// [`SessionAges::run`]. Every open of something on a share goes through
+    /// here, so an app left running for hours does not need restarting to play.
+    pub async fn reauthenticating<T, E, O, OF>(
+        &self,
+        share_id: &str,
+        operation: O,
+    ) -> std::result::Result<T, E>
+    where
+        O: Fn() -> OF,
+        OF: std::future::Future<Output = std::result::Result<T, E>>,
+    {
+        self.sessions
+            .run(
+                share_id,
+                || async {
+                    match self.client(share_id) {
+                        Some(client) => client.refresh_session().await.is_ok(),
+                        None => false,
+                    }
+                },
+                operation,
+            )
+            .await
     }
 
     /// Walk one share's whole subtree, level by level, yielding every node.
@@ -927,6 +1028,83 @@ fn token_from_url(url: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// An operation that fails its first `failures` calls, counting every call.
+    fn flaky(
+        failures: usize,
+        calls: &AtomicUsize,
+    ) -> impl Fn() -> std::future::Ready<std::result::Result<(), ()>> {
+        move || {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(if call < failures { Err(()) } else { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_share_never_refreshed_is_refreshed_before_the_operation() {
+        let ages = SessionAges::default();
+        let (refreshes, calls) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let refresh = || {
+            refreshes.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(true)
+        };
+        ages.run("s", refresh, flaky(0, &calls)).await.unwrap();
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_fresh_session_is_not_refreshed_when_the_operation_succeeds() {
+        let ages = SessionAges::default();
+        ages.mark("s");
+        let (refreshes, calls) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let refresh = || {
+            refreshes.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(true)
+        };
+        ages.run("s", refresh, flaky(0, &calls)).await.unwrap();
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+    }
+
+    /// A session Proton dropped early looks fresh by age, and only the failure
+    /// gives it away.
+    #[tokio::test]
+    async fn a_fresh_session_that_fails_is_refreshed_once_and_retried() {
+        let ages = SessionAges::default();
+        ages.mark("s");
+        let (refreshes, calls) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let refresh = || {
+            refreshes.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(true)
+        };
+        ages.run("s", refresh, flaky(1, &calls)).await.unwrap();
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// A refresh just happened, so a second one would learn nothing: the
+    /// failure is the operation's own and is reported as it is.
+    #[tokio::test]
+    async fn a_stale_session_that_still_fails_after_its_refresh_is_not_retried() {
+        let ages = SessionAges::default();
+        let calls = AtomicUsize::new(0);
+        let result = ages
+            .run("s", || std::future::ready(true), flaky(5, &calls))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_refresh_leaves_the_session_stale() {
+        let ages = SessionAges::default();
+        let calls = AtomicUsize::new(0);
+        ages.run("s", || std::future::ready(false), flaky(0, &calls))
+            .await
+            .unwrap();
+        assert!(ages.is_stale("s"));
+    }
 
     #[test]
     fn a_share_url_yields_its_token() {

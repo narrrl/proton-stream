@@ -949,12 +949,6 @@ pub struct AndroidEngine {
     share_generation: AtomicU64,
     /// How many Proton thumbnails may be in flight at once.
     thumbnails: tokio::sync::Semaphore,
-    /// When each share's visitor session was last refreshed.
-    ///
-    /// Sessions are short-lived and the app is routinely backgrounded for hours
-    /// between one episode and the next, so age — not just a share-store
-    /// mutation — is a reason to reauthenticate before opening anything.
-    session_refreshed: Mutex<HashMap<String, std::time::Instant>>,
     /// The streaming cache's budget in bytes, for the next connection and,
     /// through [`AndroidEngine::set_stream_cache_budget`], the open one.
     cache_budget: AtomicU64,
@@ -981,13 +975,6 @@ const OFFLINE_DOWNLOAD_CONCURRENCY: usize = 2;
 
 /// How often a download waiting for a slot asks whether it was cancelled.
 const DOWNLOAD_WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
-
-/// How long a visitor session is assumed good for without a refresh.
-///
-/// A refresh costs one round trip. Not refreshing costs an authentication
-/// failure that, before this, the viewer could only clear with a manual
-/// pull-to-refresh.
-const SESSION_FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 #[uniffi::export]
 impl AndroidEngine {
@@ -1034,7 +1021,6 @@ impl AndroidEngine {
             share_publication: Mutex::new(()),
             share_generation: AtomicU64::new(0),
             thumbnails: tokio::sync::Semaphore::new(THUMBNAIL_CONCURRENCY),
-            session_refreshed: Mutex::new(HashMap::new()),
             cache_budget: AtomicU64::new(DiskCacheConfig::DEFAULT_BUDGET_BYTES),
             download_permits: Arc::new(tokio::sync::Semaphore::new(OFFLINE_DOWNLOAD_CONCURRENCY)),
             accounts,
@@ -2281,7 +2267,6 @@ impl AndroidEngine {
             }
         }
         drop(reusable);
-        self.session_refreshed.lock().remove(share_id);
         self.share_generation.fetch_add(1, Ordering::AcqRel);
     }
 
@@ -2445,39 +2430,17 @@ impl AndroidEngine {
         uid: &NodeUid,
         copy: bool,
     ) -> Result<VideoStream, BridgeError> {
-        let open = || async {
-            if copy {
-                connection.source.open_for_copy(share_id, uid).await
-            } else {
-                connection.source.open(share_id, uid).await
-            }
-        };
-        let stale = self
-            .session_refreshed
-            .lock()
-            .get(share_id)
-            .is_none_or(|at| at.elapsed() >= SESSION_FRESH_FOR);
-        if stale {
-            self.refresh_session(connection, share_id).await;
-        }
-        match open().await {
-            Ok(stream) => Ok(stream),
-            Err(_) if !stale => {
-                self.refresh_session(connection, share_id).await;
-                open().await.map_err(BridgeError::from_display)
-            }
-            Err(error) => Err(BridgeError::from_display(error)),
-        }
-    }
-
-    /// Best-effort: a refresh that fails leaves the open to report the real
-    /// problem, which is more useful than a refresh error standing in for it.
-    async fn refresh_session(&self, connection: &Connection, share_id: &str) {
-        if connection.library.refresh_session(share_id).await.is_ok() {
-            self.session_refreshed
-                .lock()
-                .insert(share_id.to_owned(), std::time::Instant::now());
-        }
+        connection
+            .library
+            .reauthenticating(share_id, || async {
+                if copy {
+                    connection.source.open_for_copy(share_id, uid).await
+                } else {
+                    connection.source.open(share_id, uid).await
+                }
+            })
+            .await
+            .map_err(BridgeError::from_display)
     }
 
     async fn crawl_inner(&self, share_id: Option<String>) -> Result<(), BridgeError> {
@@ -2494,9 +2457,6 @@ impl AndroidEngine {
                 .map_err(|error| BridgeError::Failure {
                     reason: format!("refresh session for {id}: {error}"),
                 })?;
-            self.session_refreshed
-                .lock()
-                .insert(id.clone(), std::time::Instant::now());
             let before = self
                 .catalog
                 .lock()

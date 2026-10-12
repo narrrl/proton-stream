@@ -1371,7 +1371,9 @@ impl Engine {
         // share's rows and its stale downloads, and stopping halfway through
         // that would leave the two disagreeing.
         let nodes = tokio::select! {
-            result = library.crawl_reporting(&share_id, report) => match result {
+            result = library.reauthenticating(&share_id, || {
+                library.crawl_reporting(&share_id, &report)
+            }) => match result {
                 Ok(nodes) => nodes,
                 Err(error) => {
                     self.fail(&format!("crawl {share_id}"), error);
@@ -1549,11 +1551,14 @@ impl Engine {
                     return;
                 }
             }
-            let Some((_, source)) = engine.ensure_connected().await else {
+            let Some((library, source)) = engine.ensure_connected().await else {
                 return;
             };
             let uid = node_uid(&target.volume_id, &target.link_id);
-            match source.open(&target.share_id, &uid).await {
+            let opened = library
+                .reauthenticating(&target.share_id, || source.open(&target.share_id, &uid))
+                .await;
+            match opened {
                 Ok(stream) if stream.size() == 0 => {
                     engine.emit(Event::Error(format!("{} has no content", target.name)));
                 }
@@ -1594,10 +1599,13 @@ impl Engine {
             if offline {
                 return;
             }
-            let Some(source) = engine.opened().map(|(_, source)| source) else {
+            let Some((library, source)) = engine.opened() else {
                 return;
             };
-            match source.open(&share_id, &uid).await {
+            let opened = library
+                .reauthenticating(&share_id, || source.open(&share_id, &uid))
+                .await;
+            match opened {
                 Ok(stream) => stream.warm_edges(),
                 Err(error) => tracing::debug!(%error, "warming the next episode failed"),
             }
@@ -1930,14 +1938,14 @@ impl Engine {
             }
         };
         self.update_download(&key, |item| item.state = DownloadState::Running);
-        let Some((_, source)) = self.ensure_connected().await else {
+        let Some((library, source)) = self.ensure_connected().await else {
             anyhow::bail!("share is not connected");
         };
-        let stream = source
-            .open_for_copy(
-                &target.share_id,
-                &node_uid(&target.volume_id, &target.link_id),
-            )
+        let uid = node_uid(&target.volume_id, &target.link_id);
+        let stream = library
+            .reauthenticating(&target.share_id, || {
+                source.open_for_copy(&target.share_id, &uid)
+            })
             .await?;
         let revision_id = stream.revision_id().to_owned();
         let block_sizes = stream.block_sizes().to_vec();
