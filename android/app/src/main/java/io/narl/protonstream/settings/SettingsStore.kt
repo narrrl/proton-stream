@@ -1,6 +1,7 @@
 package io.narl.protonstream.settings
 
 import android.content.Context
+import androidx.core.content.edit
 
 /**
  * The settings that are Android's alone.
@@ -35,6 +36,16 @@ class SettingsStore(context: Context) {
         get() = preferences.getInt(KEY_CACHE_BUDGET_GIB, DEFAULT_CACHE_BUDGET_GIB)
         set(value) { preferences.edit().putInt(KEY_CACHE_BUDGET_GIB, value).apply() }
 
+    /** How the library was last sorted, as a `LibrarySort` name; null for the default. */
+    var librarySort: String?
+        get() = preferences.getString(KEY_LIBRARY_SORT, null)
+        set(value) { preferences.edit { putString(KEY_LIBRARY_SORT, value) } }
+
+    /** Whether the library folds each franchise into one tile. */
+    var libraryGrouped: Boolean
+        get() = preferences.getBoolean(KEY_LIBRARY_GROUPED, true)
+        set(value) { preferences.edit { putBoolean(KEY_LIBRARY_GROUPED, value) } }
+
     companion object {
         /** The desktop's range, in the steps a phone's storage is bought in. */
         val CACHE_BUDGET_CHOICES = listOf(1, 2, 4, 8, 16)
@@ -49,5 +60,7 @@ class SettingsStore(context: Context) {
         private const val KEY_BACKGROUND_AUDIO = "background_audio"
         private const val KEY_HARDWARE_DECODING = "hardware_decoding"
         private const val KEY_CACHE_BUDGET_GIB = "cache_budget_gib"
+        private const val KEY_LIBRARY_SORT = "library_sort"
+        private const val KEY_LIBRARY_GROUPED = "library_grouped"
     }
 }

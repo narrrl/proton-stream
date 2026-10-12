@@ -44,8 +44,9 @@ final class AppModel {
     /// `grouped`, and the shelves above it. Nil until the bridge has answered,
     /// when the grid falls back to `titles` as they are.
     var arrangement: ArrangementRecord?
-    var sort: LibrarySort = .name
-    var grouped = true
+    /// As the viewer last left them.
+    var sort: LibrarySort = SettingsStore().librarySort
+    var grouped = SettingsStore().libraryGrouped
     var shares: [ShareRecord] = []
     var offline: [OfflineRecord] = []
     var metadataSettings = MetadataSettingsRecord(enabled: false, provider: .aniList, language: "en", ready: true)
@@ -105,6 +106,9 @@ final class AppModel {
     func arrange(_ sort: LibrarySort, _ grouped: Bool) {
         self.sort = sort
         self.grouped = grouped
+        let settings = SettingsStore()
+        settings.librarySort = sort
+        settings.libraryGrouped = grouped
         Task { await reloadLibrary(query) }
     }
 

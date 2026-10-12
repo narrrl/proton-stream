@@ -42,6 +42,23 @@ struct SettingsStore {
 
     static func gibToBytes(_ gib: Int) -> UInt64 { UInt64(gib) * 1024 * 1024 * 1024 }
 
+    /// How the library was last sorted; `.name` until the viewer chooses.
+    var librarySort: LibrarySort {
+        get {
+            let stored = defaults.string(forKey: Key.librarySort)
+            return Self.sorts.first { String(describing: $0) == stored } ?? .name
+        }
+        nonmutating set { defaults.set(String(describing: newValue), forKey: Key.librarySort) }
+    }
+
+    /// Whether the library folds each franchise into one tile.
+    var libraryGrouped: Bool {
+        get { bool(Key.libraryGrouped, default: true) }
+        nonmutating set { defaults.set(newValue, forKey: Key.libraryGrouped) }
+    }
+
+    private static let sorts: [LibrarySort] = [.name, .recent, .added, .release, .rating, .popularity]
+
     private func bool(_ key: String, default value: Bool) -> Bool {
         defaults.object(forKey: key) as? Bool ?? value
     }
@@ -51,5 +68,7 @@ struct SettingsStore {
         static let backgroundAudio = "background_audio"
         static let hardwareDecoding = "hardware_decoding"
         static let cacheBudgetGib = "cache_budget_gib"
+        static let librarySort = "library_sort"
+        static let libraryGrouped = "library_grouped"
     }
 }

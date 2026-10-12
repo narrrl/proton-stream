@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.withContext
 import io.narl.protonstream.native.NativeRuntime
+import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.AppearanceState
 import uniffi.pstr_android.ArrangementRecord
 import uniffi.pstr_android.LibrarySort
@@ -123,7 +124,17 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 it.copy(message = "Certificate verification is unavailable; Proton requests will fail")
             }
         }
-        reload()
+        // The arrangement first, so the first grid is drawn the way the viewer
+        // left it rather than A–Z and then re-sorted under them.
+        viewModelScope.launch {
+            val (sort, grouped) = withContext(Dispatchers.IO) {
+                SettingsStore(appContext).run {
+                    librarySort?.let { name -> LibrarySort.entries.firstOrNull { it.name == name } } to libraryGrouped
+                }
+            }
+            mutableState.update { it.copy(sort = sort ?: it.sort, grouped = grouped) }
+            reload()
+        }
         catchUp()
         viewModelScope.launch {
             val account = runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().accountState() } }
@@ -153,9 +164,18 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     }
 
     /** Reorder the grid, or fold or unfold its franchises. */
+    /** Sort and fold the library, and keep both for the next launch. */
     fun arrange(sort: LibrarySort, grouped: Boolean) {
         mutableState.update { it.copy(sort = sort, grouped = grouped) }
-        viewModelScope.launch { reloadLibrary(mutableState.value.query) }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                SettingsStore(appContext).apply {
+                    librarySort = sort.name
+                    libraryGrouped = grouped
+                }
+            }
+            reloadLibrary(mutableState.value.query)
+        }
     }
 
     fun search(query: String) {
