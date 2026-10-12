@@ -26,6 +26,7 @@ class HistoryTest {
         displayName = key, wideUrl = null, formatLabel = null, seasonLabel = null, studios = emptyList(),
         directors = emptyList(), tags = emptyList(), airing = false, nextEpisode = null, nextAiringAt = null,
         franchise = emptyList(),
+        continueIndex = null,
     )
 
     @Test

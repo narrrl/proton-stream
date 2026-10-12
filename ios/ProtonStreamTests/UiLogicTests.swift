@@ -20,7 +20,7 @@ private func title(_ key: String, _ episodes: [EpisodeRecord]) -> TitleRecord {
         manualMatch: false, seasons: [SeasonRecord(number: 1, label: "Season 1", episodes: episodes)],
         displayName: key, wideUrl: nil, formatLabel: nil, seasonLabel: nil, studios: [],
         directors: [], tags: [], airing: false, nextEpisode: nil, nextAiringAt: nil,
-        franchise: []
+        franchise: [], continueIndex: nil
     )
 }
 

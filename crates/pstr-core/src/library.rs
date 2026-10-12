@@ -189,10 +189,44 @@ impl Title {
             .max_by_key(|episode| episode.last_played())
     }
 
-    /// What a click on the poster should play: whatever is part-watched, else
-    /// the first unwatched episode, else the first episode.
+    /// What Continue watching offers for this title: the part-watched episode,
+    /// or the one after the episode finished last.
+    ///
+    /// Read off whichever episode was touched last. Finishing an episode is
+    /// the most ordinary moment to want the next, and a shelf that dropped the
+    /// show right then was missing its point. An episode reset to the start —
+    /// which is what leaving Continue watching does — says the viewer is done
+    /// with it, so the title is left out. One opened for a few seconds says
+    /// nothing either way and is passed over.
+    pub fn continue_with(&self) -> Option<&Episode> {
+        let latest = self
+            .episodes()
+            .filter(|episode| {
+                episode.watch.is_some_and(|watch| {
+                    watch.position_secs == 0.0
+                        || watch.position_secs >= RESUME_FLOOR_SECS
+                        || episode.is_watched()
+                })
+            })
+            .max_by_key(|episode| episode.last_played())?;
+        if latest.resume_at().is_some() {
+            return Some(latest);
+        }
+        if !latest.is_watched() {
+            return None;
+        }
+        let at = self.position_of(&latest.node.share_id, &latest.node.link_id)?;
+        self.episodes()
+            .skip(at + 1)
+            .find(|episode| !episode.is_watched())
+    }
+
+    /// What a click on the poster should play: what Continue watching offers,
+    /// else whatever is part-watched, else the first unwatched episode, else
+    /// the first episode.
     pub fn next_up(&self) -> Option<&Episode> {
-        self.resume()
+        self.continue_with()
+            .or_else(|| self.resume())
             .or_else(|| self.episodes().find(|episode| !episode.is_watched()))
             .or_else(|| self.episodes().next())
     }
@@ -357,13 +391,13 @@ impl Library {
         self.titles.iter().find(|title| title.key == key)
     }
 
-    /// Titles with something part-watched, most recent first. The top row of
-    /// the library.
+    /// Titles with something to go on with — see [`Title::continue_with`] —
+    /// most recent first. The top row of the library.
     pub fn continue_watching(&self) -> Vec<&Title> {
         let mut titles: Vec<&Title> = self
             .titles
             .iter()
-            .filter(|title| title.resume().is_some())
+            .filter(|title| title.continue_with().is_some())
             .collect();
         titles.sort_by_key(|title| std::cmp::Reverse(title.last_played()));
         titles
@@ -686,6 +720,64 @@ mod tests {
         assert_eq!(title.next_up().unwrap().node.link_id, "2");
         assert_eq!(title.resume().unwrap().resume_at(), Some(700.0));
         assert_eq!(library.continue_watching().len(), 1);
+    }
+
+    fn three_episodes() -> Vec<CatalogNode> {
+        vec![
+            node("s", "1", "Show - S01E01", Some(1), Some(1)),
+            node("s", "2", "Show - S01E02", Some(1), Some(2)),
+            node("s", "3", "Show - S01E03", Some(1), Some(3)),
+        ]
+    }
+
+    #[test]
+    fn a_finished_episode_puts_the_next_one_in_continue_watching() {
+        let mut states = HashMap::new();
+        states.insert(("s".into(), "1".into()), watch(1440.0, 1440.0, true, 10));
+        let library = Library::build(three_episodes(), &states);
+        let next = library.titles[0].continue_with().unwrap();
+        assert_eq!(next.node.link_id, "2");
+        assert_eq!(next.resume_at(), None);
+        assert_eq!(library.continue_watching().len(), 1);
+    }
+
+    #[test]
+    fn a_finished_last_episode_leaves_continue_watching() {
+        let mut states = HashMap::new();
+        for link in ["1", "2", "3"] {
+            states.insert(("s".into(), link.into()), watch(1440.0, 1440.0, true, 10));
+        }
+        let library = Library::build(three_episodes(), &states);
+        assert!(library.continue_watching().is_empty());
+    }
+
+    /// Leaving Continue watching resets the episode to the start. Offering the
+    /// one after the last finished episode instead would bring the title
+    /// straight back.
+    #[test]
+    fn an_episode_reset_to_the_start_keeps_its_title_out_of_continue_watching() {
+        let mut states = HashMap::new();
+        states.insert(("s".into(), "1".into()), watch(1440.0, 1440.0, true, 10));
+        states.insert(("s".into(), "2".into()), watch(0.0, 1440.0, false, 20));
+        let library = Library::build(three_episodes(), &states);
+        assert!(library.continue_watching().is_empty());
+    }
+
+    #[test]
+    fn a_few_seconds_of_the_next_episode_do_not_hide_the_one_part_watched() {
+        let mut states = HashMap::new();
+        states.insert(("s".into(), "1".into()), watch(700.0, 1440.0, false, 10));
+        states.insert(("s".into(), "2".into()), watch(4.0, 1440.0, false, 20));
+        let library = Library::build(three_episodes(), &states);
+        assert_eq!(library.titles[0].continue_with().unwrap().node.link_id, "1");
+    }
+
+    #[test]
+    fn the_episode_after_the_finished_one_is_offered_past_an_older_unwatched_one() {
+        let mut states = HashMap::new();
+        states.insert(("s".into(), "2".into()), watch(1440.0, 1440.0, true, 10));
+        let library = Library::build(three_episodes(), &states);
+        assert_eq!(library.titles[0].continue_with().unwrap().node.link_id, "3");
     }
 
     #[test]

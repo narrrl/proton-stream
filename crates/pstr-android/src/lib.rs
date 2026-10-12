@@ -509,6 +509,11 @@ pub struct TitleRecord {
     /// Every title of its franchise, in release order, its own key included;
     /// empty for a title that stands alone.
     pub franchise: Vec<String>,
+    /// Where Continue watching picks this title up, as an index into its
+    /// episodes in display order: the part-watched one, or the one after the
+    /// episode finished last. `None` keeps it off the shelf. See
+    /// `pstr_core::library::Title::continue_with`.
+    pub continue_index: Option<u32>,
 }
 
 /// Playback preferences that outlive one file, one title and one launch.
@@ -1597,6 +1602,37 @@ impl AndroidEngine {
             .watch_state(&share_id, &link_id)
             .map_err(BridgeError::from_display)
             .map(|state| state.map(watch_state_record))
+    }
+
+    /// Put one file's watch state back exactly as [`Self::watch_state`] read
+    /// it — what Undo does. Unlike [`Self::save_watch_state`] it keeps the
+    /// original time, so an undone change sorts where it did before. `None`,
+    /// a file that had never been played, becomes a reset older than anything,
+    /// which every later state outranks.
+    pub fn restore_watch_state(
+        &self,
+        share_id: String,
+        link_id: String,
+        state: Option<WatchStateRecord>,
+    ) -> Result<(), BridgeError> {
+        let state = state.map_or(
+            WatchState {
+                position_secs: 0.0,
+                duration_secs: None,
+                watched: false,
+                updated_at: 0,
+            },
+            |state| WatchState {
+                position_secs: state.position_secs,
+                duration_secs: state.duration_secs,
+                watched: state.watched,
+                updated_at: state.updated_at,
+            },
+        );
+        self.catalog
+            .lock()
+            .set_watch_state(&share_id, &link_id, &state)
+            .map_err(BridgeError::from_display)
     }
 
     pub fn save_watch_state(
@@ -3203,6 +3239,10 @@ fn title_record(
         next_episode: None,
         next_airing_at: None,
         franchise: Vec::new(),
+        continue_index: title.continue_with().and_then(|episode| {
+            let at = title.position_of(&episode.node.share_id, &episode.node.link_id)?;
+            u32::try_from(at).ok()
+        }),
         seasons: title
             .seasons
             .iter()

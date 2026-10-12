@@ -595,14 +595,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 withContext(Dispatchers.IO) {
                     val engine = NativeRuntime.engine()
                     snapshots.forEach { snapshot ->
-                        val state = snapshot.state
-                        engine.saveWatchState(
-                            snapshot.shareId,
-                            snapshot.linkId,
-                            state?.positionSecs ?: 0.0,
-                            state?.durationSecs,
-                            state?.watched ?: false,
-                        )
+                        engine.restoreWatchState(snapshot.shareId, snapshot.linkId, snapshot.state)
                     }
                 }
             }.onFailure(::reportError)

@@ -382,7 +382,7 @@ fn tile_shape(tiles: Tiles) -> (f32, f32) {
     }
 }
 
-/// The top shelf: one card per part-watched title, scrolling sideways.
+/// The top shelf: one card per title in progress, scrolling sideways.
 fn continue_row(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
@@ -395,21 +395,17 @@ fn continue_row(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 for title in titles {
-                    let Some(episode) = title.resume() else {
+                    let Some(episode) = title.continue_with() else {
                         continue;
                     };
-                    let remaining = episode
-                        .watch
-                        .and_then(|watch| watch.duration_secs)
-                        .map(|duration| {
-                            format!(
-                                "{} left",
-                                ui::format_time(
-                                    duration - episode.watch.map_or(0.0, |w| w.position_secs)
-                                )
-                            )
-                        })
-                        .unwrap_or_else(|| episode.label());
+                    let remaining = match episode.resume_at() {
+                        Some(at) => episode
+                            .watch
+                            .and_then(|watch| watch.duration_secs)
+                            .map(|duration| format!("{} left", ui::format_time(duration - at)))
+                            .unwrap_or_else(|| episode.label()),
+                        None => format!("Next: {}", episode.label()),
+                    };
 
                     let picture = art.of(title);
                     let response = ui::card(
@@ -550,7 +546,7 @@ fn tile_menu(
             });
         }
         if continuing
-            && let Some(episode) = title.resume()
+            && let Some(episode) = title.continue_with()
             && ui
                 .button("Remove from Continue watching")
                 .on_hover_text("Forget where you stopped in it")

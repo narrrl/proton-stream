@@ -96,7 +96,13 @@ import uniffi.pstr_android.TitleType
 private const val CONTINUE_WATCHING_MAX = 12
 
 /** One row of the continue-watching shelf: which episode, and where it sits. */
-private data class Resumable(val title: TitleRecord, val episode: EpisodeRecord, val index: Int)
+private data class Resumable(
+    val title: TitleRecord,
+    val episode: EpisodeRecord,
+    val index: Int,
+    /** When the title was last played, which orders the shelf. */
+    val lastPlayed: Long,
+)
 
 /** One tile of the grid: the title drawn, and how many more of its franchise it stands for. */
 private data class Tile(val title: TitleRecord, val folded: Int)
@@ -126,14 +132,16 @@ internal fun LibraryScreen(
     var matching by remember { mutableStateOf<TitleRecord?>(null) }
     // Most recently played first, one episode per show: a shelf that lists four
     // episodes of the same series is a shelf with room for nothing else.
+    // What to go on with is the engine's call (`continueIndex`): the
+    // part-watched episode, or the one after the episode finished last.
     val resumable = remember(state.titles) {
         state.titles.mapNotNull { title ->
+            val index = title.continueIndex?.toInt() ?: return@mapNotNull null
             val playlist = title.seasons.flatMap(SeasonRecord::episodes)
-            playlist.withIndex()
-                .filter { it.value.resumeAt != null && !it.value.watched }
-                .maxByOrNull { it.value.lastPlayed }
-                ?.let { Resumable(title, it.value, it.index) }
-        }.sortedByDescending { it.episode.lastPlayed }.take(CONTINUE_WATCHING_MAX)
+            playlist.getOrNull(index)?.let { episode ->
+                Resumable(title, episode, index, playlist.maxOf { it.lastPlayed })
+            }
+        }.sortedByDescending { it.lastPlayed }.take(CONTINUE_WATCHING_MAX)
     }
     // Search is an icon until it is wanted: a permanent field above the
     // library spent a band of every visit on something used in few of them.
@@ -199,7 +207,7 @@ internal fun LibraryScreen(
         val allWatched = title.episodeCount > 0uL && title.watchedCount == title.episodeCount
         TileMenu(title.displayName, title.caption(), onDismiss = { menuFor = null }) {
             MenuRow(Icons.Default.PlayArrow, if (playlist.any { it.resumeAt != null }) "Resume" else "Play") {
-                onResume(title, nextUpIndex(playlist))
+                onResume(title, nextUpIndex(playlist, title.continueIndex))
             }
             MenuRow(Icons.Default.Info, "Open") { onTitle(title) }
             MenuRow(Icons.Default.Download, "Download all") { DownloadCoordinator.enqueue(context, playlist) }
@@ -567,7 +575,7 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
-                AccentButton(onClick = { onPlay(resume?.index ?: nextUpIndex(playlist)) }) {
+                AccentButton(onClick = { onPlay(resume?.index ?: nextUpIndex(playlist, title.continueIndex)) }) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(6.dp))
                     Text(if (resume != null) "Resume" else "Play")
@@ -609,7 +617,11 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
             modifier = Modifier.padding(top = 8.dp),
         )
         Text(
-            listOfNotNull(entry.episode.label, entry.episode.timeLeft()).joinToString(" · "),
+            if (entry.episode.resumeAt == null) {
+                "Next: ${entry.episode.label}"
+            } else {
+                listOfNotNull(entry.episode.label, entry.episode.timeLeft()).joinToString(" · ")
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

@@ -263,9 +263,14 @@ extension View {
     func secureContent() -> some View { modifier(SecureContent()) }
 }
 
-/// Where Play on a title lands: the most recently played part-watched episode,
-/// else the first unwatched one, else the first — the desktop's `next_up`.
-func nextUpIndex(_ playlist: [EpisodeRecord]) -> Int {
+/// Where Play on a title lands: what Continue watching offers
+/// (`TitleRecord.continueIndex`), else the most recently played part-watched
+/// episode, else the first unwatched one, else the first — the desktop's
+/// `next_up`.
+func nextUpIndex(_ playlist: [EpisodeRecord], continueIndex: UInt32? = nil) -> Int {
+    if let index = continueIndex.map(Int.init), playlist.indices.contains(index) {
+        return index
+    }
     if let resumed = playlist.indices.filter({ playlist[$0].resumeAt != nil }).max(by: { playlist[$0].lastPlayed < playlist[$1].lastPlayed }) {
         return resumed
     }

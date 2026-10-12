@@ -103,11 +103,14 @@ internal fun EmptyState(title: String, body: String) {
 }
 
 /**
- * Where Play on a title lands: the most recently played part-watched episode,
- * else the first unwatched one, else the first — the desktop's `next_up`.
+ * Where Play on a title lands: what Continue watching offers
+ * ([TitleRecord.continueIndex]), else the most recently played part-watched
+ * episode, else the first unwatched one, else the first — the desktop's
+ * `next_up`.
  */
-internal fun nextUpIndex(playlist: List<EpisodeRecord>): Int =
-    playlist.withIndex().filter { it.value.resumeAt != null }.maxByOrNull { it.value.lastPlayed }?.index
+internal fun nextUpIndex(playlist: List<EpisodeRecord>, continueIndex: UInt? = null): Int =
+    continueIndex?.toInt()?.takeIf { it in playlist.indices }
+        ?: playlist.withIndex().filter { it.value.resumeAt != null }.maxByOrNull { it.value.lastPlayed }?.index
         ?: playlist.indexOfFirst { !it.watched }.takeIf { it >= 0 }
         ?: 0
 

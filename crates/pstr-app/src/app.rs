@@ -1312,9 +1312,18 @@ impl App {
             })?;
             Some((title.name.clone(), episode.watch))
         });
-        let Some((name, Some(before))) = found else {
+        let Some((name, before)) = found else {
             return;
         };
+        // An episode Continue watching offers next has never been played.
+        // Its undo is a reset as old as time, which the finished episode
+        // before it outranks.
+        let before = before.unwrap_or(pstr_core::catalog::WatchState {
+            position_secs: 0.0,
+            duration_secs: None,
+            watched: false,
+            updated_at: 0,
+        });
         self.engine.save_watch_state(
             share_id.clone(),
             link_id.clone(),

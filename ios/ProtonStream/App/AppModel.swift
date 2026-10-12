@@ -516,13 +516,7 @@ final class AppModel {
             do {
                 try await run { engine in
                     for snapshot in snapshots {
-                        try engine.saveWatchState(
-                            shareId: snapshot.shareId,
-                            linkId: snapshot.linkId,
-                            positionSecs: snapshot.state?.positionSecs ?? 0,
-                            durationSecs: snapshot.state?.durationSecs,
-                            watched: snapshot.state?.watched ?? false
-                        )
+                        try engine.restoreWatchState(shareId: snapshot.shareId, linkId: snapshot.linkId, state: snapshot.state)
                     }
                 }
             } catch {

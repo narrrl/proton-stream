@@ -36,7 +36,7 @@ struct TitleView: View {
         self.onOpenTitle = onOpenTitle
         // One season on screen at a time, opened on the one Play would land in.
         let playlist = title.playlist
-        let nextUp = nextUpIndex(playlist)
+        let nextUp = nextUpIndex(playlist, continueIndex: title.continueIndex)
         let upNext = playlist.indices.contains(nextUp) ? playlist[nextUp] : nil
         _seasonIndex = State(initialValue: max(title.seasons.firstIndex { $0.episodes.contains { $0.linkId == upNext?.linkId } } ?? 0, 0))
     }
@@ -44,7 +44,7 @@ struct TitleView: View {
     var body: some View {
         // Display order across seasons: what previous/next and autoplay walk.
         let playlist = title.playlist
-        let nextUp = nextUpIndex(playlist)
+        let nextUp = nextUpIndex(playlist, continueIndex: title.continueIndex)
         let upNext = playlist.indices.contains(nextUp) ? playlist[nextUp] : nil
         let season = title.seasons.indices.contains(seasonIndex) ? title.seasons[seasonIndex] : nil
         let downloads = DownloadCoordinator.shared.records
@@ -105,7 +105,7 @@ struct TitleView: View {
         .onChange(of: title.key) {
             overviewOpen = false
             let playlist = title.playlist
-            let upNext = playlist.indices.contains(nextUpIndex(playlist)) ? playlist[nextUpIndex(playlist)] : nil
+            let upNext = playlist.indices.contains(nextUpIndex(playlist, continueIndex: title.continueIndex)) ? playlist[nextUpIndex(playlist, continueIndex: title.continueIndex)] : nil
             seasonIndex = title.seasons.firstIndex { $0.episodes.contains { $0.linkId == upNext?.linkId } } ?? 0
         }
     }

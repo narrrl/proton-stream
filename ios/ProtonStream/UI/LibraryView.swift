@@ -10,6 +10,8 @@ struct Resumable: Identifiable {
     let title: TitleRecord
     let episode: EpisodeRecord
     let index: Int
+    /// When the title was last played, which orders the shelf.
+    let lastPlayed: Int64
 
     var id: String { "\(episode.shareId)/\(episode.linkId)" }
 }
@@ -30,17 +32,22 @@ private struct Shelf: Identifiable {
 }
 
 /// Most recently played first, one episode per show: a shelf that lists four
-/// episodes of the same series is a shelf with room for nothing else.
+/// episodes of the same series is a shelf with room for nothing else. Which
+/// episode is the engine's call (`continueIndex`): the part-watched one, or the
+/// one after the episode finished last.
 func resumable(_ titles: [TitleRecord]) -> [Resumable] {
     titles.compactMap { title -> Resumable? in
+        guard let index = title.continueIndex.map(Int.init) else { return nil }
         let playlist = title.playlist
-        guard let index = playlist.indices
-            .filter({ playlist[$0].resumeAt != nil && !playlist[$0].watched })
-            .max(by: { playlist[$0].lastPlayed < playlist[$1].lastPlayed })
-        else { return nil }
-        return Resumable(title: title, episode: playlist[index], index: index)
+        guard playlist.indices.contains(index) else { return nil }
+        return Resumable(
+            title: title,
+            episode: playlist[index],
+            index: index,
+            lastPlayed: playlist.map(\.lastPlayed).max() ?? 0
+        )
     }
-    .sorted { $0.episode.lastPlayed > $1.episode.lastPlayed }
+    .sorted { $0.lastPlayed > $1.lastPlayed }
     .prefix(continueWatchingMax)
     .map { $0 }
 }
@@ -106,7 +113,7 @@ struct LibraryView: View {
             let allWatched = title.episodeCount > 0 && title.watchedCount == title.episodeCount
             TileMenu(heading: title.displayName, caption: title.caption) {
                 MenuRow("play.fill", playlist.contains { $0.resumeAt != nil } ? "Resume" : "Play") {
-                    onResume(title, nextUpIndex(playlist))
+                    onResume(title, nextUpIndex(playlist, continueIndex: title.continueIndex))
                 }
                 MenuRow("info.circle", "Open") { onTitle(title) }
                 MenuRow("arrow.down.circle", "Download all") { DownloadCoordinator.shared.enqueue(playlist) }
@@ -426,7 +433,7 @@ private struct FeaturedBanner: View {
                             .textStyle(.bodySmall).foregroundStyle(.white.opacity(0.8)).lineLimit(3).padding(.top, 6)
                     }
                     HStack(spacing: 8) {
-                        Button { onPlay(resume?.index ?? nextUpIndex(title.playlist)) } label: {
+                        Button { onPlay(resume?.index ?? nextUpIndex(title.playlist, continueIndex: title.continueIndex)) } label: {
                             Label(resume != nil ? "Resume" : "Play", systemImage: "play.fill")
                         }
                         .buttonStyle(.accent)
@@ -463,7 +470,9 @@ private struct ContinueCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: Corner.standard))
             Text(entry.title.displayName).textStyle(.bodyLarge, semibold: true).foregroundStyle(scheme.onSurface)
                 .lineLimit(1).padding(.top, 8)
-            Text([entry.episode.label, entry.episode.timeLeft].compactMap { $0 }.joined(separator: " · "))
+            Text(entry.episode.resumeAt == nil
+                 ? "Next: \(entry.episode.label)"
+                 : [entry.episode.label, entry.episode.timeLeft].compactMap { $0 }.joined(separator: " · "))
                 .textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).lineLimit(1)
         }
         .frame(width: 220)

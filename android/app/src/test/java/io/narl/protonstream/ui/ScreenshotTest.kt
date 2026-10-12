@@ -264,6 +264,9 @@ class ScreenshotTest {
             nextEpisode = null,
             nextAiringAt = null,
             franchise = emptyList(),
+            // What the engine would pick for these fixtures: the part-watched episode.
+            continueIndex = seasons.flatMap { it.episodes }.indexOfFirst { it.resumeAt != null }
+                .takeIf { it >= 0 }?.toUInt(),
         )
 
         val SERIES = title(
