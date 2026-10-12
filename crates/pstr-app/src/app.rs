@@ -218,6 +218,14 @@ pub enum Action {
         key: String,
         watched: bool,
     },
+    /// Some episodes of a title — a season, or everything up to one —
+    /// watched or not, with an Undo. `what` names them in the toast.
+    MarkEpisodes {
+        key: String,
+        links: Vec<(String, String)>,
+        watched: bool,
+        what: String,
+    },
     /// Take a title off Continue watching by forgetting where it stopped,
     /// with an Undo.
     ForgetPosition {
@@ -1651,9 +1659,41 @@ impl App {
                 let Some(title) = self.library.get(&key) else {
                     return;
                 };
-                let name = title.name.clone();
+                let links = title
+                    .episodes()
+                    .map(|e| (e.node.share_id.clone(), e.node.link_id.clone()))
+                    .collect();
+                let what = title.name.clone();
+                self.apply(
+                    ctx,
+                    Action::MarkEpisodes {
+                        key,
+                        links,
+                        watched,
+                        what,
+                    },
+                );
+            }
+            Action::MarkEpisodes {
+                key,
+                links,
+                watched,
+                what: name,
+            } => {
+                let Some(title) = self.library.get(&key) else {
+                    return;
+                };
+                let picked = |e: &&pstr_core::library::Episode| {
+                    links
+                        .iter()
+                        .any(|(share, link)| e.node.share_id == *share && e.node.link_id == *link)
+                };
                 let mut before = Vec::new();
-                for episode in title.episodes().filter(|e| e.is_watched() != watched) {
+                for episode in title
+                    .episodes()
+                    .filter(picked)
+                    .filter(|e| e.is_watched() != watched)
+                {
                     let duration = episode.watch.and_then(|watch| watch.duration_secs);
                     before.push((
                         episode.node.share_id.clone(),

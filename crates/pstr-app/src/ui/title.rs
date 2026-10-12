@@ -96,6 +96,7 @@ pub fn show(
                 )));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     season_download(ui, title, season, &offline, actions);
+                    season_watched(ui, title, season, actions);
                 });
             });
             ui.add_space(theme::space::L);
@@ -207,6 +208,29 @@ fn back_link(ui: &mut egui::Ui) -> egui::Response {
 }
 
 /// Download, or delete, a whole season.
+/// Mark a whole season seen, or unseen once it all is — for someone who
+/// watched it elsewhere and joins the show here.
+fn season_watched(ui: &mut egui::Ui, title: &Title, season: &Season, actions: &mut Vec<Action>) {
+    let all = season.episodes.iter().all(|episode| episode.is_watched());
+    let label = if all {
+        "Mark season unwatched"
+    } else {
+        "Mark season watched"
+    };
+    if ui.button(label).clicked() {
+        actions.push(Action::MarkEpisodes {
+            key: title.key.clone(),
+            links: season
+                .episodes
+                .iter()
+                .map(|e| (e.node.share_id.clone(), e.node.link_id.clone()))
+                .collect(),
+            watched: !all,
+            what: format!("{} {}", title.name, season.label()),
+        });
+    }
+}
+
 fn season_download(
     ui: &mut egui::Ui,
     title: &Title,
@@ -759,14 +783,33 @@ fn episode_row(
             let cluster = egui::vec2(ui.available_width(), STILL.y);
             let layout = egui::Layout::right_to_left(egui::Align::Center);
             ui.allocate_ui_with_layout(cluster, layout, |ui| {
-                if ui::widgets::watched_mark(ui, watched)
-                    .on_hover_text(if watched {
-                        "Mark unwatched"
-                    } else {
-                        "Mark watched"
-                    })
-                    .clicked()
-                {
+                let mark = ui::widgets::watched_mark(ui, watched).on_hover_text(if watched {
+                    "Mark unwatched. Right-click for more."
+                } else {
+                    "Mark watched. Right-click for more."
+                });
+                // Joining a show partway is the usual reason to mark
+                // anything, and one tick per earlier episode is a chore.
+                mark.context_menu(|ui| {
+                    if ui.button("Mark watched up to here").clicked() {
+                        let links = title
+                            .episodes()
+                            .take(
+                                title
+                                    .position_of(&episode.node.share_id, &episode.node.link_id)
+                                    .map_or(0, |at| at + 1),
+                            )
+                            .map(|e| (e.node.share_id.clone(), e.node.link_id.clone()))
+                            .collect();
+                        actions.push(Action::MarkEpisodes {
+                            key: title.key.clone(),
+                            links,
+                            watched: true,
+                            what: format!("{} up to {}", title.name, episode.label()),
+                        });
+                    }
+                });
+                if mark.clicked() {
                     actions.push(Action::SetWatched {
                         share_id: episode.node.share_id.clone(),
                         link_id: episode.node.link_id.clone(),
