@@ -202,7 +202,7 @@ struct PlaybackState {
     /// and must not be attributed to the file being loaded.
     bool loading = false;
     /// The picture's display size, once mpv has decoded enough to know it.
-    /// Zero until then, and the aspect Picture-in-Picture is given.
+    /// Zero until then.
     double video_width = 0.0;
     double video_height = 0.0;
     /// Which loaded file this state describes. Bumped by every load, so a

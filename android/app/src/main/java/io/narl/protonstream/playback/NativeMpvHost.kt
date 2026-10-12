@@ -245,7 +245,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
      */
     fun beginTransition() { mutableAdvancing.value = true }
 
-    /** Names the open episode for the media session, its notification and PiP. */
+    /** Names the open episode for the media session and its notification. */
     fun publish(playing: NowPlaying?) { mutableNowPlaying.value = playing }
 
     fun setPaused(paused: Boolean) {

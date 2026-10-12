@@ -117,15 +117,13 @@ position advances, which can only happen if real decrypted bytes reached the
 decoder. One live run serves all five cases, because each re-crawl of a real
 share costs about six minutes and the crawl is not what any of them tests.
 
-**Still open, and the reason this entry stays open.** `picture-in-picture` is
-`pending`. It is no longer blocked on the app —
-[B40](#b40--picture-in-picture-was-entered-but-never-adapted-to) landed, so
-there is correct behaviour to assert — but the live suite drives the engine and
-libmpv directly, and PiP is a property of the window, so the case needs an
-activity-level driver that does not exist yet. Every run still prints that the
-matrix is incomplete. `process-recreation` has been promoted off its `xfail`
-now that [B35](#b35--navigation-and-player-state-did-not-survive-process-recreation)
-has landed, and has not been re-run on hardware since.
+**Still open, and the reason this entry stays open.** The matrix has not been
+run on hardware since the 2026-10 redesign of every screen, and
+`process-recreation` has not been re-run since
+[B35](#b35--navigation-and-player-state-did-not-survive-process-recreation)
+landed. The `picture-in-picture` case that was `pending` below went with
+Picture-in-Picture itself, which was later removed (`docs/ANDROID.md`), so
+nothing is `pending` any more.
 
 **Verified on hardware**, 2026-08-08, Pixel 6 (`arm64-v8a`, API 37) against the
 signed minified release APK:
@@ -1288,6 +1286,11 @@ out rather than leaving them mid-timeout.
 `PictureInPictureIssue` lint entry is gone from the baseline rather than
 suppressed. The `picture-in-picture` acceptance case is now implementable — it
 was `pending` precisely because the assertion would have had to assert this bug.
+
+**Since removed.** Picture-in-Picture itself was taken out later: a PiP window
+that never sized its video right proved less use than background audio and the
+lock-screen transport (`docs/ANDROID.md`). This entry records a fix to code
+that no longer exists.
 
 ### B45 — the play/pause button did nothing, everywhere
 

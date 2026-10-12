@@ -26,6 +26,23 @@ indicator while a crawl runs, but not the crawl's progress.
 Not yet verified on a device; the host gate (ktlint, unit and screenshot
 tests) passes, and Android lint runs in CI.
 
+A source review on 2026-10-12 found these still short of the text below:
+
+- **Title page.** The backdrop scrolls away with the back button instead of
+  collapsing to a pinned bar, and the icon row has no mark-watched action.
+- **Episode rows** show the file size where runtime was asked for.
+- **Player episode list** is a bottom sheet in landscape too, not a side
+  panel.
+- **Storage** has a usage bar for the streaming cache only; offline episodes
+  have none.
+- **Metadata language** is still a free-text field.
+- **Touch targets.** The player's icons are 40 dp, under the 48 dp floor.
+- **Screenshots** do not cover the player, and only the library is taken at
+  font scale 1.5.
+
+Share rows now say how many files the last crawl found, when it ran and why it
+failed (section 2, Shares), as of the catalog's `share_crawls` table.
+
 ## 0. CI (done)
 
 Every `Android` workflow run since August failed in `:app:buildRustHost`:
