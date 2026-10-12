@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import android.net.ConnectivityManager
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -16,13 +17,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.narl.protonstream.download.RetainedDownload
+import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.AccentButton
 import uniffi.pstr_android.EpisodeRecord
 
@@ -139,10 +143,12 @@ internal fun formatBytes(bytes: ULong): String {
 
 /**
  * One line under a download that has not finished: "Running · 120.0 MiB of
- * 1.2 GiB · 2.4 MiB/s", or "Queued" while it waits for a slot.
+ * 1.2 GiB · 2.4 MiB/s", or "Queued" while it waits for a slot — or, given a
+ * [waitingFor], what it is really waiting on.
  */
-internal fun downloadStatusLine(download: RetainedDownload): String = listOfNotNull(
-    download.status.replaceFirstChar { it.uppercase() },
+internal fun downloadStatusLine(download: RetainedDownload, waitingFor: String? = null): String = listOfNotNull(
+    waitingFor?.takeIf { download.status == RetainedDownload.STATUS_QUEUED }
+        ?: download.status.replaceFirstChar { it.uppercase() },
     download.total.takeIf { it > 0L && download.downloaded > 0L }?.let {
         "${formatBytes(download.downloaded.toULong())} of ${formatBytes(it.toULong())}"
     },
@@ -150,6 +156,25 @@ internal fun downloadStatusLine(download: RetainedDownload): String = listOfNotN
         .takeIf { it > 0L && download.status == RetainedDownload.STATUS_RUNNING }
         ?.let { "${formatBytes(it.toULong())}/s" },
 ).joinToString(" · ")
+
+/**
+ * Why a queued download is not running, when it is not merely a free slot:
+ * WorkManager holds a Wi-Fi-only download back on mobile data without a word,
+ * and "Queued" for an hour on the bus reads as stuck. Re-read whenever [key]
+ * changes — the download's own updates are the clock.
+ */
+@Composable
+internal fun rememberQueueReason(key: Any?): String? {
+    val context = LocalContext.current
+    return remember(key) {
+        val network = context.getSystemService(ConnectivityManager::class.java)
+        when {
+            network?.activeNetwork == null -> "Waiting for a connection"
+            SettingsStore(context).wifiOnly && network.isActiveNetworkMetered -> "Waiting for Wi-Fi"
+            else -> null
+        }
+    }
+}
 
 /**
  * What an episode row is headed with: "1. Mother and Children".

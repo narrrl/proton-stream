@@ -204,7 +204,7 @@ private fun PartialRow(
         headlineContent = { Text(download.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             Column {
-                Text(downloadStatusLine(download))
+                Text(downloadStatusLine(download, rememberQueueReason(download)))
                 if (download.total > 0L) {
                     AccentProgress(
                         progress = { (download.downloaded.toFloat() / download.total).coerceIn(0f, 1f) },

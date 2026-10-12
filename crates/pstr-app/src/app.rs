@@ -112,6 +112,9 @@ const NAV: [Page; 5] = [
 pub enum Action {
     Goto(Page),
     Play(PlaybackTarget),
+    /// Play a file from wherever the library says it was left, for a caller
+    /// whose target may be older than that — a download queued last week.
+    PlayResuming(PlaybackTarget),
     /// Download one or more files as complete local copies.
     MakeOffline(Vec<PlaybackTarget>),
     PauseDownload(DownloadKey),
@@ -1558,6 +1561,18 @@ impl App {
                 self.form.repair_url.clear();
                 self.form.repair_password.clear();
                 self.engine.repair_share(id, url, password);
+            }
+            Action::PlayResuming(mut target) => {
+                target.resume_at = self.library.titles.iter().find_map(|title| {
+                    title
+                        .episodes()
+                        .find(|episode| {
+                            episode.node.share_id == target.share_id
+                                && episode.node.link_id == target.link_id
+                        })
+                        .and_then(|episode| episode.resume_at())
+                });
+                self.apply(ctx, Action::Play(target));
             }
             Action::OpenShareForm => {
                 self.page = Page::Shares;

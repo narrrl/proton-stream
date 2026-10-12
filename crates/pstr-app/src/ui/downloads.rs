@@ -1,6 +1,6 @@
 //! Inspectable desktop download queue.
 
-use crate::app::Action;
+use crate::app::{Action, Page};
 use crate::engine::{DownloadItem, DownloadState};
 use crate::{theme, ui};
 
@@ -222,6 +222,14 @@ fn buttons(ui: &mut egui::Ui, item: &DownloadItem, actions: &mut Vec<Action>) {
             }
         }
         DownloadState::Completed => {
+            // The point of a download is to watch it, and the library is a
+            // detour from here — offline most of all.
+            if ui::accent_button(ui, "Play").clicked() {
+                actions.push(Action::PlayResuming(item.target.clone()));
+            }
+            if ui.button("Open").on_hover_text("Go to its title").clicked() {
+                actions.push(Action::Goto(Page::Title(item.target.title_key.clone())));
+            }
             if ui
                 .button("Delete")
                 .on_hover_text("Delete the offline copy; keep the online source")

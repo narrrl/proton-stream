@@ -651,7 +651,7 @@ private fun EpisodeRow(
                 fill = solid(MaterialTheme.colorScheme.tertiary),
             )
             Text(
-                downloadStatusLine(active),
+                downloadStatusLine(active, rememberQueueReason(active)),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
