@@ -118,6 +118,9 @@ pub enum Action {
     ResumeDownload(DownloadKey),
     CancelDownload(DownloadKey),
     RemoveDownload(DownloadKey, bool),
+    /// Ask whether to delete finished offline copies — of one episode, a
+    /// season or a show, named by the text.
+    DeleteOffline(Vec<DownloadKey>, String),
     /// Crawl one share, or every share.
     Crawl(Option<String>),
     /// Stop the crawls still listing.
@@ -610,6 +613,9 @@ pub struct App {
     pub downloads: Vec<DownloadItem>,
     pub offline_files: std::collections::HashSet<DownloadKey>,
     pub confirm_partial_delete: Option<DownloadKey>,
+    /// Finished offline copies the viewer asked to delete, and what they are
+    /// of, waiting on their say-so: gigabytes are one misclick away otherwise.
+    pub confirm_offline_delete: Option<(Vec<DownloadKey>, String)>,
     /// A share the viewer asked to remove, waiting on their say-so.
     pub confirm_remove_share: Option<String>,
     /// Messages in the corner. See [`ui::toast`].
@@ -694,6 +700,7 @@ impl App {
             downloads: Vec::new(),
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
+            confirm_offline_delete: None,
             confirm_remove_share: None,
             toasts: ui::toast::Toasts::default(),
             pacer: Pacer::new(),
@@ -1404,6 +1411,11 @@ impl App {
                     self.engine.remove_download(key, false);
                 }
             }
+            Action::DeleteOffline(keys, what) => {
+                if !keys.is_empty() {
+                    self.confirm_offline_delete = Some((keys, what));
+                }
+            }
             Action::SetMetadataConfig(config) => {
                 self.settings = config.clone();
                 self.engine.set_metadata_config(config);
@@ -1972,6 +1984,7 @@ impl eframe::App for App {
         // also leave the page behind it.
         let dialog = self.matcher.is_some()
             || self.confirm_partial_delete.is_some()
+            || self.confirm_offline_delete.is_some()
             || self.confirm_remove_share.is_some()
             || self.shortcuts_open;
         if !dialog {
@@ -2062,6 +2075,7 @@ impl eframe::App for App {
                 downloads,
                 offline_files,
                 confirm_partial_delete,
+                confirm_offline_delete,
                 confirm_remove_share,
                 shown_page,
                 ..
@@ -2202,6 +2216,33 @@ impl eframe::App for App {
                         *confirm_partial_delete = None;
                     }
                     ui::Answer::Declined => *confirm_partial_delete = None,
+                    ui::Answer::Pending => {}
+                }
+            }
+
+            if let Some((keys, what)) = confirm_offline_delete.clone() {
+                let body = format!(
+                    "{} deleted from this computer. The share keeps the files, and they can \
+                     be downloaded again.",
+                    match keys.len() {
+                        1 => "The episode is".to_owned(),
+                        count => format!("All {count} episodes are"),
+                    }
+                );
+                match ui::confirm(
+                    ctx,
+                    "offline",
+                    &format!("Delete the offline copy of {what}?"),
+                    &body,
+                    "Delete",
+                ) {
+                    ui::Answer::Confirmed => {
+                        for key in keys {
+                            engine.remove_download(key, false);
+                        }
+                        *confirm_offline_delete = None;
+                    }
+                    ui::Answer::Declined => *confirm_offline_delete = None,
                     ui::Answer::Pending => {}
                 }
             }

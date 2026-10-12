@@ -222,9 +222,10 @@ fn season_download(
             .on_hover_text("Delete the offline copies; keep the online source")
             .clicked()
         {
-            for key in season_keys {
-                actions.push(Action::RemoveDownload(key, false));
-            }
+            actions.push(Action::DeleteOffline(
+                season_keys,
+                format!("{} {}", title.name, season.label()),
+            ));
         }
     } else if ui
         .button("Download season")
@@ -365,9 +366,7 @@ fn header(
                             .on_hover_text("Delete the offline copies; keep the online source")
                             .clicked()
                         {
-                            for key in title_keys {
-                                actions.push(Action::RemoveDownload(key, false));
-                            }
+                            actions.push(Action::DeleteOffline(title_keys, title.name.clone()));
                         }
                     } else if ui
                         .button("Download show")
@@ -941,7 +940,7 @@ fn download(
             .on_hover_text("Available offline. Click to delete the copy; the share keeps the file.")
             .clicked()
         {
-            actions.push(Action::RemoveDownload(key, false));
+            actions.push(Action::DeleteOffline(vec![key], episode.label()));
         }
         return;
     }

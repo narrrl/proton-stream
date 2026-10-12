@@ -227,7 +227,7 @@ fn buttons(ui: &mut egui::Ui, item: &DownloadItem, actions: &mut Vec<Action>) {
                 .on_hover_text("Delete the offline copy; keep the online source")
                 .clicked()
             {
-                actions.push(Action::RemoveDownload(key(), false));
+                actions.push(Action::DeleteOffline(vec![key()], item.target.caption()));
             }
         }
     }
