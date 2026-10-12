@@ -69,7 +69,7 @@ struct IconButton: View {
                 .frame(width: 48, height: 48)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressableIcon)
         .foregroundStyle(enabled ? tint ?? scheme.onSurfaceVariant : scheme.onSurface.opacity(0.38))
         .disabled(!enabled)
         .accessibilityLabel(label)

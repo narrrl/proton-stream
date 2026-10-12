@@ -383,7 +383,7 @@ private struct DriveRow: View {
             .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .disabled(open == nil)
     }
 }

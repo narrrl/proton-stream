@@ -110,6 +110,13 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     /** Launch and coming back both ask; one crawl answers. */
     private var catchingUp = false
 
+    /**
+     * Every banner line whose work is still running, oldest first. Touched on
+     * the main thread only, as everything in [viewModelScope] is.
+     */
+    private val activities = mutableListOf<Pair<Long, String>>()
+    private var nextActivity = 0L
+
     init {
         if (!NativeRuntime.tlsReady) {
             mutableState.update {
@@ -163,22 +170,44 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(null) } }
                     .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
             }
-            reload()
+            reloadNow()
+            matchAfterCrawl()
         }
     }
 
     /**
-     * Say [what] in the activity banner while [work] runs. Nested work keeps
-     * the outer line once the inner one is done.
+     * Look up whatever a crawl brought that has no answer yet: a new show, or
+     * a new episode its stored guide cannot name. When everything already has
+     * one the bridge asks nothing, so this is cheap after every crawl.
+     */
+    private suspend fun matchAfterCrawl() {
+        val settings = mutableState.value.metadataSettings
+        if (settings.enabled && settings.ready) match(force = false, quiet = true)
+    }
+
+    /**
+     * Say [what] in the activity banner while [work] runs.
+     *
+     * The banner shows the newest line still running. Work overlaps — a sync
+     * starts during a crawl and ends after it — so each line is removed by
+     * itself rather than by putting back whatever was showing before, which
+     * once brought back a finished crawl's line and spun it forever.
      */
     private suspend fun busy(what: String, work: suspend () -> Unit) {
-        val outer = mutableState.value.activity
-        mutableState.update { it.copy(activity = what, refreshing = true) }
+        val token = nextActivity++
+        activities += token to what
+        showActivity()
         try {
             work()
         } finally {
-            mutableState.update { it.copy(activity = outer, refreshing = outer != null) }
+            activities.removeAll { it.first == token }
+            showActivity()
         }
+    }
+
+    private fun showActivity() {
+        val newest = activities.lastOrNull()?.second
+        mutableState.update { it.copy(activity = newest, refreshing = newest != null) }
     }
 
     /**
@@ -197,7 +226,8 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) } }
                     .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
             }
-            reload()
+            reloadNow()
+            matchAfterCrawl()
         }
     }
 
@@ -213,14 +243,24 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         viewModelScope.launch { match(force) }
     }
 
-    private suspend fun match(force: Boolean) {
+    /**
+     * With [quiet], a run nobody asked for says nothing when it found nothing
+     * to do.
+     */
+    private suspend fun match(force: Boolean, quiet: Boolean = false) {
         busy("Looking up titles…") {
             runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().matchTitles(force) } }
-                .onSuccess { summary -> mutableState.update { it.copy(message = describe(summary)) } }
+                .onSuccess { summary ->
+                    if (!quiet || !summary.isEmpty()) {
+                        mutableState.update { it.copy(message = describe(summary)) }
+                    }
+                }
                 .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
         }
         reloadNow()
     }
+
+    private fun MatchSummary.isEmpty() = matched == 0u && unmatched == 0u && failed == 0u && episodes == 0u
 
     /**
      * Add a link, and return why it was refused, if it was.
@@ -261,7 +301,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             mutableState.update { it.copy(message = failed.joinToString("\n")) }
             return
         }
-        if (mutableState.value.metadataSettings.enabled) match(force = false)
+        matchAfterCrawl()
         if (announce) {
             val added = (mutableState.value.titles.map { it.key }.toSet() - before).size
             mutableState.update { it.copy(message = if (added == 1) "1 title added" else "$added titles added") }
@@ -305,7 +345,8 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                     engine.crawl(id)
                 }
             }.onFailure(::reportError)
-            reload()
+            reloadNow()
+            matchAfterCrawl()
         }
     }
 

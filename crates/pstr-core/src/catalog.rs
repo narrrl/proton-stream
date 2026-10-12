@@ -254,6 +254,16 @@ fn title_track_prefs_row(
 /// What `season = -1` means in `episode_metadata`: no season at all.
 const ABSOLUTE_SEASON: i64 = -1;
 
+/// How long after an episode airs its guide keeps being asked about daily
+/// while the provider has no name for it.
+///
+/// A guide is otherwise trusted as long as a match, a month, and one fetched
+/// the week before an episode aired lists it unnamed — "Episode 2" with a
+/// date — until the month is up. A name usually follows the air date by a day
+/// or so; one that has not come in two weeks is not coming, and asking every
+/// day for the rest of time would not change that.
+const GUIDE_WAIT_DAYS: i64 = 14;
+
 /// One catalog row: a file or folder inside a share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogNode {
@@ -513,6 +523,17 @@ impl Catalog {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Every share the catalog holds files for. One no longer configured was
+    /// forgotten without [`Catalog::remove_share`] — by an older `pstr remove`
+    /// — and its rows still show up in the library beside whatever replaced it.
+    pub fn share_ids(&self) -> Result<Vec<String>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT DISTINCT share_id FROM nodes ORDER BY share_id")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Drop everything a share contributed except where it was watched.
     ///
     /// Watch state stays, as through a recrawl. It is history, and not only
@@ -521,8 +542,34 @@ impl Catalog {
     /// only make it flicker. Nothing shows it — the library pairs positions
     /// with files, and the files are gone — until the share is added again,
     /// when it picks up where it left off.
+    ///
+    /// It is also copied, newer wins as in a merge, onto every other share that
+    /// holds the same file. A public link swapped for the account's own folder
+    /// reaches the very same links under a new share id, and without the copy
+    /// the swap reads as a library nobody has watched.
     pub fn remove_share(&mut self, share_id: &str) -> Result<()> {
         let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO watch_state (share_id, link_id, position_secs, duration_secs, watched, updated_at)
+             SELECT other.share_id, w.link_id, w.position_secs, w.duration_secs, w.watched, w.updated_at
+             FROM watch_state w
+             JOIN nodes own ON own.share_id = w.share_id AND own.link_id = w.link_id
+             JOIN nodes other ON other.volume_id = own.volume_id
+                             AND other.link_id = own.link_id
+                             AND other.share_id <> own.share_id
+             WHERE w.share_id = ?1
+             ON CONFLICT (share_id, link_id) DO UPDATE SET
+                 position_secs = excluded.position_secs,
+                 duration_secs = excluded.duration_secs,
+                 watched       = excluded.watched,
+                 updated_at    = excluded.updated_at
+             WHERE excluded.updated_at > watch_state.updated_at
+                OR (excluded.updated_at = watch_state.updated_at
+                    AND (excluded.watched > watch_state.watched
+                         OR (excluded.watched = watch_state.watched
+                             AND excluded.position_secs > watch_state.position_secs)))",
+            params![share_id],
+        )?;
         tx.execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
         tx.execute(
             "DELETE FROM offline_files WHERE share_id = ?1",
@@ -1030,14 +1077,27 @@ impl Catalog {
     }
 
     /// When each matched title was last enriched, for the provider it is
-    /// matched against. A title missing here has never been, or its match has
-    /// changed since.
+    /// matched against. A title missing here has never been, its match has
+    /// changed since, or its guide is waiting on the name of an episode that
+    /// has aired since — see `GUIDE_WAIT_DAYS`.
     pub fn enrichment_ages(&self) -> Result<HashMap<String, (ProviderId, i64)>> {
+        self.enrichment_ages_at(unix_now())
+    }
+
+    fn enrichment_ages_at(&self, now: i64) -> Result<HashMap<String, (ProviderId, i64)>> {
         let mut statement = self.conn.prepare(
-            "SELECT title_key, provider, enriched_at FROM title_metadata
-             WHERE enriched_at IS NOT NULL",
+            "SELECT title_key, provider, enriched_at FROM title_metadata t
+             WHERE enriched_at IS NOT NULL
+               AND NOT (enriched_at < ?1 - 86400
+                        AND EXISTS (
+                            SELECT 1 FROM episode_metadata e
+                            WHERE e.title_key = t.title_key
+                              AND e.name IS NULL
+                              AND e.air_date <= date(?1, 'unixepoch')
+                              AND e.air_date >= date(t.enriched_at, 'unixepoch',
+                                                     '-' || ?2 || ' days')))",
         )?;
-        let rows = statement.query_map([], |row| {
+        let rows = statement.query_map(params![now, GUIDE_WAIT_DAYS], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1050,6 +1110,36 @@ impl Catalog {
             let (title_key, provider, enriched_at) = row?;
             if let Some(provider) = ProviderId::parse(&provider) {
                 ages.insert(title_key, (provider, enriched_at));
+            }
+        }
+        drop(statement);
+
+        // A file that arrived after the guide was fetched, and that the guide
+        // has no name for, is an episode the guide predates: the next one of a
+        // running show. Asked again once — the refetch is newer than the file,
+        // so a name the provider never gives does not make it ask forever.
+        if !ages.is_empty() {
+            let first_seen = self.first_seen()?;
+            let guides = self.all_episode_metadata()?;
+            for node in self.all_files()? {
+                let Some(number) = node.parsed.episode else {
+                    continue;
+                };
+                let key = crate::library::title_key(&node.parsed.title);
+                let Some((_, enriched_at)) = ages.get(&key) else {
+                    continue;
+                };
+                let seen = first_seen
+                    .get(&(node.share_id, node.link_id))
+                    .copied()
+                    .unwrap_or(0);
+                let named = guides
+                    .get(&key)
+                    .and_then(|guide| guide.get(node.parsed.season, number))
+                    .is_some_and(|episode| episode.name.is_some());
+                if seen > *enriched_at && !named {
+                    ages.remove(&key);
+                }
             }
         }
         Ok(ages)
@@ -1844,6 +1934,129 @@ mod tests {
         assert!(catalog.enrichment_ages().expect("ages").is_empty());
     }
 
+    #[test]
+    fn a_file_newer_than_its_guide_that_the_guide_cannot_name_asks_for_the_guide_again() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .set_metadata(&MetadataRecord {
+                title_key: "kusuriya".into(),
+                provider: ProviderId::AniList,
+                metadata: Some(found()),
+                fetched_at: 1_000,
+                manual: false,
+            })
+            .expect("store");
+        let enrichment = Enrichment {
+            episodes: vec![EpisodeMetadata {
+                season: Some(3),
+                number: 1,
+                absolute: None,
+                entry_season: None,
+                entry_number: None,
+                name: Some("Locusts".into()),
+                overview: None,
+                still_url: None,
+                air_date: None,
+            }],
+            backdrop_url: None,
+            chain: Vec::new(),
+        };
+        catalog
+            .set_enrichment("kusuriya", ProviderId::AniList, 1_000, &enrichment)
+            .expect("enrich");
+        let trusted = |catalog: &Catalog| {
+            catalog
+                .enrichment_ages()
+                .expect("ages")
+                .contains_key("kusuriya")
+        };
+
+        // Newer than the guide, but the guide names it.
+        let first = file("s", "e1", "Kusuriya S03E01.mkv");
+        catalog
+            .replace_share("s", std::slice::from_ref(&first))
+            .expect("crawl");
+        assert!(trusted(&catalog));
+
+        // The next episode, which the guide does not know yet.
+        catalog
+            .replace_share("s", &[first, file("s", "e2", "Kusuriya S03E02.mkv")])
+            .expect("crawl again");
+        assert!(!trusted(&catalog));
+
+        // Fetched again since, still without it: not asked about again.
+        catalog
+            .set_enrichment("kusuriya", ProviderId::AniList, unix_now() + 1, &enrichment)
+            .expect("enrich again");
+        assert!(trusted(&catalog));
+    }
+
+    #[test]
+    fn a_guide_fetched_before_an_episode_had_a_name_is_asked_again_once_it_airs() {
+        const DAY: i64 = 86_400;
+        // 2026-10-04, when the guide was fetched; episode 2 airs on the 9th.
+        let fetched = 1_791_072_000;
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .set_metadata(&MetadataRecord {
+                title_key: "kusuriya".into(),
+                provider: ProviderId::AniList,
+                metadata: Some(found()),
+                fetched_at: fetched,
+                manual: false,
+            })
+            .expect("store");
+        let episode = |number: u32, name: Option<&str>, air_date: &str| EpisodeMetadata {
+            season: Some(3),
+            number,
+            absolute: None,
+            entry_season: Some(1),
+            entry_number: Some(number),
+            name: name.map(str::to_owned),
+            overview: None,
+            still_url: None,
+            air_date: Some(air_date.into()),
+        };
+        let enrichment = Enrichment {
+            episodes: vec![
+                episode(1, Some("Locusts"), "2026-10-02"),
+                episode(2, None, "2026-10-09"),
+            ],
+            backdrop_url: None,
+            chain: Vec::new(),
+        };
+        catalog
+            .set_enrichment("kusuriya", ProviderId::AniList, fetched, &enrichment)
+            .expect("enrich");
+        let trusted = |catalog: &Catalog, now: i64| {
+            catalog
+                .enrichment_ages_at(now)
+                .expect("ages")
+                .contains_key("kusuriya")
+        };
+
+        // Before episode 2 airs, a nameless future episode is no reason.
+        assert!(trusted(&catalog, fetched + 4 * DAY));
+        // Once it has aired, the guide is asked again.
+        assert!(!trusted(&catalog, fetched + 8 * DAY));
+
+        // Asked on the 12th and still nameless: not again the same day…
+        let refetched = fetched + 8 * DAY;
+        catalog
+            .set_enrichment("kusuriya", ProviderId::AniList, refetched, &enrichment)
+            .expect("enrich again");
+        assert!(trusted(&catalog, refetched + DAY / 2));
+        // …but the next.
+        assert!(!trusted(&catalog, refetched + DAY + 1));
+
+        // Two weeks past the air date it is given up on.
+        let given_up = fetched + 21 * DAY;
+        catalog
+            .set_enrichment("kusuriya", ProviderId::AniList, given_up, &enrichment)
+            .expect("enrich late");
+        assert!(trusted(&catalog, given_up + 2 * DAY));
+    }
+
     /// Details round-trip, and refreshing a match's details — the same entry
     /// stored again — keeps what enrichment found for it.
     #[test]
@@ -2458,6 +2671,66 @@ mod tests {
             &catalog.all_watch_states().expect("watch"),
         );
         assert_eq!(library.titles[0].seasons[0].episodes[0].watch, Some(state));
+    }
+
+    #[test]
+    fn removing_a_share_hands_its_watch_state_to_another_share_holding_the_same_file() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let at = |position_secs: f64, updated_at: i64| WatchState {
+            position_secs,
+            duration_secs: Some(1440.0),
+            watched: false,
+            updated_at,
+        };
+        catalog
+            .replace_share(
+                "link",
+                &[
+                    file("link", "a", "Show S01E01.mkv"),
+                    file("link", "b", "Show S01E02.mkv"),
+                    file("link", "gone", "Show S01E03.mkv"),
+                ],
+            )
+            .expect("crawl the link");
+        catalog
+            .replace_share(
+                "folder",
+                &[
+                    file("folder", "a", "Show S01E01.mkv"),
+                    file("folder", "b", "Show S01E02.mkv"),
+                ],
+            )
+            .expect("crawl the folder");
+        catalog
+            .set_watch_state("link", "a", &at(100.0, 10))
+            .unwrap();
+        catalog
+            .set_watch_state("link", "b", &at(100.0, 10))
+            .unwrap();
+        catalog
+            .set_watch_state("link", "gone", &at(100.0, 10))
+            .unwrap();
+        // Watched through the folder since: the link's older position must
+        // not overwrite it.
+        catalog
+            .set_watch_state("folder", "b", &at(900.0, 20))
+            .unwrap();
+
+        catalog.remove_share("link").expect("remove");
+
+        assert_eq!(
+            catalog.watch_state("folder", "a").unwrap(),
+            Some(at(100.0, 10))
+        );
+        assert_eq!(
+            catalog.watch_state("folder", "b").unwrap(),
+            Some(at(900.0, 20))
+        );
+        assert_eq!(catalog.watch_state("folder", "gone").unwrap(), None);
+        assert_eq!(
+            catalog.watch_state("link", "a").unwrap(),
+            Some(at(100.0, 10))
+        );
     }
 
     #[test]

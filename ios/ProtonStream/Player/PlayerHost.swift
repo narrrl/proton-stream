@@ -77,6 +77,10 @@ final class PlayerHost {
     private(set) var chapters = ChapterPlan(entries: [], creditsStart: nil)
     /// What stopped this episode, until the viewer dismisses it.
     var playbackError: String?
+    /// The stream is being opened: the share session, the revision and its
+    /// block list, all before mpv has a byte. On an old iPad that is seconds
+    /// of a black screen unless something says so.
+    private(set) var opening = false
     /// Read once per episode: a preference the viewer changes mid-episode
     /// applies to the next one.
     private(set) var autoSkip = false
@@ -177,6 +181,7 @@ final class PlayerHost {
         index = 0
         minimized = false
         playbackError = nil
+        opening = false
         chapters = ChapterPlan(entries: [], creditsStart: nil)
         OrientationLock.set(false)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -210,6 +215,7 @@ final class PlayerHost {
             return
         }
         try? AVAudioSession.sharedInstance().setActive(true)
+        opening = true
         loadTask = Task {
             do {
                 try await session.open()
@@ -244,6 +250,8 @@ final class PlayerHost {
                     hardwareDecoding: SettingsStore().hardwareDecoding
                 )
                 guard loaded else { throw PlaybackFailure("libmpv rejected the stream") }
+                // mpv's own buffering takes over the spinner from here.
+                opening = false
                 session.transferToPlayer()
                 // After the load, because mpv keeps none of the three across one.
                 player.setVolume(global.volume)
@@ -256,6 +264,7 @@ final class PlayerHost {
                     abandon(session)
                     return
                 }
+                opening = false
                 playbackError = errorMessage(error)
             }
         }

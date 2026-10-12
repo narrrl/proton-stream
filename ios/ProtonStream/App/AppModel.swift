@@ -64,6 +64,9 @@ final class AppModel {
     @ObservationIgnored private var started = false
     /// Launch and the first `.active` both ask; one crawl answers.
     @ObservationIgnored private var catchingUp = false
+    /// Every banner line whose work is still running, oldest first.
+    @ObservationIgnored private var activities: [(token: Int, line: String)] = []
+    @ObservationIgnored private var nextActivity = 0
 
     /// Five minutes, as on Android: cheap when nothing changed — one folder
     /// listing, and no upload.
@@ -142,7 +145,19 @@ final class AppModel {
                 message = errorMessage(error)
             }
         }
-        reload()
+        await reloadNow()
+        // Not awaited: pull to refresh lets go once the crawl is in, and the
+        // banner carries the lookup.
+        Task { await matchAfterCrawl() }
+    }
+
+    /// Look up whatever a crawl brought that has no answer yet: a new show, or
+    /// a new episode its stored guide cannot name. When everything already
+    /// has one the bridge asks nothing, so this is cheap after every crawl.
+    private func matchAfterCrawl() async {
+        if metadataSettings.enabled, metadataSettings.ready {
+            await match(force: false, quiet: true)
+        }
     }
 
     /// Run enrichment again. With `force` every title is looked up afresh,
@@ -151,11 +166,16 @@ final class AppModel {
         Task { await match(force: force) }
     }
 
-    private func match(force: Bool) async {
+    /// With `quiet`, a run nobody asked for says nothing when it found
+    /// nothing to do.
+    private func match(force: Bool, quiet: Bool = false) async {
         await busy("Looking up titles…") {
             do {
                 let summary = try await NativeRuntime.engine().matchTitles(force: force)
-                message = Self.describe(summary)
+                let found = summary.matched + summary.unmatched + summary.failed + summary.episodes > 0
+                if !quiet || found {
+                    message = Self.describe(summary)
+                }
             } catch {
                 message = errorMessage(error)
             }
@@ -163,15 +183,25 @@ final class AppModel {
         reload()
     }
 
-    /// Say `what` in the activity banner while `work` runs. Nested work keeps
-    /// the outer line once the inner one is done.
+    /// Say `what` in the activity banner while `work` runs.
+    ///
+    /// The banner shows the newest line still running. Work overlaps — a sync
+    /// starts during a crawl and ends after it — so each line is removed by
+    /// itself rather than by putting back whatever was showing before, which
+    /// once brought back a finished crawl's line and spun it forever.
     private func busy(_ what: String, _ work: () async -> Void) async {
-        let outer = activity
-        activity = what
-        refreshing = true
+        let token = nextActivity
+        nextActivity += 1
+        activities.append((token, what))
+        showActivity()
         await work()
-        activity = outer
-        refreshing = outer != nil
+        activities.removeAll { $0.token == token }
+        showActivity()
+    }
+
+    private func showActivity() {
+        activity = activities.last?.line
+        refreshing = activity != nil
     }
 
     // MARK: - Shares
@@ -216,9 +246,7 @@ final class AppModel {
             message = failed.joined(separator: "\n")
             return
         }
-        if metadataSettings.enabled {
-            await match(force: false)
-        }
+        await matchAfterCrawl()
         if announce {
             let added = Set(titles.map(\.key)).subtracting(before).count
             message = added == 1 ? "1 title added" : "\(added) titles added"
@@ -230,34 +258,41 @@ final class AppModel {
     /// offline files alone.
     func repairShare(id: String, url: String, password: String?) {
         Task {
-            do {
-                let password = password.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
-                _ = try await run { try $0.repairShare(shareId: id, url: url, customPassword: password) }
-                try await NativeRuntime.engine().crawl(shareId: id)
-            } catch {
-                reportError(error)
+            let name = shares.first { $0.id == id }?.name ?? "the share"
+            await busy("Reading \(name) again…") {
+                do {
+                    let password = password.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+                    _ = try await run { try $0.repairShare(shareId: id, url: url, customPassword: password) }
+                    try await NativeRuntime.engine().crawl(shareId: id)
+                } catch {
+                    reportError(error)
+                }
+                await reloadNow()
             }
-            reload()
+            await matchAfterCrawl()
         }
     }
 
     func removeShare(_ id: String) {
         Task {
-            do {
-                // Wait for the transfers to stop before Rust removes catalog
-                // and files. Rust also rejects any late publication.
-                await DownloadCoordinator.shared.cancelShare(id)
-                let store = DownloadStateStore.shared
-                let engine = try await NativeRuntime.engine()
-                for download in store.records() where download.shareId == id {
-                    try await engine.removeOfflineEpisode(shareId: download.shareId, linkId: download.linkId)
+            let name = shares.first { $0.id == id }?.name ?? "the share"
+            await busy("Removing \(name)…") {
+                do {
+                    // Wait for the transfers to stop before Rust removes catalog
+                    // and files. Rust also rejects any late publication.
+                    await DownloadCoordinator.shared.cancelShare(id)
+                    let store = DownloadStateStore.shared
+                    let engine = try await NativeRuntime.engine()
+                    for download in store.records() where download.shareId == id {
+                        try await engine.removeOfflineEpisode(shareId: download.shareId, linkId: download.linkId)
+                    }
+                    store.removeShare(id)
+                    try await run { try $0.removeShare(shareId: id) }
+                } catch {
+                    message = errorMessage(error)
                 }
-                store.removeShare(id)
-                try await run { try $0.removeShare(shareId: id) }
-            } catch {
-                message = errorMessage(error)
+                await reloadNow()
             }
-            reload()
         }
     }
 
@@ -326,13 +361,15 @@ final class AppModel {
 
     func signOut() {
         Task {
-            do {
-                try await NativeRuntime.engine().signOut()
-            } catch {
-                reportError(error)
+            await busy("Signing out…") {
+                do {
+                    try await NativeRuntime.engine().signOut()
+                } catch {
+                    reportError(error)
+                }
+                account = AccountUiState(state: .signedOut)
+                await reloadNow()
             }
-            account = AccountUiState(state: .signedOut)
-            reload()
         }
     }
 
@@ -441,6 +478,7 @@ final class AppModel {
     /// title's positions are what this throws away, and a mis-tap on a tile's
     /// menu should not cost them.
     func setTitleWatched(_ title: TitleRecord, _ watched: Bool) {
+        showWatched(title.playlist, watched)
         changeWatch(title.playlist, "\(title.displayName) marked \(watched ? "watched" : "unwatched")") { engine, episode, before in
             let duration = before?.durationSecs
             try engine.saveWatchState(
@@ -571,12 +609,14 @@ final class AppModel {
 
     func removeOffline(_ file: OfflineRecord) {
         Task {
-            do {
-                try await NativeRuntime.engine().removeOfflineEpisode(shareId: file.shareId, linkId: file.linkId)
-            } catch {
-                message = errorMessage(error)
+            await busy("Deleting the download…") {
+                do {
+                    try await NativeRuntime.engine().removeOfflineEpisode(shareId: file.shareId, linkId: file.linkId)
+                } catch {
+                    message = errorMessage(error)
+                }
+                await reloadNow()
             }
-            reload()
         }
     }
 
@@ -599,14 +639,16 @@ final class AppModel {
 
     func removeAllOffline() {
         Task {
-            await DownloadCoordinator.shared.cancelAll()
-            do {
-                try await NativeRuntime.engine().removeAllOffline()
-                DownloadStateStore.shared.clear()
-            } catch {
-                reportError(error)
+            await busy("Deleting every download…") {
+                await DownloadCoordinator.shared.cancelAll()
+                do {
+                    try await NativeRuntime.engine().removeAllOffline()
+                    DownloadStateStore.shared.clear()
+                } catch {
+                    reportError(error)
+                }
+                await reloadNow()
             }
-            reload()
         }
     }
 
@@ -651,6 +693,7 @@ final class AppModel {
     /// the position at its duration where one is known, so the progress bar
     /// agrees with the tick.
     func setWatched(_ episode: EpisodeRecord, _ watched: Bool) {
+        showWatched([episode], watched)
         Task {
             do {
                 try await run { engine in
@@ -667,6 +710,34 @@ final class AppModel {
                 reportError(error)
             }
             reload()
+        }
+    }
+
+    /// Draw a watched mark the moment it is tapped, before the bridge has
+    /// stored it. The reload that shows the stored state is a second away on
+    /// an old iPad, and a tick that does not appear gets tapped again. That
+    /// reload still follows, and puts back whatever was really stored.
+    private func showWatched(_ targets: [EpisodeRecord], _ watched: Bool) {
+        let keys = Set(targets.map { "\($0.shareId)/\($0.linkId)" })
+        titles = titles.map { title in
+            guard title.playlist.contains(where: { keys.contains("\($0.shareId)/\($0.linkId)") }) else { return title }
+            var title = title
+            title.seasons = title.seasons.map { season in
+                var season = season
+                season.episodes = season.episodes.map { episode in
+                    guard keys.contains("\(episode.shareId)/\(episode.linkId)") else { return episode }
+                    var episode = episode
+                    episode.watched = watched
+                    if !watched {
+                        episode.progress = nil
+                        episode.resumeAt = nil
+                    }
+                    return episode
+                }
+                return season
+            }
+            title.watchedCount = UInt64(title.playlist.filter(\.watched).count)
+            return title
         }
     }
 

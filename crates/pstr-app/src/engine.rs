@@ -224,6 +224,8 @@ pub enum Event {
         unmatched: usize,
         failed: usize,
     },
+    /// A matching run has work to do — one asked for, or one after a crawl.
+    MatchStarted,
     /// Every requested match is done.
     MatchFinished,
     /// What the provider answered a hand search with, unscored and in its own
@@ -998,6 +1000,35 @@ impl Engine {
         });
     }
 
+    /// Forget every share the catalog holds files for that the share list no
+    /// longer names — what an older `pstr remove` left behind. Its files would
+    /// otherwise sit in the library beside whatever replaced it, every episode
+    /// twice.
+    pub fn forget_orphaned_shares(&self) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let configured = match engine.store.list() {
+                Ok(shares) => shares,
+                Err(error) => return engine.fail("read the share list", error),
+            };
+            let orphans: Vec<String> = match engine.catalog.lock().share_ids() {
+                Ok(ids) => ids
+                    .into_iter()
+                    .filter(|id| !configured.iter().any(|share| &share.id == id))
+                    .collect(),
+                Err(error) => return engine.fail("read the catalog", error),
+            };
+            if orphans.is_empty() {
+                return;
+            }
+            for id in orphans {
+                tracing::info!(share = %id, "forgetting the catalog rows of a removed share");
+                engine.forget_share(id, false).await;
+            }
+            engine.load_library();
+        });
+    }
+
     /// Stop a share's downloads and delete its files and catalog rows, and,
     /// when it is still `configured` — not already removed by sync — its
     /// entry and secrets.
@@ -1271,6 +1302,32 @@ impl Engine {
         )
         .await;
         self.emit(Event::CrawlFinished);
+        self.match_after_crawl().await;
+    }
+
+    /// Look up whatever the crawl brought that has no answer yet — a new show,
+    /// or a new episode the stored guide cannot name. Silent when there is
+    /// nothing to ask, which is almost every time: `plan` makes no requests for
+    /// a library that is already matched.
+    async fn match_after_crawl(&self) {
+        if !self.metadata_config().enabled {
+            return;
+        }
+        let titles = {
+            let catalog = self.catalog.lock();
+            match catalog
+                .all_files()
+                .and_then(|files| Ok(Library::build(files, &catalog.all_watch_states()?)))
+            {
+                Ok(library) => library.titles,
+                Err(error) => return self.fail("read the catalog", error),
+            }
+        };
+        if titles.is_empty() {
+            return;
+        }
+        self.run_match(titles, false, true).await;
+        self.emit(Event::MatchFinished);
     }
 
     /// Stop every crawl still listing. Shares already past their listing
@@ -2306,13 +2363,18 @@ impl Engine {
     pub fn match_titles(&self, titles: Vec<Title>, force: bool) {
         let engine = self.clone();
         self.runtime.spawn(async move {
-            engine.run_match(titles, force).await;
+            engine.run_match(titles, force, false).await;
             engine.emit(Event::MatchFinished);
         });
     }
 
-    async fn run_match(&self, titles: Vec<Title>, force: bool) {
+    /// `automatic` is a run nobody asked for, after a crawl: it says nothing
+    /// when there is nothing to do, or no provider to do it with.
+    async fn run_match(&self, titles: Vec<Title>, force: bool, automatic: bool) {
         let Some(service) = self.metadata_service().await else {
+            if automatic {
+                return;
+            }
             return self.emit(Event::Error(self.no_service_reason()));
         };
         let provider = service.provider();
@@ -2337,8 +2399,12 @@ impl Engine {
             force,
         );
         if pending.is_empty() {
+            if automatic {
+                return;
+            }
             return self.emit(Event::Status("everything is already matched".into()));
         }
+        self.emit(Event::MatchStarted);
         self.emit(Event::Status(format!(
             "matching {} titles against {}…",
             pending.len(),

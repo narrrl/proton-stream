@@ -377,6 +377,24 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
 
         Command::Remove { id } => {
             store.remove(&id).context("remove share")?;
+            // Its catalog rows go too, or the library keeps listing its files —
+            // beside the new share's, when the same folder was added back
+            // another way.
+            let mut catalog = Catalog::open(&dirs.catalog_db()).context("open catalog")?;
+            let offline = catalog
+                .offline_files_for_share(&id)
+                .context("read the share's downloads")?;
+            for (link_id, file) in &offline {
+                match std::fs::remove_file(dirs.offline_file(&id, link_id, &file.revision_id)) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error).context("delete a downloaded file");
+                    }
+                    _ => {}
+                }
+            }
+            catalog
+                .remove_share(&id)
+                .context("drop the share's catalog rows")?;
             println!("removed {id}");
         }
 

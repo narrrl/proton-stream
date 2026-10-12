@@ -79,6 +79,11 @@ Each of these is the platform's doing, not a choice to diverge.
   place of Android's `WatchSyncWorker`, and every five minutes while it is open.
 - **Background audio off pauses** the episode when the app leaves the screen, where
   Android stops it.
+- **Presses are drawn by hand.** Compose's ripple shows every press; SwiftUI's
+  `.plain` button style and `onTapGesture` show none, which on a slow iPad reads as
+  a tap that missed. `PressableStyle` and `tapAndHold` (`UI/Theme/Accent.swift`)
+  stand in for the ripple, and a settings page goes back by an edge strip of its
+  own, as a title page does, where Android has the system back.
 - **Nothing is backed up**, as on Android (`allowBackup="false"`). The share
   secrets are this-device-only Keychain items, so a restored share list would
   arrive without them, and a restored `sync.json` would give two devices one sync

@@ -55,6 +55,9 @@ struct LibraryView: View {
     @State private var menuFor: TitleRecord?
     @State private var menuResume: Resumable?
     @State private var matching: TitleRecord?
+    /// "Change match" picked in the tile menu, waiting for that menu to finish
+    /// leaving: a sheet presented while another is still dismissing is dropped.
+    @State private var pendingMatch: TitleRecord?
     // Search is an icon until it is wanted: a permanent field above the
     // library spent a band of every visit on something used in few of them.
     @SceneStorage("library.searching") private var searching = false
@@ -90,7 +93,15 @@ struct LibraryView: View {
             content(resumable)
         }
         .background(scheme.background)
-        .sheet(item: $menuFor) { title in
+        .sheet(item: $menuFor, onDismiss: {
+            // After the dismissal rather than a guessed delay: on a slow iPad
+            // the menu was still leaving after 350 ms, the search sheet was
+            // dropped, and it turned up later on some unrelated redraw.
+            if let title = pendingMatch {
+                pendingMatch = nil
+                matching = title
+            }
+        }) { title in
             let playlist = title.playlist
             let allWatched = title.episodeCount > 0 && title.watchedCount == title.episodeCount
             TileMenu(heading: title.displayName, caption: title.caption) {
@@ -104,12 +115,7 @@ struct LibraryView: View {
                 }
                 // The same search the title page offers, for the tile that is
                 // plainly wrong — the wrong poster is what the grid shows.
-                MenuRow("pencil", "Change match") {
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(350))
-                        matching = title
-                    }
-                }
+                MenuRow("pencil", "Change match") { pendingMatch = title }
             }
         }
         .sheet(item: $menuResume) { entry in
@@ -183,8 +189,9 @@ struct LibraryView: View {
                             LazyHStack(alignment: .top, spacing: 12) {
                                 ForEach(resumable) { entry in
                                     ContinueCard(entry: entry)
-                                        .onTapGesture { onResume(entry.title, entry.index) }
-                                        .onLongPressGesture { longPressed { menuResume = entry } }
+                                        .tapAndHold { onResume(entry.title, entry.index) } onHold: {
+                                            longPressed { menuResume = entry }
+                                        }
                                 }
                             }
                         }
@@ -199,8 +206,7 @@ struct LibraryView: View {
                                     ForEach(shelf.titles, id: \.key) { title in
                                         PosterTile(title: title)
                                             .frame(width: 112)
-                                            .onTapGesture { onTitle(title) }
-                                            .onLongPressGesture { longPressed { menuFor = title } }
+                                            .tapAndHold { onTitle(title) } onHold: { longPressed { menuFor = title } }
                                     }
                                 }
                             }
@@ -214,8 +220,7 @@ struct LibraryView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 12, alignment: .top)], spacing: 16) {
                     ForEach(tiles) { tile in
                         PosterTile(title: tile.title, folded: tile.folded)
-                            .onTapGesture { onTitle(tile.title) }
-                            .onLongPressGesture { longPressed { menuFor = tile.title } }
+                            .tapAndHold { onTitle(tile.title) } onHold: { longPressed { menuFor = tile.title } }
                     }
                 }
             }
@@ -357,7 +362,7 @@ struct MenuRow: View {
         } label: {
             ListRow(icon: icon, headline: label)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .padding(.horizontal, 8)
     }
 }

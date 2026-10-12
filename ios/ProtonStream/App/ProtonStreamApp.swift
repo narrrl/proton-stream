@@ -262,7 +262,7 @@ private struct NavigationBar: View {
                     .padding(.bottom, 6)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable)
                 .accessibilityLabel(item.label)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
@@ -295,7 +295,7 @@ private struct NavigationRail: View {
                     .frame(width: 80)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable)
                 .accessibilityLabel(item.label)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
@@ -350,7 +350,7 @@ private struct Snackbar: View {
                     Button("Undo", action: model.performUndo)
                         .textStyle(.labelLarge)
                         .foregroundStyle(scheme.inversePrimary)
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressable)
                         .padding(.horizontal, 8)
                 }
             }

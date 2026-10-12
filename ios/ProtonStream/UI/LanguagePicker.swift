@@ -57,7 +57,7 @@ struct LanguageSetting: View {
         Button { choosing = true } label: {
             ListRow(headline: headline, supporting: languageLabel(value))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .sheet(isPresented: $choosing) {
             LanguageSheet(headline: headline, value: value) { tag in
                 choosing = false
@@ -114,7 +114,7 @@ private struct LanguageSheet: View {
             .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

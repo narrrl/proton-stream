@@ -51,7 +51,7 @@ struct SharesView: View {
                         .background(scheme.primary, in: RoundedRectangle(cornerRadius: 16))
                         .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable)
                 .padding(16)
             }
         }

@@ -259,7 +259,12 @@ final class ArtworkLoader: @unchecked Sendable {
               // A redirect must not leave HTTPS.
               http.url?.scheme?.lowercased() == "https"
         else { return nil }
-        var bytes = Data()
+        // Refused before reading when the server says up front it is too big.
+        if response.expectedContentLength > Int64(Self.maxBytes) { return nil }
+        // An array sized once, not a `Data` grown a byte at a time: on an old
+        // iPad, a screen of posters read that way was seconds of CPU.
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(Int(min(max(response.expectedContentLength, 0), Int64(Self.maxBytes))))
         do {
             for try await byte in stream {
                 bytes.append(byte)
@@ -268,7 +273,7 @@ final class ArtworkLoader: @unchecked Sendable {
         } catch {
             return nil
         }
-        return bytes
+        return Data(bytes)
     }
 
     /// Decode within a bound the display can actually use: the compressed size

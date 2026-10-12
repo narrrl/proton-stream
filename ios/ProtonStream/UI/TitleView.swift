@@ -35,7 +35,9 @@ struct TitleView: View {
         self.franchise = franchise
         self.onOpenTitle = onOpenTitle
         // One season on screen at a time, opened on the one Play would land in.
-        let upNext = title.playlist.indices.contains(nextUpIndex(title.playlist)) ? title.playlist[nextUpIndex(title.playlist)] : nil
+        let playlist = title.playlist
+        let nextUp = nextUpIndex(playlist)
+        let upNext = playlist.indices.contains(nextUp) ? playlist[nextUp] : nil
         _seasonIndex = State(initialValue: max(title.seasons.firstIndex { $0.episodes.contains { $0.linkId == upNext?.linkId } } ?? 0, 0))
     }
 
@@ -231,7 +233,7 @@ struct TitleView: View {
                 LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(franchise, id: \.key) { member in
                         FranchiseTile(title: member, here: member.key == title.key)
-                            .onTapGesture { if member.key != title.key { onOpenTitle(member) } }
+                            .tapAndHold { if member.key != title.key { onOpenTitle(member) } }
                     }
                 }
                 .padding(.horizontal, side + 16)
@@ -282,7 +284,7 @@ struct FilterChip: View {
                 if !selected { RoundedRectangle(cornerRadius: Corner.standard).strokeBorder(scheme.outlineVariant) }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }
 
@@ -341,7 +343,7 @@ private struct TitleAction: View {
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }
 
@@ -449,7 +451,7 @@ private struct EpisodeRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onPlay)
+        .tapAndHold(onPlay)
     }
 }
 
@@ -468,6 +470,7 @@ struct ChangeMatchSheet: View {
     /// Said here rather than in the snackbar, which this sheet covers.
     @State private var failure: String?
     @State private var searched = false
+    @State private var forgetting = false
 
     init(title: TitleRecord, onDone: @escaping () -> Void) {
         self.title = title
@@ -510,7 +513,9 @@ struct ChangeMatchSheet: View {
                 .disabled(choosing)
             }
         } buttons: {
-            Button("Forget match") {
+            Button(forgetting ? "Forgetting…" : "Forget match") {
+                forgetting = true
+                failure = nil
                 Task {
                     do {
                         try await model.run { try $0.forgetMatch(titleKey: title.key) }
@@ -518,9 +523,11 @@ struct ChangeMatchSheet: View {
                     } catch {
                         failure = errorMessage(error)
                     }
+                    forgetting = false
                 }
             }
             .buttonStyle(.quiet)
+            .disabled(forgetting || choosing)
             Button("Close", action: onDone).buttonStyle(.tonal)
         }
     }

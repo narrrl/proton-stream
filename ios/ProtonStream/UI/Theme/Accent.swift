@@ -67,6 +67,65 @@ extension ButtonStyle where Self == ProtonButtonStyle {
     static var quiet: ProtonButtonStyle { ProtonButtonStyle(kind: .quiet) }
 }
 
+/// A button with no chrome of its own — an icon, a row, a chip — that still
+/// shows it was pressed: a little smaller, with a wash behind it.
+///
+/// `.plain` shows nothing at all, and on a slow device, where what the press
+/// does can take a second to appear, a press that shows nothing reads as one
+/// that missed — and gets pressed again.
+struct PressableStyle: ButtonStyle {
+    var circle = false
+    /// The wash's colour; the scheme's text colour when nil. White over video.
+    var wash: Color?
+    @Environment(\.scheme) private var scheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+        let fill = (wash ?? scheme.onSurface).opacity(pressed ? 0.12 : 0)
+        configuration.label
+            .background {
+                if circle {
+                    Circle().fill(fill)
+                } else {
+                    RoundedRectangle(cornerRadius: Corner.standard).fill(fill)
+                }
+            }
+            .scaleEffect(pressed ? 0.96 : 1)
+            .animation(.easeOut(duration: 0.1), value: pressed)
+    }
+}
+
+extension ButtonStyle where Self == PressableStyle {
+    static var pressable: PressableStyle { PressableStyle() }
+    static var pressableIcon: PressableStyle { PressableStyle(circle: true) }
+}
+
+/// A tap and a long press on something that is not a button — a poster, a
+/// card, an episode row — showing the press the moment the finger lands, as
+/// `PressableStyle` does for a button.
+private struct TapAndHold: ViewModifier {
+    let onTap: () -> Void
+    let onHold: (() -> Void)?
+    @State private var pressed = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(pressed ? 0.96 : 1)
+            .opacity(pressed ? 0.8 : 1)
+            .animation(.easeOut(duration: 0.1), value: pressed)
+            .onTapGesture(perform: onTap)
+            .onLongPressGesture(perform: { onHold?() }, onPressingChanged: { pressed = $0 })
+    }
+}
+
+extension View {
+    /// `onTapGesture`, plus `onLongPressGesture` when `onHold` is given, with
+    /// the press drawn.
+    func tapAndHold(_ onTap: @escaping () -> Void, onHold: (() -> Void)? = nil) -> some View {
+        modifier(TapAndHold(onTap: onTap, onHold: onHold))
+    }
+}
+
 /// How far along something is, drawn in the accent.
 ///
 /// `solid` is for the one bar that is deliberately not the accent: a download in

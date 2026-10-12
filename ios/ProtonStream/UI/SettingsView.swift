@@ -42,6 +42,8 @@ struct SettingsView: View {
     @State private var prefs: PlaybackPrefsRecord?
     @State private var confirmDelete = false
     @State private var showMetadata = false
+    /// How far an edge swipe back has gone, 0 to 1.
+    @State private var backProgress: CGFloat = 0
     @State private var legalDocument: LegalDocument?
 
     var body: some View {
@@ -56,7 +58,7 @@ struct SettingsView: View {
                                 Button { page = entry } label: {
                                     ListRow(icon: entry.icon, headline: entry.title, supporting: subtitle(entry))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.pressable)
                             }
                         }
                     }
@@ -115,13 +117,27 @@ struct SettingsView: View {
                 .padding(.bottom, 24)
             }
         }
-        // Back by an edge swipe, as from a title page.
-        .gesture(
-            DragGesture(minimumDistance: 20)
-                .onEnded { drag in
-                    if drag.startLocation.x < 24, drag.translation.width > 80 { self.page = nil }
-                }
-        )
+        .scaleEffect(1 - 0.1 * backProgress)
+        .clipShape(RoundedRectangle(cornerRadius: 32 * backProgress))
+        // Back by an edge swipe, as from a title page — from a strip of its
+        // own, as there. On the whole page the swipe began on whichever row
+        // was under the edge, and lifting the finger pressed it: the way back
+        // from Metadata opened the enrichment sheet.
+        .overlay(alignment: .leading) {
+            Color.clear
+                .frame(width: 20)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { drag in backProgress = min(max(drag.translation.width / 300, 0), 1) }
+                        .onEnded { drag in
+                            if drag.translation.width > 100 || drag.predictedEndTranslation.width > 250 {
+                                self.page = nil
+                            }
+                            withAnimation(.spring) { backProgress = 0 }
+                        }
+                )
+        }
     }
 
     @ViewBuilder private var playback: some View {
@@ -268,7 +284,7 @@ private struct SettingAction: View {
 
     var body: some View {
         Button(action: action) { ListRow(headline: headline, supporting: supporting, enabled: enabled) }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
             .disabled(!enabled)
     }
 }

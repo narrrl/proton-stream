@@ -625,6 +625,7 @@ impl App {
         // that was crawled yesterday is on screen before the shares open.
         engine.load_shares();
         engine.load_library();
+        engine.forget_orphaned_shares();
         engine.load_metadata();
         engine.connect();
         let settings = engine.metadata_config();
@@ -819,6 +820,7 @@ impl App {
                     }
                     self.note(ctx, text, failed > 0);
                 }
+                Event::MatchStarted => self.matching = true,
                 Event::MatchFinished => self.matching = false,
                 // Both of these are addressed to a dialog, and the viewer may
                 // have closed it or opened another one while the request was

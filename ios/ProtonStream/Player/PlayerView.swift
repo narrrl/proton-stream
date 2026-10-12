@@ -73,10 +73,12 @@ struct PlayerView: View {
 
                 // Only while nothing else explains the still picture: an error
                 // is the more useful thing to say.
-                if player.stalled && host.playbackError == nil {
+                if (host.opening || player.stalled) && host.playbackError == nil {
                     VStack(spacing: 12) {
                         ProgressView().controlSize(.large).tint(scheme.primary)
-                        if player.buffering {
+                        if host.opening {
+                            Text("Opening…").textStyle(.labelMedium).foregroundStyle(scheme.onSurface)
+                        } else if player.buffering {
                             Text(player.cachePercent > 0 ? "Buffering… \(Int(player.cachePercent.rounded()))%" : "Buffering…")
                                 .textStyle(.labelMedium).foregroundStyle(scheme.onSurface)
                         }
@@ -295,7 +297,7 @@ private struct CompactIcon: View {
                 .frame(width: 40, height: 40)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle(circle: true, wash: .white))
         .disabled(!enabled)
         .accessibilityLabel(label)
     }
@@ -342,7 +344,7 @@ private struct UpNextCard: View {
                                 }
                                 .clipShape(RoundedRectangle(cornerRadius: Corner.standard))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableStyle(wash: .white))
                         .accessibilityLabel("Play now")
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Up next in \(remaining)s").textStyle(.labelMedium).foregroundStyle(scheme.onSurfaceVariant)
@@ -515,7 +517,7 @@ private struct EpisodeSheet: View {
             .background(current ? scheme.secondaryContainer : .clear)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }
 
