@@ -19,9 +19,11 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Binder
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import io.narl.protonstream.MainActivity
 import io.narl.protonstream.R
+import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.loadArtwork
 import io.narl.protonstream.ui.loadThumbnail
@@ -33,6 +35,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Owns libmpv so audio survives Activity recreation and rotation. */
@@ -81,6 +85,9 @@ class PlaybackService : Service() {
     private var notified: NotificationShape? = null
     /** The pending teardown, held so an episode transition can call it off. */
     private var retire: Job? = null
+    /** The open episode's latest reading, which [track] saves. */
+    private var lastReading: MpvPlaybackState? = null
+    private var lastSave = 0L
     /** The episode's artwork, and the source key it was fetched for. */
     private var artwork: Pair<String, Bitmap>? = null
     private val binder = PlaybackBinder()
@@ -115,7 +122,7 @@ class PlaybackService : Service() {
                 }
                 mediaSession.isActive = true
             }
-            onStateChanged = { updateSession(it) }
+            onStateChanged = { updateSession(it); track(it) }
             onExplicitStop = { retirePlayback() }
         }
         mediaSession = MediaSession(this, "proton-stream").apply {
@@ -162,6 +169,22 @@ class PlaybackService : Service() {
             ACTION_STOP -> host?.stop()
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Swiped away from Recents. With background audio on, this service would
+     * otherwise play on with no screen to return to and no autoplay, so it
+     * saves where the episode got to and stops.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        lastReading?.let { reading ->
+            // Bounded and on this thread: the process may go as soon as the
+            // service stops, and a save launched into its scope would go with it.
+            runBlocking { withTimeoutOrNull(SAVE_ON_EXIT_MS) { withContext(Dispatchers.IO) { save(reading) } } }
+        }
+        host?.stop()
+        retirePlayback()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
@@ -223,6 +246,52 @@ class PlaybackService : Service() {
             }.build()
         audioFocus = request
         return audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    /**
+     * Keep the resume position from here rather than from the player screen.
+     *
+     * This service outlives the activity whenever background audio is on, and a
+     * position the screen alone kept stopped being saved the moment the screen
+     * went. Readings are attributed by [MpvPlaybackState.media], so an episode
+     * change saves the outgoing episode's last reading before the new one's.
+     */
+    private fun track(state: MpvPlaybackState) {
+        val media = state.media ?: return
+        if (state.duration <= 0.0) return
+        val previous = lastReading
+        lastReading = state
+        val now = SystemClock.elapsedRealtime()
+        val due = when {
+            previous != null && previous.media != media -> {
+                scope.launch(Dispatchers.IO) { save(previous) }
+                true
+            }
+            state.ended -> previous?.ended != true
+            state.paused -> previous?.paused != true
+            else -> now - lastSave >= SAVE_EVERY_MS
+        }
+        if (due) {
+            lastSave = now
+            scope.launch(Dispatchers.IO) { save(state) }
+        }
+    }
+
+    private suspend fun save(state: MpvPlaybackState) {
+        val media = state.media ?: return
+        // Played to the end, or near enough that what is left is credits. A
+        // failure or a stop also "ends", and recording either as watched would
+        // retire an episode nobody saw.
+        val watched = state.endReason == EndReason.Eof || state.position >= state.duration * WATCHED_FRACTION
+        runCatching {
+            NativeRuntime.engine().saveWatchState(
+                media.substringBeforeLast(':'),
+                media.substringAfterLast(':'),
+                state.position.coerceIn(0.0, state.duration),
+                state.duration,
+                watched,
+            )
+        }
     }
 
     private fun updateSession(state: MpvPlaybackState) {
@@ -419,6 +488,9 @@ class PlaybackService : Service() {
         private const val TRANSITION_GRACE_MS = 30_000L
         /** How far the volume drops for a navigation prompt or a notification. */
         private const val DUCK_FACTOR = 0.3
+        private const val SAVE_EVERY_MS = 5_000L
+        /** How long a swipe from Recents may hold the main thread to save. */
+        private const val SAVE_ON_EXIT_MS = 2_000L
 
         /** Catppuccin Mocha mauve, the accent the app is themed with. */
         private const val ACCENT = 0xFFCBA6F7.toInt()

@@ -338,6 +338,18 @@ impl Playback {
         (end > self.position + 0.5).then_some((label, end))
     }
 
+    /// Whether the chapters say where the credits start. Most files that are
+    /// not anime have no chapters at all.
+    pub fn knows_credits(&self) -> bool {
+        self.credits_at.is_some()
+    }
+
+    /// Seconds of the file left to play, once its length is known.
+    pub fn remaining(&self) -> Option<f64> {
+        self.duration
+            .map(|duration| (duration - self.position).max(0.0))
+    }
+
     /// Whether the playhead is inside the run of credits and preview that ends
     /// the file — what "the episode is over" means when a file states its
     /// chapters.

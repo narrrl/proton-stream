@@ -262,6 +262,10 @@ pub struct UpNext {
     /// The viewer said to play this one out, or the countdown has already
     /// fired. Either way, do not ask again about this file.
     dismissed: bool,
+    /// The card is counting down the last seconds of a file with no credits
+    /// chapter, rather than the credits. Dismissing it then also means "do not
+    /// start the next one", since there are no credits to watch till the end.
+    tail: bool,
 }
 
 /// Which way to step through a title's files.
@@ -1110,9 +1114,20 @@ impl App {
             };
         }
 
+        // A file with no chapters has no credits to count over, so the card
+        // takes its last seconds instead: without it the next episode cut in
+        // with no warning and no way to stay. Not on a clip shorter than a
+        // few countdowns, where the card would cover most of it.
+        let tail = !playback.knows_credits()
+            && playback
+                .duration
+                .is_some_and(|duration| duration > UP_NEXT_SECONDS * 6.0)
+            && playback
+                .remaining()
+                .is_some_and(|left| left <= UP_NEXT_SECONDS);
         let counting = playback.loaded
             && !playback.paused
-            && playback.in_credits()
+            && (playback.in_credits() || tail)
             && has_next
             && autoplay
             && !self.up_next.dismissed;
@@ -1120,10 +1135,20 @@ impl App {
             self.up_next.started = None;
             return None;
         }
+        self.up_next.tail = tail;
 
         let now = ctx.input(|input| input.time);
         let started = *self.up_next.started.get_or_insert(now);
-        let left = UP_NEXT_SECONDS - (now - started);
+        let left = if tail {
+            // Counted on the file's own clock, so it reaches zero at the end
+            // of file, which is what starts the next one.
+            playback.remaining().unwrap_or_default()
+        } else {
+            UP_NEXT_SECONDS - (now - started)
+        };
+        if tail && left <= 0.0 {
+            return None;
+        }
         if left <= 0.0 {
             // Latched, not cleared: the next file takes a moment to open, and
             // without this the countdown would fire again on every frame of
@@ -1157,6 +1182,7 @@ impl App {
             left: (left / UP_NEXT_SECONDS) as f32,
             caption: next.map(|target| target.caption()).unwrap_or_default(),
             still,
+            tail,
         })
     }
 
@@ -1226,6 +1252,16 @@ impl App {
     /// time is how a player earns being turned off.
     fn autoplay_next(&mut self, ctx: &egui::Context) {
         if !self.engine.playback_prefs().autoplay_next {
+            return;
+        }
+        // Cancelled from the end-of-file card: the viewer chose to stay.
+        let cancelled = self.up_next.tail
+            && self.up_next.dismissed
+            && self
+                .playback
+                .as_ref()
+                .is_some_and(|playback| playback.id == self.up_next.playback_id);
+        if cancelled {
             return;
         }
         let Some(target) = self.adjacent(Adjacent::Next) else {

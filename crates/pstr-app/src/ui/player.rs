@@ -139,6 +139,9 @@ pub struct UpNextCard {
     pub caption: String,
     /// Its still, once there is one.
     pub still: Option<egui::TextureHandle>,
+    /// Counting down the end of a file with no credits chapter, where the
+    /// second button cancels the next episode rather than deferring it.
+    pub tail: bool,
 }
 
 impl Overlay {
@@ -566,11 +569,15 @@ fn up_next_card(
                                 actions.push(Action::PlayAdjacent(Adjacent::Next));
                             }
                             ui.add_space(theme::space::S);
-                            if ui
-                                .button("Watch till the end")
-                                .on_hover_text("Play this one out — nothing will be skipped")
-                                .clicked()
-                            {
+                            let (label, hint) = if card.tail {
+                                ("Cancel", "Stay here — the next episode will not start")
+                            } else {
+                                (
+                                    "Watch till the end",
+                                    "Play this one out — nothing will be skipped",
+                                )
+                            };
+                            if ui.button(label).on_hover_text(hint).clicked() {
                                 actions.push(Action::WatchToEnd);
                             }
                         });

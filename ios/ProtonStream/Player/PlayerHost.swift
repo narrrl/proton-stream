@@ -88,6 +88,9 @@ final class PlayerHost {
     private var retryFrom: Double?
     /// When the current stall began; see `tick`.
     private var stalledSince: Date?
+    /// Cancelled from the end-of-file card: the viewer chose to stay, so the
+    /// end of this file does not start the next one.
+    var stay = false
     /// Read once per episode: a preference the viewer changes mid-episode
     /// applies to the next one.
     private(set) var autoSkip = false
@@ -202,6 +205,14 @@ final class PlayerHost {
         onClosed?()
     }
 
+    /// Play the open episode again from the start. mpv unloads a file at its
+    /// end, so this opens it again rather than seeking.
+    func replay() {
+        guard episode != nil else { return }
+        retryFrom = 0
+        load()
+    }
+
     /// Open the episode again from scratch — a new stream, through the
     /// bridge's session refresh — where the failed one stopped.
     func retry() {
@@ -217,6 +228,7 @@ final class PlayerHost {
         let resumeFrom = retryFrom
         retryFrom = nil
         stalledSince = nil
+        stay = false
         loadTask?.cancel()
         session?.close()
         playbackError = nil
@@ -345,7 +357,7 @@ final class PlayerHost {
         guard media == key else { return }
         save()
         // Autoplay fires on a clean end of file only — never on a failure.
-        if reason == .eof, autoplay, next != nil {
+        if reason == .eof, autoplay, !stay, next != nil {
             advance()
         } else if reason == .failed {
             playbackError = player?.problem ?? "This episode could not be played."

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -71,6 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -107,6 +109,7 @@ import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TrackPreferencesRecord
 import uniffi.pstr_android.skipOffer
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /** How long the controls stay up after a tap. */
@@ -116,7 +119,7 @@ private const val CONTROLS_SECONDS = 4L
 private const val UP_NEXT_SECONDS = 10
 
 /** Past this much of an episode it counts as watched. */
-private const val WATCHED_FRACTION = 0.9
+internal const val WATCHED_FRACTION = 0.9
 
 /** The loudest this app plays. Matches `pstr_core::prefs`, which stores it. */
 private const val MAX_VOLUME = 100f
@@ -191,6 +194,10 @@ fun PlayerScreen(
     var retryFrom by remember(key) { mutableStateOf<Double?>(null) }
     val session = remember(key, attempt) { RustStreamSession(episode) }
     var playbackError by remember(key) { mutableStateOf<String?>(null) }
+    // From the click until mpv has the file: the share session, the revision
+    // and its block list all come first, and on a slow link that is seconds of
+    // black screen unless something says so.
+    var opening by remember(key, attempt) { mutableStateOf(true) }
 
     LaunchedEffect(session, host) {
         runCatching {
@@ -229,6 +236,7 @@ fun PlayerScreen(
             nativeHost.setSpeed(startup.speed)
             session.transferToPlayer()
         }.onFailure { playbackError = it.message ?: "Playback failed" }
+        opening = false
     }
 
     // Per episode: the stream Rust holds open. The surface is the screen's, not
@@ -266,12 +274,8 @@ fun PlayerScreen(
             )
         }
     }
-    LaunchedEffect(key) {
-        while (true) {
-            delay(5_000)
-            save()
-        }
-    }
+    // The five-second save is PlaybackService's, which outlives this screen;
+    // these are the moments only the screen sees.
     DisposableEffect(key) { onDispose { save() } }
 
     val next = episodes.getOrNull(index + 1)
@@ -323,8 +327,10 @@ fun PlayerScreen(
 
     // Autoplay fires on a clean end of file only, and only for this episode's
     // own reading — never on a failure, and never on the outgoing file's.
+    // Cancelled from the end-of-file card: the viewer chose to stay.
+    var stay by remember(key) { mutableStateOf(false) }
     LaunchedEffect(state.endReason, state.media) {
-        if (state.endReason == EndReason.Eof && state.media == key && autoplay && next != null) advance()
+        if (state.endReason == EndReason.Eof && state.media == key && autoplay && !stay && next != null) advance()
     }
     // A file mpv could not play ends like any other. Saying so is the whole
     // difference between a broken episode and an app that silently skipped one.
@@ -491,21 +497,45 @@ fun PlayerScreen(
             ) { Text(skip.label) }
         }
 
+        // A file with no chapters has no credits to count over, so the card
+        // takes its last seconds instead: without it the next episode cut in
+        // with no warning and no way to stay. Counted on the file's own clock,
+        // so it reaches zero at the end of file, which is what advances.
+        val tailLeft = (state.duration - state.position).takeIf {
+            chapters.creditsStart == null && state.duration > UP_NEXT_SECONDS * 6 && it <= UP_NEXT_SECONDS
+        }
         UpNextCard(
             next = next,
-            visible = autoplay && !state.paused && playingThis &&
-                chapters.creditsStart?.let { state.position >= it } == true,
+            visible = autoplay && !stay && !state.paused && !state.ended && playingThis &&
+                (tailLeft != null || chapters.creditsStart?.let { state.position >= it } == true),
+            secondsLeft = tailLeft?.let { ceil(it).toInt() },
             onPlayNow = { advance() },
+            onStay = { stay = true },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .padding(end = 16.dp, bottom = if (showControls) 132.dp else 24.dp),
         )
 
+        // Played to the end with nothing starting after it: the last episode,
+        // autoplay off, or the viewer stayed. A black screen said none of that.
+        if (playingThis && state.endReason == EndReason.Eof && (next == null || !autoplay || stay)) {
+            EndCard(
+                finished = episode.label,
+                show = title.displayName,
+                next = next,
+                onPlayNext = { advance() },
+                // mpv unloads a file at its end, so this opens it again.
+                onReplay = { retryFrom = 0.0; attempt++ },
+                onClose = onClose,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
         // Only while nothing else explains the still picture: an error is the
         // more useful thing to say, and a spinner over it reads as "still
         // trying".
-        if (state.stalled && playbackError == null) {
+        if ((opening || state.stalled) && playbackError == null) {
             Column(
                 Modifier
                     .align(Alignment.Center)
@@ -517,10 +547,13 @@ fun PlayerScreen(
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(36.dp),
                 )
-                if (state.buffering) {
+                if (opening || state.buffering) {
                     Text(
-                        state.cachePercent.takeIf { it > 0.0 }
-                            ?.let { "Buffering… ${it.roundToInt()}%" } ?: "Buffering…",
+                        when {
+                            opening -> "Opening ${episode.label}…"
+                            state.cachePercent > 0.0 -> "Buffering… ${state.cachePercent.roundToInt()}%"
+                            else -> "Buffering…"
+                        },
                         color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.padding(top = 12.dp),
@@ -1016,24 +1049,31 @@ private fun EpisodeChooser(
  *
  * "Watch till the end" holds for the rest of the file: someone who wants the
  * post-credits scene should have to say so once, not once every ten seconds.
+ *
+ * With [secondsLeft] the card counts down the end of a file that has no credits
+ * chapter, on the file's own clock; the end of file is what advances, and the
+ * second button is "Cancel", since there are no credits to watch.
  */
 @Composable
 private fun UpNextCard(
     next: EpisodeRecord?,
     visible: Boolean,
+    secondsLeft: Int?,
     onPlayNow: () -> Unit,
+    onStay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var held by remember(next?.linkId) { mutableStateOf(false) }
-    var remaining by remember(next?.linkId) { mutableStateOf(UP_NEXT_SECONDS) }
+    var counted by remember(next?.linkId) { mutableStateOf(UP_NEXT_SECONDS) }
+    val remaining = secondsLeft ?: counted
     val upNext = next
     val showing = visible && upNext != null && !held
-    LaunchedEffect(showing) {
-        if (!showing) return@LaunchedEffect
-        remaining = UP_NEXT_SECONDS
-        while (remaining > 0) {
+    LaunchedEffect(showing, secondsLeft == null) {
+        if (!showing || secondsLeft != null) return@LaunchedEffect
+        counted = UP_NEXT_SECONDS
+        while (counted > 0) {
             delay(1_000)
-            remaining -= 1
+            counted -= 1
         }
         onPlayNow()
     }
@@ -1096,8 +1136,49 @@ private fun UpNextCard(
                 )
             }
         }
-        QuietButton(onClick = { held = true }, modifier = Modifier.padding(top = 4.dp)) {
-            Text("Watch till the end")
+        if (secondsLeft != null) {
+            QuietButton(onClick = { held = true; onStay() }, modifier = Modifier.padding(top = 4.dp)) {
+                Text("Cancel")
+            }
+        } else {
+            QuietButton(onClick = { held = true }, modifier = Modifier.padding(top = 4.dp)) {
+                Text("Watch till the end")
+            }
+        }
+    }
+}
+
+/** What the player says once an episode ends and nothing starts after it. */
+@Composable
+private fun EndCard(
+    finished: String,
+    show: String,
+    next: EpisodeRecord?,
+    onPlayNext: () -> Unit,
+    onReplay: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .widthIn(max = 360.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.medium)
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            if (next == null) "That was the last episode of $show" else "Finished $finished",
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+        )
+        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (next != null) {
+                AccentButton(onClick = onPlayNext) { Text("Play next") }
+            } else {
+                QuietButton(onClick = onReplay) { Text("Watch again") }
+            }
+            QuietButton(onClick = onClose, modifier = Modifier.padding(start = 8.dp)) { Text("Close") }
         }
     }
 }

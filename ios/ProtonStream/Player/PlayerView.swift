@@ -61,11 +61,24 @@ struct PlayerView: View {
                     if let offer = host.offer, !host.autoSkip {
                         Button(offer.label) { host.seek(to: offer.target) }.buttonStyle(.tonal)
                     }
+                    // A file with no chapters has no credits to count over, so
+                    // the card takes its last seconds instead, on the file's
+                    // own clock: the end of file is what advances.
+                    let tailLeft: Double? = {
+                        let left = player.duration - player.position
+                        guard host.chapters.creditsStart == nil,
+                              player.duration > Double(upNextSeconds * 6),
+                              left <= Double(upNextSeconds) else { return nil }
+                        return left
+                    }()
                     UpNextCard(
                         next: host.next,
-                        visible: host.autoplay && !player.paused && host.playingOpenEpisode
-                            && host.chapters.creditsStart.map { player.position >= $0 } == true,
-                        onPlayNow: host.advance
+                        visible: host.autoplay && !host.stay && !player.paused && player.endReason == nil
+                            && host.playingOpenEpisode
+                            && (tailLeft != nil || host.chapters.creditsStart.map { player.position >= $0 } == true),
+                        secondsLeft: tailLeft.map { Int($0.rounded(.up)) },
+                        onPlayNow: host.advance,
+                        onStay: { host.stay = true }
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -86,6 +99,13 @@ struct PlayerView: View {
                     }
                     .padding(20)
                     .background(scheme.surfaceContainerHighest, in: RoundedRectangle(cornerRadius: Corner.standard))
+                }
+
+                // Played to the end with nothing starting after it: the last
+                // episode, autoplay off, or the viewer stayed.
+                if host.playingOpenEpisode, player.endReason == .eof,
+                   host.next == nil || !host.autoplay || host.stay {
+                    EndCard(host: host)
                 }
 
                 if let message = host.playbackError ?? player.problem {
@@ -316,7 +336,11 @@ private struct CompactIcon: View {
 private struct UpNextCard: View {
     let next: EpisodeRecord?
     let visible: Bool
+    /// Counting the end of a file with no credits chapter, on the file's own
+    /// clock; the second button then cancels rather than deferring.
+    let secondsLeft: Int?
     let onPlayNow: () -> Void
+    let onStay: () -> Void
     @Environment(\.scheme) private var scheme
     @State private var held = false
     @State private var remaining = upNextSeconds
@@ -340,10 +364,10 @@ private struct UpNextCard: View {
                                         Circle().fill(.black.opacity(0.5))
                                         Circle().stroke(.white.opacity(0.25), lineWidth: 3)
                                         Circle()
-                                            .trim(from: 0, to: Double(remaining) / Double(upNextSeconds))
+                                            .trim(from: 0, to: Double(secondsLeft ?? remaining) / Double(upNextSeconds))
                                             .stroke(.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                             .rotationEffect(.degrees(-90))
-                                            .animation(.linear(duration: 1), value: remaining)
+                                            .animation(.linear(duration: 1), value: secondsLeft ?? remaining)
                                         Image(systemName: "play.fill").foregroundStyle(.white)
                                     }
                                     .frame(width: 40, height: 40)
@@ -353,13 +377,14 @@ private struct UpNextCard: View {
                         .buttonStyle(PressableStyle(wash: .white))
                         .accessibilityLabel("Play now")
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Up next in \(remaining)s").textStyle(.labelMedium).foregroundStyle(scheme.onSurfaceVariant)
+                            Text("Up next in \(secondsLeft ?? remaining)s").textStyle(.labelMedium).foregroundStyle(scheme.onSurfaceVariant)
                             Text(upNext.providerName ?? upNext.label).textStyle(.titleSmall).foregroundStyle(scheme.onSurface).lineLimit(2)
                         }
                     }
-                    Button("Watch till the end") {
+                    Button(secondsLeft == nil ? "Watch till the end" : "Cancel") {
                         held = true
                         heldFor = upNext.linkId
+                        if secondsLeft != nil { onStay() }
                     }
                     .buttonStyle(.quiet)
                 }
@@ -367,6 +392,7 @@ private struct UpNextCard: View {
                 .frame(width: 280)
                 .background(scheme.surfaceContainerHighest, in: RoundedRectangle(cornerRadius: Corner.standard))
                 .task(id: upNext.linkId) {
+                    guard secondsLeft == nil else { return }
                     remaining = upNextSeconds
                     while remaining > 0 {
                         try? await Task.sleep(for: .seconds(1))
@@ -377,6 +403,35 @@ private struct UpNextCard: View {
                 }
             }
         }
+    }
+}
+
+/// What the player says once an episode ends and nothing starts after it.
+private struct EndCard: View {
+    let host: PlayerHost
+    @Environment(\.scheme) private var scheme
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(host.next == nil
+                 ? "That was the last episode of \(host.title?.displayName ?? "this title")"
+                 : "Finished \(host.episode?.label ?? "this episode")")
+                .textStyle(.titleMedium)
+                .foregroundStyle(scheme.onSurface)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 8) {
+                if host.next != nil {
+                    Button("Play next", action: host.advance).buttonStyle(.accent)
+                } else {
+                    Button("Watch again", action: host.replay).buttonStyle(.quiet)
+                }
+                Button("Close", action: host.close).buttonStyle(.quiet)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: 360)
+        .background(scheme.surfaceContainerHighest, in: RoundedRectangle(cornerRadius: Corner.standard))
+        .padding(32)
     }
 }
 
