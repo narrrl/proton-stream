@@ -333,7 +333,12 @@ fun PlayerScreen(
     val problem by nativeHost.problem.collectAsState()
     LaunchedEffect(problem) { problem?.let { playbackError = it } }
 
-    val offer = remember(chapters, key, (state.position * 4).roundToInt()) {
+    // Whether mpv's readings are this episode's. Not while the next one opens:
+    // the last one's credits play on until it is loaded, and read against the
+    // new index they offered the episode after the next as up next.
+    val playingThis = state.media == key
+    val offer = remember(chapters, key, playingThis, (state.position * 4).roundToInt()) {
+        if (!playingThis) return@remember null
         runCatching { skipOffer(chapters, state.position) }.getOrNull()
     }
     // Auto-skip is offered once per chapter: seeking back into an opening on
@@ -475,7 +480,7 @@ fun PlayerScreen(
 
         UpNextCard(
             next = next,
-            visible = autoplay && !state.paused &&
+            visible = autoplay && !state.paused && playingThis &&
                 chapters.creditsStart?.let { state.position >= it } == true,
             onPlayNow = { advance() },
             modifier = Modifier

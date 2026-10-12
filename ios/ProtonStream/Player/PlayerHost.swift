@@ -111,6 +111,11 @@ final class PlayerHost {
     var episode: EpisodeRecord? { episodes.indices.contains(index) ? episodes[index] : nil }
     var key: String? { episode.map(mediaKey) }
     var next: EpisodeRecord? { episodes.indices.contains(index + 1) ? episodes[index + 1] : nil }
+    /// Whether mpv's readings — position, chapters — are the open episode's.
+    /// Not while the next one opens: the last one's credits go on playing
+    /// until it is loaded, and read against the new index they offered the
+    /// episode *after* the next as up next.
+    var playingOpenEpisode: Bool { player?.media != nil && player?.media == key }
     var isOpen: Bool { title != nil }
 
     // MARK: - Opening
@@ -329,7 +334,7 @@ final class PlayerHost {
     }
 
     private func tick() {
-        guard let player else { return }
+        guard let player, playingOpenEpisode else { return }
         replanChapters(player)
         // Auto-skip, once per chapter.
         if autoSkip, !player.paused, let offer = skipOffer(plan: chapters, position: player.position),
@@ -352,7 +357,7 @@ final class PlayerHost {
 
     /// The skip button's offer at the current position, if any.
     var offer: SkipOffer? {
-        guard let player else { return nil }
+        guard let player, playingOpenEpisode else { return nil }
         return skipOffer(plan: chapters, position: player.position)
     }
 

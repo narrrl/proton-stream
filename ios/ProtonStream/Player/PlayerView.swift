@@ -63,7 +63,8 @@ struct PlayerView: View {
                     }
                     UpNextCard(
                         next: host.next,
-                        visible: host.autoplay && !player.paused && host.chapters.creditsStart.map { player.position >= $0 } == true,
+                        visible: host.autoplay && !player.paused && host.playingOpenEpisode
+                            && host.chapters.creditsStart.map { player.position >= $0 } == true,
                         onPlayNow: host.advance
                     )
                 }
