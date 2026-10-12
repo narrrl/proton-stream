@@ -982,6 +982,10 @@ impl App {
                         // — unless the next episode is already opening, which is
                         // exactly where the viewer wants to stay.
                         if self.page == Page::Player && self.opening.is_none() {
+                            if self.fullscreen {
+                                self.fullscreen = false;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                            }
                             self.page = match target {
                                 Some(key) => Page::Title(key),
                                 None => Page::Library,
@@ -1854,6 +1858,11 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.pump(ctx, frame);
+        // The window manager can leave fullscreen without asking (F11, a
+        // double-click on a title bar), and `F` then toggled the wrong way.
+        if let Some(actual) = ctx.input(|input| input.viewport().fullscreen) {
+            self.fullscreen = actual;
+        }
         // A window left open for days still picks up what was added: the
         // launch check alone would only ever run once.
         let now = ctx.input(|input| input.time);

@@ -509,7 +509,8 @@ fn speed_menu(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>)
         format!("Speed · {}", ui::format_speed(playback.speed))
     };
     ui.menu_button(label, |ui| {
-        for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] {
+        // The same steps `[` and `]` walk.
+        for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0] {
             if ui
                 .selectable_label(
                     (playback.speed - speed).abs() < 1e-6,

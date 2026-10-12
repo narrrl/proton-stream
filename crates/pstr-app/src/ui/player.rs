@@ -740,6 +740,25 @@ fn chrome(
                         actions.push(Action::ToggleEpisodes);
                     }
                 }
+                // Esc leaves the page and keeps playing; this is the one-step
+                // way to be done with the episode.
+                ui.add_space(theme::space::S);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            theme::Role::Subhead
+                                .rich(egui_phosphor::regular::STOP)
+                                .color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_black_alpha(160))
+                        .corner_radius(CornerRadius::same(theme::radius::MD))
+                        .min_size(Vec2::new(38.0, 32.0)),
+                    )
+                    .on_hover_text("Stop")
+                    .clicked()
+                {
+                    actions.push(Action::Player(Command::Stop));
+                }
             });
         },
     );
