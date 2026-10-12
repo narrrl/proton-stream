@@ -10,6 +10,9 @@ let upNextSeconds = 10
 /// Past this much of an episode it counts as watched.
 private let watchedFraction = 0.9
 
+/// How long a stall lasts before the player offers to open the episode again.
+private let stallLimit: TimeInterval = 20
+
 /// How an episode is named in watch state and player readings.
 func mediaKey(_ episode: EpisodeRecord) -> String { "\(episode.shareId):\(episode.linkId)" }
 
@@ -81,6 +84,10 @@ final class PlayerHost {
     /// block list, all before mpv has a byte. On an old iPad that is seconds
     /// of a black screen unless something says so.
     private(set) var opening = false
+    /// Where a retry reopens the episode, when it got that far.
+    private var retryFrom: Double?
+    /// When the current stall began; see `tick`.
+    private var stalledSince: Date?
     /// Read once per episode: a preference the viewer changes mid-episode
     /// applies to the next one.
     private(set) var autoSkip = false
@@ -195,8 +202,21 @@ final class PlayerHost {
         onClosed?()
     }
 
+    /// Open the episode again from scratch — a new stream, through the
+    /// bridge's session refresh — where the failed one stopped.
+    func retry() {
+        guard episode != nil else { return }
+        if let player, player.media == key, player.position > 0 { retryFrom = player.position }
+        player?.problem = nil
+        load()
+    }
+
     private func load() {
         guard let title, let episode else { return }
+        // Taken once: only the load a retry asked for starts from it.
+        let resumeFrom = retryFrom
+        retryFrom = nil
+        stalledSince = nil
         loadTask?.cancel()
         session?.close()
         playbackError = nil
@@ -248,7 +268,7 @@ final class PlayerHost {
                     handle: handle,
                     // A finished episode restarts rather than resuming three
                     // seconds from its own credits.
-                    start: watch.flatMap { $0.watched ? nil : $0.positionSecs } ?? 0,
+                    start: resumeFrom ?? watch.flatMap { $0.watched ? nil : $0.positionSecs } ?? 0,
                     audio: show?.audioLanguage ?? global.audioLanguage,
                     subtitle: show?.subtitleLanguage ?? global.subtitleLanguage,
                     subtitles: show?.subtitles ?? global.subtitles,
@@ -336,6 +356,17 @@ final class PlayerHost {
     private func tick() {
         guard let player, playingOpenEpisode else { return }
         replanChapters(player)
+        // A stall that does not clear is a dropped connection far more often
+        // than a slow one, and "Buffering…" for ever offers no way out of it.
+        if player.buffering, !player.paused {
+            let since = stalledSince ?? .now
+            stalledSince = since
+            if playbackError == nil, Date.now.timeIntervalSince(since) >= stallLimit {
+                playbackError = "Still loading. The connection may have dropped."
+            }
+        } else {
+            stalledSince = nil
+        }
         // Auto-skip, once per chapter.
         if autoSkip, !player.paused, let offer = skipOffer(plan: chapters, position: player.position),
            let chapter = chapters.entries.last(where: { player.position + 0.001 >= $0.start }),

@@ -688,6 +688,30 @@ impl App {
         }
     }
 
+    /// Say that the playing file failed, with a button that opens it again
+    /// where it stopped — a dropped connection is the usual cause, and the
+    /// session refresh behind the next open is usually the cure.
+    fn offer_retry(&mut self, ctx: &egui::Context) {
+        let Some(playback) = &self.playback else {
+            return;
+        };
+        let mut retry = playback.target.clone();
+        let at = if playback.position > 0.0 {
+            playback.position
+        } else {
+            retry.resume_at.unwrap_or(0.0)
+        };
+        retry.resume_at = (at > 0.0).then_some(at);
+        let text = format!(
+            "{} stopped playing at {}",
+            retry.title_name,
+            crate::ui::format_time(at)
+        );
+        let now = ctx.input(|input| input.time);
+        self.toasts
+            .push_error_with(now, text, "Retry", Action::Play(retry));
+    }
+
     fn note(&mut self, ctx: &egui::Context, text: impl Into<String>, error: bool) {
         let now = ctx.input(|input| input.time);
         self.toasts.push(now, text, error);
@@ -893,6 +917,16 @@ impl App {
                         )
                     {
                         self.autoplay_next(ctx);
+                    }
+                    // mpv gave up partway. The page is about to go back to the
+                    // title, and without this the film would simply vanish.
+                    if mine
+                        && matches!(
+                            event,
+                            pstr_player::PlayerEvent::EndFile(pstr_player::EndReason::Failed)
+                        )
+                    {
+                        self.offer_retry(ctx);
                     }
                 }
                 Event::PlayerStopped { id } => {

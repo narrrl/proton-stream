@@ -94,9 +94,14 @@ struct PlayerView: View {
                         // Dismissible, because the message is not always fatal
                         // — a subtitle track that failed to load leaves an
                         // episode that plays perfectly well behind it.
-                        Button("Dismiss", action: host.dismissProblem)
-                            .buttonStyle(.quiet)
-                            .tint(scheme.onErrorContainer)
+                        HStack {
+                            Button("Dismiss", action: host.dismissProblem)
+                                .buttonStyle(.quiet)
+                                .tint(scheme.onErrorContainer)
+                            Button("Retry", action: host.retry)
+                                .buttonStyle(.quiet)
+                                .tint(scheme.onErrorContainer)
+                        }
                     }
                     .textStyle(.bodyLarge)
                     .padding(16)

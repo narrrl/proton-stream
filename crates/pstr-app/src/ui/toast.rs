@@ -52,6 +52,17 @@ impl Toasts {
         self.push_inner(now, text.into(), false, Some((label, action)));
     }
 
+    /// An error with a button on it — "Retry".
+    pub fn push_error_with(
+        &mut self,
+        now: f64,
+        text: impl Into<String>,
+        label: &'static str,
+        action: Action,
+    ) {
+        self.push_inner(now, text.into(), true, Some((label, action)));
+    }
+
     fn push_inner(
         &mut self,
         now: f64,

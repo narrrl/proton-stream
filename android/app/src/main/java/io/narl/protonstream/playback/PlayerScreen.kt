@@ -58,6 +58,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -184,7 +185,11 @@ fun PlayerScreen(
     }
 
     val key = mediaKey(episode)
-    val session = remember(key) { RustStreamSession(episode) }
+    // Retry opens the episode again from scratch: a new stream, through the
+    // bridge's session refresh, from where the failed one stopped.
+    var attempt by remember(key) { mutableIntStateOf(0) }
+    var retryFrom by remember(key) { mutableStateOf<Double?>(null) }
+    val session = remember(key, attempt) { RustStreamSession(episode) }
     var playbackError by remember(key) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(session, host) {
@@ -204,7 +209,7 @@ fun PlayerScreen(
                     size = session.size(),
                     // A finished episode restarts rather than resuming three
                     // seconds from its own credits.
-                    startPosition = watch?.takeUnless { it.watched }?.positionSecs ?: 0.0,
+                    startPosition = retryFrom ?: watch?.takeUnless { it.watched }?.positionSecs ?: 0.0,
                     audioLanguage = show?.audioLanguage ?: global.audioLanguage,
                     subtitleLanguage = show?.subtitleLanguage ?: global.subtitleLanguage,
                     subtitles = show?.subtitles ?: global.subtitles,
@@ -326,6 +331,14 @@ fun PlayerScreen(
     LaunchedEffect(state.endReason, state.media) {
         if (state.endReason == EndReason.Failed && state.media == key) {
             playbackError = "This episode could not be played."
+        }
+    }
+    // A stall that does not clear is a dropped connection far more often than
+    // a slow one, and "Buffering…" for ever offers no way out of it.
+    LaunchedEffect(state.buffering, key, attempt) {
+        if (state.buffering) {
+            delay(STALL_LIMIT_MS)
+            playbackError = "Still loading. The connection may have dropped."
         }
     }
     // What mpv itself complained about, which the play call never sees: by the
@@ -528,13 +541,28 @@ fun PlayerScreen(
                 // Dismissible, because the message is not always fatal — a
                 // subtitle track that failed to load leaves an episode that
                 // plays perfectly well behind an error that used to be permanent.
-                QuietButton(onClick = { playbackError = null; nativeHost.clearProblem() }) {
-                    Text("Dismiss", color = MaterialTheme.colorScheme.onErrorContainer)
+                Row {
+                    QuietButton(onClick = { playbackError = null; nativeHost.clearProblem() }) {
+                        Text("Dismiss", color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                    QuietButton(
+                        onClick = {
+                            retryFrom = state.position.takeIf { state.media == key && it > 0.0 } ?: retryFrom
+                            playbackError = null
+                            nativeHost.clearProblem()
+                            attempt++
+                        },
+                    ) {
+                        Text("Retry", color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
                 }
             }
         }
     }
 }
+
+/** How long a stall lasts before the player offers to open the episode again. */
+private const val STALL_LIMIT_MS = 20_000L
 
 private data class Startup(
     val nativeHandle: ULong,
