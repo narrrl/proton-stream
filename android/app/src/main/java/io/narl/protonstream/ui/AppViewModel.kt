@@ -551,11 +551,17 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
      * title's positions are what this throws away, and a mis-tap on a tile's
      * menu should not cost them.
      */
-    fun setTitleWatched(title: TitleRecord, watched: Boolean) {
-        val episodes = title.seasons.flatMap { it.episodes }
+    fun setTitleWatched(title: TitleRecord, watched: Boolean) =
+        markEpisodes(title.seasons.flatMap { it.episodes }, watched, title.displayName)
+
+    /**
+     * Some episodes seen or unseen — a season, or a whole title — with an
+     * Undo; [what] names them in the message.
+     */
+    fun markEpisodes(episodes: List<EpisodeRecord>, watched: Boolean, what: String) {
         changeWatch(
-            episodes,
-            "${title.displayName} marked ${if (watched) "watched" else "unwatched"}",
+            episodes.filter { it.watched != watched },
+            "$what marked ${if (watched) "watched" else "unwatched"}",
         ) { engine, episode, before ->
             val duration = before?.durationSecs
             engine.saveWatchState(

@@ -246,12 +246,19 @@ struct TitleView: View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(Array(title.seasons.enumerated()), id: \.element.label) { index, entry in
+                    // By position: two seasons can share a label.
+                    ForEach(Array(title.seasons.enumerated()), id: \.offset) { index, entry in
                         FilterChip(label: entry.label, selected: index == seasonIndex) { seasonIndex = index }
                     }
                 }
             }
             if let season {
+                // For someone joining the show partway, who would otherwise
+                // tick every earlier episode one by one.
+                let seen = season.episodes.allSatisfy(\.watched)
+                IconButton(seen ? "checkmark.circle.badge.xmark" : "checkmark.circle", "Mark \(season.label) \(seen ? "unwatched" : "watched")") {
+                    model.markEpisodes(season.episodes, !seen, "\(title.displayName) \(season.label)")
+                }
                 IconButton("arrow.down.circle", "Download \(season.label)") {
                     DownloadCoordinator.shared.enqueue(season.episodes)
                 }

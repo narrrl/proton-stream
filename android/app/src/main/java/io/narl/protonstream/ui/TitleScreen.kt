@@ -38,8 +38,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -97,6 +99,8 @@ internal fun TitleScreen(
     onMetadataChanged: () -> Unit,
     onSetWatched: (EpisodeRecord, Boolean) -> Unit,
     padding: PaddingValues,
+    /** Several episodes seen or unseen at once, named for the message. */
+    onMarkEpisodes: (List<EpisodeRecord>, Boolean, String) -> Unit = { _, _, _ -> },
     /** Every title of its franchise, in release order, this one included. */
     franchise: List<TitleRecord> = emptyList(),
     onOpenTitle: (TitleRecord) -> Unit = {},
@@ -343,7 +347,9 @@ internal fun TitleScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        itemsIndexed(title.seasons, key = { _, it -> it.label }) { index, entry ->
+                        // By position: two seasons can share a label, and a
+                        // repeated key is a crash in a lazy list.
+                        itemsIndexed(title.seasons, key = { index, _ -> index }) { index, entry ->
                             FilterChip(
                                 selected = index == seasonIndex,
                                 onClick = { seasonIndex = index },
@@ -352,6 +358,15 @@ internal fun TitleScreen(
                         }
                     }
                     season?.let {
+                        // For someone joining the show partway, who would
+                        // otherwise tick every earlier episode one by one.
+                        val seen = it.episodes.all(EpisodeRecord::watched)
+                        IconButton(onClick = { onMarkEpisodes(it.episodes, !seen, "${title.displayName} ${it.label}") }) {
+                            Icon(
+                                if (seen) Icons.Default.RemoveDone else Icons.Default.DoneAll,
+                                contentDescription = "Mark ${it.label} ${if (seen) "unwatched" else "watched"}",
+                            )
+                        }
                         IconButton(onClick = { DownloadCoordinator.enqueue(context, it.episodes) }) {
                             Icon(Icons.Default.Download, contentDescription = "Download ${it.label}")
                         }

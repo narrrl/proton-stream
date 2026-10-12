@@ -247,6 +247,7 @@ fun ProtonStreamApp(
                                 model::reloadAfterMetadataChange,
                                 model::setWatched,
                                 body,
+                                onMarkEpisodes = model::markEpisodes,
                                 franchise = selected.franchise.mapNotNull { key ->
                                     state.titles.firstOrNull { it.key == key }
                                 },

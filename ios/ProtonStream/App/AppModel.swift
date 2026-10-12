@@ -484,8 +484,15 @@ final class AppModel {
     /// title's positions are what this throws away, and a mis-tap on a tile's
     /// menu should not cost them.
     func setTitleWatched(_ title: TitleRecord, _ watched: Bool) {
-        showWatched(title.playlist, watched)
-        changeWatch(title.playlist, "\(title.displayName) marked \(watched ? "watched" : "unwatched")") { engine, episode, before in
+        markEpisodes(title.playlist, watched, title.displayName)
+    }
+
+    /// Some episodes seen or unseen — a season, or a whole title — with an
+    /// Undo; `what` names them in the message.
+    func markEpisodes(_ episodes: [EpisodeRecord], _ watched: Bool, _ what: String) {
+        let episodes = episodes.filter { $0.watched != watched }
+        showWatched(episodes, watched)
+        changeWatch(episodes, "\(what) marked \(watched ? "watched" : "unwatched")") { engine, episode, before in
             let duration = before?.durationSecs
             try engine.saveWatchState(
                 shareId: episode.shareId,
