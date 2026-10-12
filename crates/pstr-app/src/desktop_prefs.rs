@@ -21,6 +21,10 @@ pub struct DesktopPrefs {
     pub hardware_decoding: bool,
     /// How much decrypted video the disk cache may keep.
     pub cache_gib: u32,
+    /// How the library was last arranged, so it opens that way.
+    pub filter: crate::app::Filter,
+    pub sort: pstr_core::browse::Sort,
+    pub grouped: bool,
 }
 
 impl Default for DesktopPrefs {
@@ -28,6 +32,11 @@ impl Default for DesktopPrefs {
         Self {
             hardware_decoding: true,
             cache_gib: 4,
+            filter: crate::app::Filter::default(),
+            sort: pstr_core::browse::Sort::default(),
+            // On: a share holding a series and its three films is four tiles
+            // of the same picture otherwise.
+            grouped: true,
         }
     }
 }

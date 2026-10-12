@@ -382,6 +382,18 @@ pub struct LibraryView {
     stale: bool,
 }
 
+impl LibraryView {
+    /// The view as the viewer last arranged it.
+    fn arranged(prefs: crate::desktop_prefs::DesktopPrefs) -> Self {
+        Self {
+            filter: prefs.filter,
+            sort: prefs.sort,
+            grouped: prefs.grouped,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for LibraryView {
     fn default() -> Self {
         Self {
@@ -404,7 +416,8 @@ impl Default for LibraryView {
 }
 
 /// Which titles the grid shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Filter {
     #[default]
     All,
@@ -674,6 +687,7 @@ impl App {
         engine.connect();
         engine.crawl_stale();
         let settings = engine.metadata_config();
+        let arranged = engine.desktop_prefs();
 
         Ok(Self {
             engine,
@@ -697,7 +711,7 @@ impl App {
             focus_search: false,
             shortcuts_open: false,
             osd: None,
-            view: LibraryView::default(),
+            view: LibraryView::arranged(arranged),
             loaded: false,
             form: ShareForm::default(),
             account: ui::account::AccountPanel::default(),
@@ -733,6 +747,17 @@ impl App {
     fn flash(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         if self.page == Page::Player {
             self.osd = Some((text.into(), ctx.input(|input| input.time)));
+        }
+    }
+
+    /// Keep how the library is arranged for the next launch: a viewer who
+    /// sorts by recently added does so every time, not once.
+    fn remember_arrangement(&self) {
+        let mut prefs = self.engine.desktop_prefs();
+        let arranged = (self.view.filter, self.view.sort, self.view.grouped);
+        if (prefs.filter, prefs.sort, prefs.grouped) != arranged {
+            (prefs.filter, prefs.sort, prefs.grouped) = arranged;
+            self.engine.set_desktop_prefs(prefs);
         }
     }
 
@@ -1506,8 +1531,12 @@ impl App {
             Action::SetShelf(filter, sort) => {
                 self.view.filter = filter;
                 self.view.sort = sort;
+                self.remember_arrangement();
             }
-            Action::SetGrouped(grouped) => self.view.grouped = grouped,
+            Action::SetGrouped(grouped) => {
+                self.view.grouped = grouped;
+                self.remember_arrangement();
+            }
             Action::Back => match self.page {
                 Page::Title(_) => self.page = Page::Library,
                 // Back out of a search before out of anything else: it is the

@@ -11,7 +11,8 @@ use crate::library::{Library, Title, sort_name};
 use crate::metadata::{MetadataRecord, TitleNames};
 
 /// What order a grid is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Sort {
     /// By the name shown, ignoring a leading article.
     #[default]
