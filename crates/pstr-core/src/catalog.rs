@@ -24,7 +24,7 @@ use crate::metadata::{
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -206,6 +206,51 @@ INSERT OR IGNORE INTO node_first_seen (share_id, link_id, seen_at)
     SELECT share_id, link_id, 0 FROM nodes WHERE is_folder = 0;
 UPDATE title_metadata SET enriched_at = NULL;
 "#;
+
+/// What the last crawl of each share came to.
+///
+/// Per installation, like the rest of the catalog: when this device last
+/// looked at a share is nothing another device needs. `crawled_at` is the last
+/// crawl that finished, `attempted_at` the last that was tried, so a share that
+/// keeps failing is not retried on every launch. `added` is how many files the
+/// last finished crawl found that had never been seen before.
+const MIGRATION_V11: &str = r#"
+CREATE TABLE share_crawls (
+    share_id      TEXT PRIMARY KEY,
+    crawled_at    INTEGER NOT NULL,
+    attempted_at  INTEGER NOT NULL,
+    files         INTEGER NOT NULL,
+    added         INTEGER NOT NULL,
+    error         TEXT
+);
+"#;
+
+/// How old a share's last crawl may be before an app looks again on its own.
+/// Long enough that a launch rarely costs a crawl; short enough that a new
+/// episode turns up the same day.
+pub const CRAWL_STALE_AFTER_SECS: i64 = 6 * 60 * 60;
+
+/// One share's row of `share_crawls`. See [`MIGRATION_V11`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrawlRecord {
+    /// Unix seconds; `0` for a share no crawl of has finished.
+    pub crawled_at: i64,
+    pub attempted_at: i64,
+    /// Playable files the last finished crawl stored.
+    pub files: u64,
+    /// Of those, how many no earlier crawl had seen.
+    pub added: u64,
+    /// Why the last attempt failed, when it did.
+    pub error: Option<String>,
+}
+
+impl CrawlRecord {
+    /// Whether the share is due another look: nothing has been tried within
+    /// `age_secs` of `now`.
+    pub fn is_stale(&self, now: i64, age_secs: i64) -> bool {
+        now - self.crawled_at.max(self.attempted_at) >= age_secs
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfflineFile {
@@ -408,6 +453,12 @@ impl Catalog {
             tx.pragma_update(None, "user_version", 10)?;
             tx.commit()?;
         }
+        if version < 11 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V11)?;
+            tx.pragma_update(None, "user_version", 11)?;
+            tx.commit()?;
+        }
 
         Ok(())
     }
@@ -469,10 +520,23 @@ impl Catalog {
         }
 
         // Only files: a folder appearing is not something anyone watches.
-        tx.execute(
+        let now = unix_now();
+        let added = tx.execute(
             "INSERT OR IGNORE INTO node_first_seen (share_id, link_id, seen_at)
              SELECT share_id, link_id, ?2 FROM nodes WHERE share_id = ?1 AND is_folder = 0",
-            params![share_id, unix_now()],
+            params![share_id, now],
+        )?;
+        let files = nodes.iter().filter(|node| !node.is_folder).count();
+        tx.execute(
+            "INSERT INTO share_crawls (share_id, crawled_at, attempted_at, files, added, error)
+             VALUES (?1, ?2, ?2, ?3, ?4, NULL)
+             ON CONFLICT (share_id) DO UPDATE SET
+                 crawled_at   = excluded.crawled_at,
+                 attempted_at = excluded.attempted_at,
+                 files        = excluded.files,
+                 added        = excluded.added,
+                 error        = NULL",
+            params![share_id, now, files as i64, added as i64],
         )?;
 
         if !retain_offline {
@@ -481,6 +545,41 @@ impl Catalog {
 
         tx.commit()?;
         Ok(())
+    }
+
+    /// Record that a crawl of `share_id` failed, keeping what the last
+    /// finished one stored.
+    pub fn record_crawl_failure(&self, share_id: &str, error: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO share_crawls (share_id, crawled_at, attempted_at, files, added, error)
+             VALUES (?1, 0, ?2, 0, 0, ?3)
+             ON CONFLICT (share_id) DO UPDATE SET
+                 attempted_at = excluded.attempted_at,
+                 error        = excluded.error",
+            params![share_id, unix_now(), error],
+        )?;
+        Ok(())
+    }
+
+    /// What the last crawl of each share came to, by share id. A share never
+    /// crawled has no entry.
+    pub fn crawls(&self) -> Result<HashMap<String, CrawlRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT share_id, crawled_at, attempted_at, files, added, error FROM share_crawls",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                CrawlRecord {
+                    crawled_at: row.get(1)?,
+                    attempted_at: row.get(2)?,
+                    files: row.get::<_, i64>(3)?.max(0) as u64,
+                    added: row.get::<_, i64>(4)?.max(0) as u64,
+                    error: row.get(5)?,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     /// Every file in a share, folders excluded, ordered for display.
@@ -577,6 +676,10 @@ impl Catalog {
         )?;
         tx.execute(
             "DELETE FROM node_first_seen WHERE share_id = ?1",
+            params![share_id],
+        )?;
+        tx.execute(
+            "DELETE FROM share_crawls WHERE share_id = ?1",
             params![share_id],
         )?;
         tx.commit()?;
@@ -2131,6 +2234,91 @@ mod tests {
         let read = catalog.metadata("mushishi").expect("read").expect("a row");
         assert_eq!(read.metadata.and_then(|data| data.backdrop_url), None);
         assert!(catalog.enrichment_ages().expect("ages").is_empty());
+    }
+
+    #[test]
+    fn a_crawl_records_when_it_finished_and_what_it_added() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .replace_share("s", &[file("s", "a", "Show S01E01.mkv")])
+            .expect("crawl");
+        catalog
+            .replace_share(
+                "s",
+                &[
+                    file("s", "a", "Show S01E01.mkv"),
+                    file("s", "b", "Show S01E02.mkv"),
+                ],
+            )
+            .expect("recrawl");
+        let record = &catalog.crawls().expect("read")["s"];
+        assert!(record.crawled_at > 0);
+        assert_eq!(record.attempted_at, record.crawled_at);
+        assert_eq!((record.files, record.added), (2, 1));
+        assert_eq!(record.error, None);
+    }
+
+    /// A failure says why without forgetting what the last good crawl found,
+    /// and the next good crawl clears it.
+    #[test]
+    fn a_failed_crawl_keeps_the_last_good_one_until_the_next() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .replace_share("s", &[file("s", "a", "Show S01E01.mkv")])
+            .expect("crawl");
+        catalog
+            .conn
+            .execute(
+                "UPDATE share_crawls SET crawled_at = 5, attempted_at = 5",
+                [],
+            )
+            .expect("age it");
+        catalog
+            .record_crawl_failure("s", "link expired")
+            .expect("fail");
+        let record = catalog.crawls().expect("read")["s"].clone();
+        assert_eq!((record.crawled_at, record.files), (5, 1));
+        assert!(record.attempted_at > 5);
+        assert_eq!(record.error.as_deref(), Some("link expired"));
+        assert!(!record.is_stale(record.attempted_at + 10, 60));
+
+        catalog
+            .replace_share("s", &[file("s", "a", "Show S01E01.mkv")])
+            .expect("recrawl");
+        assert_eq!(catalog.crawls().expect("read")["s"].error, None);
+    }
+
+    #[test]
+    fn a_removed_share_forgets_its_crawls() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        catalog
+            .replace_share("s", &[file("s", "a", "Show S01E01.mkv")])
+            .expect("crawl");
+        catalog.remove_share("s").expect("remove");
+        assert!(catalog.crawls().expect("read").is_empty());
+    }
+
+    #[test]
+    fn migration_v11_opens_a_v10_catalog() {
+        let conn = Connection::open_in_memory().expect("open");
+        for migration in [
+            MIGRATION_V1,
+            MIGRATION_V2,
+            MIGRATION_V3,
+            MIGRATION_V4,
+            MIGRATION_V5,
+            MIGRATION_V6,
+            MIGRATION_V7,
+            MIGRATION_V8,
+            MIGRATION_V9,
+            MIGRATION_V10,
+        ] {
+            conn.execute_batch(migration).expect("migrate");
+        }
+        conn.pragma_update(None, "user_version", 10)
+            .expect("set version");
+        let catalog = Catalog::from_connection(conn).expect("upgrade");
+        assert!(catalog.crawls().expect("read").is_empty());
     }
 
     /// A file keeps the moment it first appeared across recrawls, and one

@@ -193,8 +193,15 @@ pub enum Event {
         share_id: String,
         nodes: usize,
         files: usize,
+        /// Files no earlier crawl had seen.
+        added: u64,
         seconds: f64,
+        /// Started by the app rather than the viewer, so only news is worth
+        /// saying.
+        quiet: bool,
     },
+    /// What the last crawl of each share came to, by share id.
+    Crawls(HashMap<String, pstr_core::catalog::CrawlRecord>),
     /// A crawl is under way: which share, and how many nodes so far.
     CrawlProgress { share: String, found: usize },
     /// Every requested crawl is done.
@@ -401,6 +408,14 @@ const DOWNLOAD_CONCURRENCY: usize = 3;
 /// How often watch history is synced while the app is open, on top of at
 /// launch and whenever a player stops.
 const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Unix seconds, now.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Enrichment as currently configured.
 struct Enrichment {
@@ -663,7 +678,7 @@ impl Engine {
             // The open connection predates the share, and crawling it through
             // that would find it "not open".
             engine.connection.lock().take();
-            engine.connect_and_crawl(Some(share.id)).await;
+            engine.connect_and_crawl(Some(vec![share.id]), false).await;
         });
     }
 
@@ -682,7 +697,7 @@ impl Engine {
             engine.emit(Event::ShareAdded(share.name.clone()));
             engine.load_shares();
             engine.connection.lock().take();
-            engine.connect_and_crawl(Some(share.id)).await;
+            engine.connect_and_crawl(Some(vec![share.id]), false).await;
         });
     }
 
@@ -944,7 +959,7 @@ impl Engine {
         self.load_shares();
         self.load_library();
         for id in profile.shares_added.iter().chain(&profile.shares_changed) {
-            self.connect_and_crawl(Some(id.clone())).await;
+            self.connect_and_crawl(Some(vec![id.clone()]), false).await;
         }
     }
 
@@ -1277,18 +1292,65 @@ impl Engine {
     pub fn crawl(&self, share: Option<String>) {
         let engine = self.clone();
         self.runtime.spawn(async move {
-            engine.connect_and_crawl(share).await;
+            engine
+                .connect_and_crawl(share.map(|id| vec![id]), false)
+                .await;
         });
     }
 
-    async fn connect_and_crawl(&self, share: Option<String>) {
+    /// Crawl, quietly, every share no crawl has looked at for
+    /// [`pstr_core::catalog::CRAWL_STALE_AFTER_SECS`] — or ever.
+    ///
+    /// Without this a share only grew when someone thought to press Refresh,
+    /// so the episode that came out yesterday was not in the library until
+    /// then. Quiet: a failure is logged and recorded on the share's row rather
+    /// than toasted, and a crawl that found nothing new says nothing.
+    pub fn crawl_stale(&self) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let stale = {
+                let crawls = match engine.catalog.lock().crawls() {
+                    Ok(crawls) => crawls,
+                    Err(error) => return tracing::warn!(%error, "read crawl records"),
+                };
+                let Ok(shares) = engine.store.list() else {
+                    return;
+                };
+                let now = unix_now();
+                shares
+                    .into_iter()
+                    .filter(|share| {
+                        crawls.get(&share.id).is_none_or(|record| {
+                            record.is_stale(now, pstr_core::catalog::CRAWL_STALE_AFTER_SECS)
+                        })
+                    })
+                    .map(|share| share.id)
+                    .collect::<Vec<_>>()
+            };
+            if !stale.is_empty() {
+                engine.connect_and_crawl(Some(stale), true).await;
+            }
+        });
+    }
+
+    /// Read what the last crawl of each share came to, for the shares page.
+    pub fn load_crawls(&self) {
+        let engine = self.clone();
+        self.runtime
+            .spawn_blocking(move || match engine.catalog.lock().crawls() {
+                Ok(crawls) => engine.emit(Event::Crawls(crawls)),
+                Err(error) => tracing::warn!(%error, "read crawl records"),
+            });
+    }
+
+    async fn connect_and_crawl(&self, shares: Option<Vec<String>>, quiet: bool) {
         let Some((library, _)) = self.ensure_connected().await else {
             self.emit(Event::CrawlFinished);
             return;
         };
 
-        let targets: Vec<String> = match share {
-            Some(id) => vec![id],
+        let targets: Vec<String> = match shares {
+            Some(ids) => ids,
             None => library.share_ids().map(str::to_string).collect(),
         };
 
@@ -1298,7 +1360,7 @@ impl Engine {
         futures::future::join_all(
             targets
                 .into_iter()
-                .map(|share_id| self.crawl_share(&library, share_id, cancel.clone())),
+                .map(|share_id| self.crawl_share(&library, share_id, cancel.clone(), quiet)),
         )
         .await;
         self.emit(Event::CrawlFinished);
@@ -1342,6 +1404,7 @@ impl Engine {
         library: &SharedLibrary,
         share_id: String,
         mut cancel: tokio::sync::watch::Receiver<u64>,
+        quiet: bool,
     ) {
         let started = std::time::Instant::now();
         let name = self
@@ -1376,7 +1439,19 @@ impl Engine {
             }) => match result {
                 Ok(nodes) => nodes,
                 Err(error) => {
-                    self.fail(&format!("crawl {share_id}"), error);
+                    if let Err(error) = self
+                        .catalog
+                        .lock()
+                        .record_crawl_failure(&share_id, &error.to_string())
+                    {
+                        tracing::warn!(%error, "record a failed crawl");
+                    }
+                    self.load_crawls();
+                    if quiet {
+                        tracing::warn!(%error, "crawl {name}");
+                    } else {
+                        self.fail(&format!("crawl {name}"), error);
+                    }
                     return;
                 }
             },
@@ -1455,12 +1530,22 @@ impl Engine {
             return;
         }
 
+        let added = self
+            .catalog
+            .lock()
+            .crawls()
+            .ok()
+            .and_then(|crawls| crawls.get(&share_id).map(|record| record.added))
+            .unwrap_or(0);
         self.emit(Event::Crawled {
             share_id,
             nodes: nodes.len(),
             files,
+            added,
             seconds: started.elapsed().as_secs_f64(),
+            quiet,
         });
+        self.load_crawls();
         self.load_library();
     }
 

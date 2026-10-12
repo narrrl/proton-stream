@@ -172,6 +172,19 @@ pub fn wide_key(title_key: &str) -> String {
     format!("wide:{title_key}")
 }
 
+/// "just now", "5 min ago", "3 h ago", "2 days ago": how long before `now`
+/// the Unix time `at` was.
+pub fn ago(at: i64, now: i64) -> String {
+    let ago = (now - at).max(0);
+    match ago {
+        0..60 => "just now".to_owned(),
+        60..3600 => format!("{} min ago", ago / 60),
+        3600..86_400 => format!("{} h ago", ago / 3600),
+        86_400..172_800 => "1 day ago".to_owned(),
+        _ => format!("{} days ago", ago / 86_400),
+    }
+}
+
 /// `1:03:47`, or `4:12` for anything under an hour.
 pub fn format_time(seconds: f64) -> String {
     if !seconds.is_finite() || seconds < 0.0 {

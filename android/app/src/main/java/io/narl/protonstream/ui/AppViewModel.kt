@@ -297,7 +297,9 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             }
         }
         reloadNow()
-        if (failed.isNotEmpty()) {
+        // A catch-up is the app's doing, not the viewer's: a failure goes on
+        // the share's row rather than in their face, and only news is said.
+        if (failed.isNotEmpty() && announce) {
             mutableState.update { it.copy(message = failed.joinToString("\n")) }
             return
         }
@@ -305,13 +307,19 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         if (announce) {
             val added = (mutableState.value.titles.map { it.key }.toSet() - before).size
             mutableState.update { it.copy(message = if (added == 1) "1 title added" else "$added titles added") }
+        } else {
+            val files = mutableState.value.shares.filter { it.id in ids }.sumOf { it.crawlAdded ?: 0uL }
+            if (files > 0uL) {
+                mutableState.update { it.copy(message = if (files == 1uL) "1 new file" else "$files new files") }
+            }
         }
     }
 
     /**
-     * Crawl shares the catalog has nothing of: brought by a sync that ran in
-     * [io.narl.protonstream.sync.WatchSyncWorker], or an add whose crawl never
-     * finished.
+     * Crawl shares due a look: ones the catalog has nothing of — brought by a
+     * sync that ran in [io.narl.protonstream.sync.WatchSyncWorker], or an add
+     * whose crawl never finished — and ones not crawled for six hours, so new
+     * episodes turn up without a pull to refresh.
      */
     fun catchUp() {
         if (catchingUp) return

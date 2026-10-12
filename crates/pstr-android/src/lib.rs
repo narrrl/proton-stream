@@ -140,6 +140,18 @@ pub struct ShareRecord {
     /// A folder of the signed-in account rather than a public link.
     #[uniffi(default = false)]
     pub from_account: bool,
+    /// When the last crawl here finished, Unix seconds. `None` before one has.
+    #[uniffi(default = None)]
+    pub crawled_at: Option<i64>,
+    /// Playable files that crawl stored.
+    #[uniffi(default = None)]
+    pub crawl_files: Option<u64>,
+    /// Of those, how many no earlier crawl had seen.
+    #[uniffi(default = None)]
+    pub crawl_added: Option<u64>,
+    /// Why the last attempt failed, until one succeeds.
+    #[uniffi(default = None)]
+    pub crawl_error: Option<String>,
 }
 
 fn share_record(share: Share) -> ShareRecord {
@@ -148,6 +160,10 @@ fn share_record(share: Share) -> ShareRecord {
         id: share.id,
         name: share.name,
         has_custom_password: share.has_custom_password,
+        crawled_at: None,
+        crawl_files: None,
+        crawl_added: None,
+        crawl_error: None,
     }
 }
 
@@ -1259,31 +1275,52 @@ impl AndroidEngine {
         Ok(share_record(share))
     }
 
-    /// Configured shares with nothing in the catalog: brought in by sync,
-    /// possibly while the app was in the background, or added here and never
-    /// crawled to the end. Crawl each. An empty share is crawled every time,
-    /// which costs one listing.
+    /// Configured shares due a crawl: never crawled here — brought in by sync,
+    /// possibly while the app was in the background, or added and never
+    /// crawled to the end — or not looked at for
+    /// [`pstr_core::catalog::CRAWL_STALE_AFTER_SECS`], so a share grows
+    /// without anyone pressing Refresh. Crawl each.
     pub fn uncrawled_shares(&self) -> Result<Vec<String>, BridgeError> {
         let shares = self.store.list().map_err(BridgeError::from_display)?;
-        let catalog = self.catalog.lock();
-        let mut uncrawled = Vec::new();
-        for share in shares {
-            if catalog
-                .files(&share.id)
-                .map_err(BridgeError::from_display)?
-                .is_empty()
-            {
-                uncrawled.push(share.id);
-            }
-        }
-        Ok(uncrawled)
+        let crawls = self
+            .catalog
+            .lock()
+            .crawls()
+            .map_err(BridgeError::from_display)?;
+        let now = now();
+        Ok(shares
+            .into_iter()
+            .filter(|share| {
+                crawls.get(&share.id).is_none_or(|record| {
+                    record.is_stale(now, pstr_core::catalog::CRAWL_STALE_AFTER_SECS)
+                })
+            })
+            .map(|share| share.id)
+            .collect())
     }
 
+    /// Every configured share, with what its last crawl here came to.
     pub fn shares(&self) -> Result<Vec<ShareRecord>, BridgeError> {
-        self.store
-            .list()
-            .map_err(BridgeError::from_display)
-            .map(|shares| shares.into_iter().map(share_record).collect())
+        let shares = self.store.list().map_err(BridgeError::from_display)?;
+        let crawls = self
+            .catalog
+            .lock()
+            .crawls()
+            .map_err(BridgeError::from_display)?;
+        Ok(shares
+            .into_iter()
+            .map(|share| {
+                let crawl = crawls.get(&share.id).cloned();
+                let mut record = share_record(share);
+                if let Some(crawl) = crawl {
+                    record.crawled_at = (crawl.crawled_at > 0).then_some(crawl.crawled_at);
+                    record.crawl_files = (crawl.crawled_at > 0).then_some(crawl.files);
+                    record.crawl_added = (crawl.crawled_at > 0).then_some(crawl.added);
+                    record.crawl_error = crawl.error;
+                }
+                record
+            })
+            .collect())
     }
 
     /// Add a public link, once it has opened with the password given. A link
@@ -2498,11 +2535,21 @@ impl AndroidEngine {
                 .lock()
                 .all_offline_files()
                 .map_err(BridgeError::from_display)?;
-            let nodes = connection
-                .library
-                .crawl(&id)
-                .await
-                .map_err(BridgeError::from_display)?;
+            let nodes = match connection.library.crawl(&id).await {
+                Ok(nodes) => nodes,
+                Err(error) => {
+                    // On the share's row until a crawl succeeds: a link revoked
+                    // upstream otherwise just stops growing.
+                    if let Err(error) = self
+                        .catalog
+                        .lock()
+                        .record_crawl_failure(&id, &error.to_string())
+                    {
+                        log::warn!("record a failed crawl: {error}");
+                    }
+                    return Err(BridgeError::from_display(error));
+                }
+            };
             let rows = build_rows(&id, &nodes);
             self.catalog
                 .lock()

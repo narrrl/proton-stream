@@ -309,9 +309,17 @@ class ScreenshotTest {
                 },
                 shelves = listOf(ShelfRecord("From MAPPA", listOf("oshi-no-ko", "bleach", "akira"))),
             ),
+            // Crawled relative to the clock, so the row reads "2 h ago" on
+            // whatever day the test runs.
             shares = listOf(
-                ShareRecord("anime", "anime", true),
-                ShareRecord("films", "films", false),
+                ShareRecord(
+                    "anime",
+                    "anime",
+                    true,
+                    crawledAt = System.currentTimeMillis() / 1_000 - 2 * 3_600,
+                    crawlFiles = 120uL,
+                ),
+                ShareRecord("films", "films", false, crawlError = "the link was revoked or has expired"),
             ),
             storage = StorageUsageRecord(6_400_000_000uL, 3uL, 0uL, 1_100_000_000uL),
         )

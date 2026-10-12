@@ -315,13 +315,7 @@ fn signed_in(
 
 /// "Synced 3 min ago · 2 positions from other devices".
 fn sync_line(at: i64, report: &SyncReport, now: i64) -> String {
-    let ago = (now - at).max(0);
-    let when = match ago {
-        0..60 => "just now".to_owned(),
-        60..3600 => format!("{} min ago", ago / 60),
-        _ => format!("{} h ago", ago / 3600),
-    };
-    let mut line = format!("Synced {when}");
+    let mut line = format!("Synced {}", ui::ago(at, now));
     if report.applied > 0 {
         line.push_str(&format!(
             "  ·  {} from other devices",

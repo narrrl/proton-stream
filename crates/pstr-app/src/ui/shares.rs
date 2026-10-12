@@ -6,7 +6,10 @@
 //! below is the only place a link is ever visible, and only while it is being
 //! typed.
 
+use std::collections::HashMap;
+
 use pstr_core::Share;
+use pstr_core::catalog::CrawlRecord;
 use pstr_core::library::Library;
 
 use crate::app::{Action, ShareForm};
@@ -16,6 +19,7 @@ use crate::ui;
 pub fn show(
     ui: &mut egui::Ui,
     shares: &[Share],
+    crawls: &HashMap<String, CrawlRecord>,
     library: &Library,
     form: &mut ShareForm,
     account: &mut ui::account::AccountPanel,
@@ -36,7 +40,7 @@ pub fn show(
                     .iter()
                     .filter(|title| title.share_ids.contains(&share.id))
                     .count();
-                share_row(ui, share, titles, actions);
+                share_row(ui, share, titles, crawls.get(&share.id), actions);
             }
 
             ui.add_space(theme::space::XXL);
@@ -48,7 +52,13 @@ pub fn show(
         });
 }
 
-fn share_row(ui: &mut egui::Ui, share: &Share, titles: usize, actions: &mut Vec<Action>) {
+fn share_row(
+    ui: &mut egui::Ui,
+    share: &Share,
+    titles: usize,
+    crawl: Option<&CrawlRecord>,
+    actions: &mut Vec<Action>,
+) {
     egui::Frame::new()
         .fill(theme::card())
         .corner_radius(egui::CornerRadius::same(theme::radius::MD))
@@ -67,7 +77,23 @@ fn share_row(ui: &mut egui::Ui, share: &Share, titles: usize, actions: &mut Vec<
                     if share.has_custom_password {
                         detail.push_str("  ·  password protected");
                     }
+                    match crawl {
+                        Some(crawl) if crawl.crawled_at > 0 => {
+                            detail.push_str("  ·  crawled ");
+                            detail.push_str(&ui::ago(crawl.crawled_at, crate::engine::unix_now()));
+                        }
+                        _ => detail.push_str("  ·  not crawled yet"),
+                    }
                     ui.label(ui::muted(detail)).on_hover_text(&share.id);
+                    // Why the last look failed, until one succeeds: a link
+                    // revoked upstream otherwise just stops growing.
+                    if let Some(error) = crawl.and_then(|crawl| crawl.error.as_deref()) {
+                        ui.label(
+                            theme::Role::Caption
+                                .rich(format!("Last crawl failed: {error}"))
+                                .color(theme::danger()),
+                        );
+                    }
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

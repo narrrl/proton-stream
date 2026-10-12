@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.window.DialogProperties
@@ -167,6 +168,25 @@ internal fun SharesScreen(
  * Three differently styled controls beside the name squeezed it into a column
  * a word wide; one icon leaves the row its width.
  */
+/** "120 files · crawled 2 h ago", or that it has not been yet. */
+internal fun crawlLine(share: ShareRecord, now: Long = System.currentTimeMillis() / 1_000): String {
+    val at = share.crawledAt ?: return "Not crawled yet"
+    val files = share.crawlFiles?.toLong()?.let { if (it == 1L) "1 file" else "$it files" }
+    return listOfNotNull(files, "crawled ${ago(at, now)}").joinToString(" · ")
+}
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago" — the desktop's `ui::ago`. */
+internal fun ago(at: Long, now: Long): String {
+    val seconds = (now - at).coerceAtLeast(0)
+    return when {
+        seconds < 60 -> "just now"
+        seconds < 3_600 -> "${seconds / 60} min ago"
+        seconds < 86_400 -> "${seconds / 3_600} h ago"
+        seconds < 172_800 -> "1 day ago"
+        else -> "${seconds / 86_400} days ago"
+    }
+}
+
 @Composable
 private fun ShareRow(
     share: ShareRecord,
@@ -178,13 +198,27 @@ private fun ShareRow(
     ListItem(
         headlineContent = { Text(share.name, fontWeight = FontWeight.SemiBold) },
         supportingContent = {
-            Text(
-                when {
-                    share.fromAccount -> "Folder of your Drive"
-                    share.hasCustomPassword -> "Link and custom password, stored securely"
-                    else -> "Public link"
-                },
-            )
+            Column {
+                Text(
+                    when {
+                        share.fromAccount -> "Folder of your Drive"
+                        share.hasCustomPassword -> "Link and custom password"
+                        else -> "Public link"
+                    },
+                )
+                Text(crawlLine(share), style = MaterialTheme.typography.bodySmall)
+                // Until a crawl succeeds: a link revoked upstream otherwise
+                // just stops growing.
+                share.crawlError?.let {
+                    Text(
+                        "Last crawl failed: $it",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         },
         leadingContent = {
             Icon(

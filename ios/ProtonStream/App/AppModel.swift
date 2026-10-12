@@ -242,7 +242,9 @@ final class AppModel {
             }
         }
         await reloadNow()
-        if !failed.isEmpty {
+        // A catch-up is the app's doing, not the viewer's: a failure goes on
+        // the share's row rather than in their face, and only news is said.
+        if !failed.isEmpty, announce {
             message = failed.joined(separator: "\n")
             return
         }
@@ -250,6 +252,9 @@ final class AppModel {
         if announce {
             let added = Set(titles.map(\.key)).subtracting(before).count
             message = added == 1 ? "1 title added" : "\(added) titles added"
+        } else {
+            let files = shares.filter { ids.contains($0.id) }.reduce(UInt64(0)) { $0 + ($1.crawlAdded ?? 0) }
+            if files > 0 { message = files == 1 ? "1 new file" : "\(files) new files" }
         }
     }
 
@@ -430,9 +435,10 @@ final class AppModel {
         }
     }
 
-    /// On launch and back on screen: crawl shares the catalog has nothing of —
-    /// brought by a sync that ran in the background, or an add whose crawl
-    /// never finished.
+    /// On launch and back on screen: crawl shares due a look — ones the
+    /// catalog has nothing of, brought by a sync that ran in the background or
+    /// an add whose crawl never finished, and ones not crawled for six hours,
+    /// so new episodes turn up without a pull to refresh.
     func enteredForeground() {
         guard !catchingUp else { return }
         catchingUp = true

@@ -95,6 +95,10 @@ pub enum Page {
     Player,
 }
 
+/// How often, in seconds, an open window looks for shares due a crawl. What
+/// counts as due is [`pstr_core::catalog::CRAWL_STALE_AFTER_SECS`].
+const STALE_CHECK_EVERY: f64 = 30.0 * 60.0;
+
 /// The pages in the top bar, in order. Ctrl+1 to Ctrl+5 go by position here.
 const NAV: [Page; 5] = [
     Page::Library,
@@ -530,6 +534,10 @@ pub struct App {
     pub page: Page,
     pub library: Library,
     pub shares: Vec<Share>,
+    /// What the last crawl of each share came to, for its row.
+    pub crawls: HashMap<String, pstr_core::catalog::CrawlRecord>,
+    /// When, on egui's clock, to next look for shares due a crawl.
+    next_stale_check: f64,
     /// Proton's own per-file thumbnails.
     pub thumbs: ImageCache,
     /// Artwork from a metadata provider, keyed by title key.
@@ -631,7 +639,9 @@ impl App {
         engine.load_library();
         engine.forget_orphaned_shares();
         engine.load_metadata();
+        engine.load_crawls();
         engine.connect();
+        engine.crawl_stale();
         let settings = engine.metadata_config();
 
         Ok(Self {
@@ -641,6 +651,8 @@ impl App {
             page: Page::Library,
             library: Library::default(),
             shares: Vec::new(),
+            crawls: HashMap::new(),
+            next_stale_check: STALE_CHECK_EVERY,
             thumbs: ImageCache::default(),
             posters: ImageCache::default(),
             metadata: HashMap::new(),
@@ -761,20 +773,35 @@ impl App {
                     share_id,
                     nodes,
                     files,
+                    added,
                     seconds,
+                    quiet,
                 } => {
                     let name = self.share_name(&share_id);
                     self.crawl_progress.remove(&name);
-                    self.note(
-                        ctx,
-                        format!("{name}: {files} playable of {nodes} nodes in {seconds:.0}s"),
-                        false,
-                    );
-                    // Only a crawl long enough to have walked away from.
-                    if seconds >= 30.0 {
-                        self.notify(ctx, &format!("Crawled {name}"), &format!("{files} files"));
+                    if quiet {
+                        // Looked at by the app, not the viewer: only news.
+                        if added > 0 {
+                            let text = format!(
+                                "{name}: {}",
+                                ui::library::plural(added as usize, "new file")
+                            );
+                            self.note(ctx, &text, false);
+                            self.notify(ctx, &format!("New in {name}"), &text);
+                        }
+                    } else {
+                        self.note(
+                            ctx,
+                            format!("{name}: {files} playable of {nodes} nodes in {seconds:.0}s"),
+                            false,
+                        );
+                        // Only a crawl long enough to have walked away from.
+                        if seconds >= 30.0 {
+                            self.notify(ctx, &format!("Crawled {name}"), &format!("{files} files"));
+                        }
                     }
                 }
+                Event::Crawls(crawls) => self.crawls = crawls,
                 Event::CrawlFinished => {
                     self.crawling = false;
                     self.crawl_progress.clear();
@@ -1807,6 +1834,15 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.pump(ctx, frame);
+        // A window left open for days still picks up what was added: the
+        // launch check alone would only ever run once.
+        let now = ctx.input(|input| input.time);
+        if now >= self.next_stale_check {
+            self.next_stale_check = now + STALE_CHECK_EVERY;
+            if now > 0.0 && !self.crawling {
+                self.engine.crawl_stale();
+            }
+        }
         self.warm_next();
         self.auto_skip(ctx);
         self.window.observe(ctx);
@@ -2000,6 +2036,7 @@ impl eframe::App for App {
                 page,
                 library,
                 shares,
+                crawls,
                 thumbs,
                 posters,
                 metadata,
@@ -2107,9 +2144,15 @@ impl eframe::App for App {
                             },
                             &mut actions,
                         ),
-                        Page::Shares => {
-                            ui::shares::show(ui, shares, library, form, account, &mut actions)
-                        }
+                        Page::Shares => ui::shares::show(
+                            ui,
+                            shares,
+                            crawls,
+                            library,
+                            form,
+                            account,
+                            &mut actions,
+                        ),
                         Page::Settings => {
                             ui::settings::show(ui, settings, prefs, api_key, &mut actions)
                         }

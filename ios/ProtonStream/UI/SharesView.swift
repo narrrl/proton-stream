@@ -97,6 +97,25 @@ struct SharesView: View {
 extension ShareRecord: Identifiable {}
 
 /// One share: its name, how it is unlocked, and its actions behind a menu.
+/// "120 files · crawled 2 h ago", or that it has not been yet.
+func crawlLine(_ share: ShareRecord, now: Int64 = Int64(Date.now.timeIntervalSince1970)) -> String {
+    guard let at = share.crawledAt else { return "Not crawled yet" }
+    let files = share.crawlFiles.map { $0 == 1 ? "1 file" : "\($0) files" }
+    return [files, "crawled \(ago(at, now: now))"].compactMap { $0 }.joined(separator: " · ")
+}
+
+/// "just now", "5 min ago", "3 h ago", "2 days ago" — the desktop's `ui::ago`.
+func ago(_ at: Int64, now: Int64) -> String {
+    let seconds = max(now - at, 0)
+    switch seconds {
+    case ..<60: return "just now"
+    case ..<3_600: return "\(seconds / 60) min ago"
+    case ..<86_400: return "\(seconds / 3_600) h ago"
+    case ..<172_800: return "1 day ago"
+    default: return "\(seconds / 86_400) days ago"
+    }
+}
+
 private struct ShareRow: View {
     let share: ShareRecord
     let onRefresh: () -> Void
@@ -110,8 +129,14 @@ private struct ShareRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(share.name).textStyle(.bodyLarge, semibold: true).foregroundStyle(scheme.onSurface)
                 Text(share.fromAccount ? "Folder of your Drive"
-                    : share.hasCustomPassword ? "Link and custom password, stored securely" : "Public link")
+                    : share.hasCustomPassword ? "Link and custom password" : "Public link")
                     .textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
+                Text(crawlLine(share)).textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant)
+                // Until a crawl succeeds: a link revoked upstream otherwise
+                // just stops growing.
+                if let error = share.crawlError {
+                    Text("Last crawl failed: \(error)").textStyle(.bodySmall).foregroundStyle(scheme.error).lineLimit(2)
+                }
             }
             Spacer(minLength: 0)
             Menu {
