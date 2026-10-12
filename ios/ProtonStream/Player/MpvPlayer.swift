@@ -339,7 +339,12 @@ final class MpvPlayer {
                 paused = value
                 onStateChanged?()
             case 5: muted = value
-            case 8: if !loading { buffering = value }
+            case 8:
+                // Said, so the lock screen's clock stops through a stall.
+                if !loading, buffering != value {
+                    buffering = value
+                    onStateChanged?()
+                }
             case 13: if !loading { seeking = value }
             default: break
             }

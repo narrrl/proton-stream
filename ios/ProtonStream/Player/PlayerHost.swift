@@ -75,7 +75,12 @@ final class PlayerHost {
     private(set) var index = 0
     /// Playing, but not on screen: the episode keeps going and the mini
     /// transport is what says so.
-    var minimized = false
+    var minimized = false {
+        // The mini transport has no picture to keep awake for; back on screen
+        // and still playing, it has one again. Nothing else recomputes this
+        // until the next pause, so the screen slept under the video.
+        didSet { updateIdleTimer() }
+    }
     /// The open file's chapters, already resolved into openings and endings.
     private(set) var chapters = ChapterPlan(entries: [], creditsStart: nil)
     /// What stopped this episode, until the viewer dismisses it.
@@ -479,9 +484,11 @@ final class PlayerHost {
     func enteredBackground() {
         save()
         guard isOpen, let player else { return }
-        if SettingsStore().backgroundAudio {
-            player.setVideoEnabled(false)
-        } else {
+        // The picture goes either way: with background audio off the lock
+        // screen's Play can still start the file, and decoding video into a
+        // layer nobody sees is work iOS ends a process for.
+        player.setVideoEnabled(false)
+        if !SettingsStore().backgroundAudio {
             player.setPaused(true)
         }
         publishNowPlaying()
@@ -508,12 +515,15 @@ final class PlayerHost {
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
         info[MPMediaItemPropertyPlaybackDuration] = player?.duration ?? 0
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player?.position ?? 0
-        info[MPNowPlayingInfoPropertyPlaybackRate] = (player?.paused ?? true) ? 0.0 : speed
+        // Zero while it waits on the network too, or the lock screen's clock
+        // runs on through a stall.
+        let moving = !(player?.paused ?? true) && !(player?.buffering ?? false)
+        info[MPNowPlayingInfoPropertyPlaybackRate] = moving ? speed : 0.0
         center.nowPlayingInfo = info
         let commands = MPRemoteCommandCenter.shared()
         commands.nextTrackCommand.isEnabled = next != nil
         commands.previousTrackCommand.isEnabled = index > 0
-        UIApplication.shared.isIdleTimerDisabled = !(player?.paused ?? true) && !minimized
+        updateIdleTimer()
 
         let artKey = mediaKey(episode)
         if artworkFor != artKey {
@@ -529,6 +539,11 @@ final class PlayerHost {
                 center.nowPlayingInfo = current
             }
         }
+    }
+
+    /// Keep the screen on while a picture is playing on it, and only then.
+    private func updateIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled = isOpen && !(player?.paused ?? true) && !minimized
     }
 
     private func updateElapsed(_ seconds: Double) {
@@ -563,6 +578,18 @@ final class PlayerHost {
         }
         commands.previousTrackCommand.addTarget { [weak self] _ in
             MainActor.assumeIsolated { self?.retreat() }
+            return .success
+        }
+        // Ten seconds either way: what a video's lock-screen transport offers
+        // in place of a music player's previous and next.
+        commands.skipForwardCommand.preferredIntervals = [10]
+        commands.skipForwardCommand.addTarget { [weak self] _ in
+            MainActor.assumeIsolated { self?.seek(to: (self?.player?.position ?? 0) + 10) }
+            return .success
+        }
+        commands.skipBackwardCommand.preferredIntervals = [10]
+        commands.skipBackwardCommand.addTarget { [weak self] _ in
+            MainActor.assumeIsolated { self?.seek(to: max((self?.player?.position ?? 0) - 10, 0)) }
             return .success
         }
         commands.stopCommand.addTarget { [weak self] _ in
