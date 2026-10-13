@@ -54,6 +54,36 @@ pub enum Error {
 }
 
 impl Error {
+    /// The message, followed by every cause its own text leaves out.
+    ///
+    /// A dropped connection reads as reqwest's "error sending request for url
+    /// (…)" and nothing else: why — a reset, a DNS failure, a certificate — is
+    /// further down the source chain. That is the part a viewer reporting a
+    /// failed crawl needs, so the URL, which only says which folder, is left
+    /// out to keep it on screen.
+    pub fn describe(&self) -> String {
+        let mut text = match self {
+            Self::Drive(proton_sdk::error::ProtonError::Transport(error)) => {
+                let url = error.url().map(|url| format!(" for url ({url})"));
+                let own = self.to_string();
+                url.map_or_else(|| own.clone(), |url| own.replace(&url, ""))
+            }
+            _ => self.to_string(),
+        };
+        let mut seen = self.to_string();
+        let mut source = std::error::Error::source(self);
+        while let Some(cause) = source {
+            let line = cause.to_string();
+            if !seen.contains(&line) {
+                text.push_str(": ");
+                text.push_str(&line);
+                seen.push_str(&line);
+            }
+            source = cause.source();
+        }
+        text
+    }
+
     /// Whether this is the account's session having ended: the refresh token
     /// was revoked or expired, or the token lacks a scope only a password
     /// sign-in grants. Nothing but signing in again fixes it.
@@ -76,3 +106,25 @@ impl From<keyring::Error> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("connection closed before message completed")]
+    struct Closed;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("client error (SendRequest)")]
+    struct SendRequest(#[source] Closed);
+
+    #[test]
+    fn a_failure_is_described_with_the_causes_its_own_text_leaves_out() {
+        let error = Error::Io(std::io::Error::other(SendRequest(Closed)));
+        assert_eq!(
+            error.describe(),
+            "io: client error (SendRequest): connection closed before message completed"
+        );
+    }
+}

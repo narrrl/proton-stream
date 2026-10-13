@@ -1494,7 +1494,7 @@ impl Engine {
                     if let Err(error) = self
                         .catalog
                         .lock()
-                        .record_crawl_failure(&share_id, &error.to_string())
+                        .record_crawl_failure(&share_id, &error.describe())
                     {
                         tracing::warn!(%error, "record a failed crawl");
                     }

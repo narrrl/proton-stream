@@ -2637,11 +2637,11 @@ impl AndroidEngine {
                     if let Err(error) = self
                         .catalog
                         .lock()
-                        .record_crawl_failure(&id, &error.to_string())
+                        .record_crawl_failure(&id, &error.describe())
                     {
                         log::warn!("record a failed crawl: {error}");
                     }
-                    return Err(BridgeError::from_display(error));
+                    return Err(BridgeError::from_display(error.describe()));
                 }
             };
             let rows = build_rows(&id, &nodes);
