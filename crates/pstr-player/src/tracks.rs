@@ -190,6 +190,16 @@ fn flag(mpv: &Mpv, index: i64, field: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The languages offered by name where a preference is chosen ahead of any
+/// file, as the three-letter tag a Matroska file carries. The same list
+/// [`language_name`] knows, and the phones' `LANGUAGES`; mpv treats the two-
+/// and three-letter forms as one.
+pub const LANGUAGES: [&str; 29] = [
+    "jpn", "eng", "ger", "fre", "spa", "ita", "por", "dut", "rus", "pol", "swe", "dan", "nor",
+    "fin", "cze", "hun", "tur", "ara", "heb", "hin", "kor", "chi", "tha", "vie", "ukr", "rum",
+    "gre", "ind", "may",
+];
+
 /// A readable name for a language tag, falling back to the tag itself.
 ///
 /// Deliberately a short list rather than a full ISO 639 table: it covers what

@@ -7,6 +7,8 @@
 
 use pstr_core::appearance::{Accent, Appearance, Flavor, Tiles};
 use pstr_core::metadata::{MetadataConfig, ProviderId, TitleNames};
+use pstr_core::prefs::PlaybackPrefs;
+use pstr_player::LANGUAGES;
 
 use crate::app::Action;
 use crate::desktop_prefs::{CACHE_CHOICES, DesktopPrefs};
@@ -19,9 +21,11 @@ use crate::ui;
 /// they are read-only, and passing them one by one is what pushed this
 /// function past the argument count anybody can read.
 #[derive(Debug, Clone, Copy)]
-pub struct Prefs {
+pub struct Prefs<'a> {
     pub autoplay: bool,
     pub auto_skip: bool,
+    /// The languages, read from here.
+    pub playback: &'a PlaybackPrefs,
     pub appearance: Appearance,
     pub desktop: DesktopPrefs,
     /// What the streaming cache holds, once the shares are open.
@@ -35,7 +39,7 @@ const COLUMN: f32 = 760.0;
 pub fn show(
     ui: &mut egui::Ui,
     settings: &mut MetadataConfig,
-    prefs: Prefs,
+    prefs: Prefs<'_>,
     api_key: &mut String,
     actions: &mut Vec<Action>,
 ) {
@@ -271,16 +275,18 @@ fn swatch(ui: &mut egui::Ui, appearance: Appearance, accent: Accent) -> egui::Re
 
 /// The playback settings that are not per-file.
 ///
-/// Volume, audio language, subtitle language and speed are all set from the
-/// player itself, where a viewer can hear the result.
-fn playback_form(ui: &mut egui::Ui, prefs: Prefs, actions: &mut Vec<Action>) {
+/// Volume and speed are set from the player itself, where a viewer can hear
+/// the result. The languages are here as well as there: what a first episode
+/// opens with is decided before there is a player to choose from.
+fn playback_form(ui: &mut egui::Ui, prefs: Prefs<'_>, actions: &mut Vec<Action>) {
     ui::widgets::settings_group(
         ui,
         "Playback",
         Some(
-            "Volume, audio, subtitles and speed are set from the player, and remembered from there.",
+            "Volume and speed are set from the player. A language chosen in the player for one show is kept for that show.",
         ),
         |ui| {
+            languages(ui, prefs.playback, actions);
             let mut autoplay = prefs.autoplay;
             ui::widgets::settings_row(
                 ui,
@@ -322,8 +328,80 @@ fn playback_form(ui: &mut egui::Ui, prefs: Prefs, actions: &mut Vec<Action>) {
     );
 }
 
+/// The audio and subtitle languages every file opens with, until a show has a
+/// choice of its own.
+fn languages(ui: &mut egui::Ui, playback: &PlaybackPrefs, actions: &mut Vec<Action>) {
+    let name = |tag: &Option<String>| match tag {
+        Some(tag) => pstr_player::language_name(tag),
+        None => "The file's default".to_owned(),
+    };
+    let audio = playback.audio_language.clone();
+    ui::widgets::settings_row(
+        ui,
+        "Audio language",
+        Some("Played when a file has it."),
+        |ui| {
+            egui::ComboBox::from_id_salt("audio-language")
+                .selected_text(name(&audio))
+                .show_ui(ui, |ui| {
+                    for choice in
+                        std::iter::once(None).chain(LANGUAGES.map(|tag| Some(tag.to_owned())))
+                    {
+                        if ui
+                            .selectable_label(audio == choice, name(&choice))
+                            .clicked()
+                            && audio != choice
+                        {
+                            actions.push(Action::SetLanguages {
+                                audio: choice,
+                                subtitles: playback.subtitles,
+                                subtitle: playback.subtitle_language.clone(),
+                            });
+                        }
+                    }
+                });
+        },
+    );
+    // Off, the file's default, or a language: "off" is a decision of its
+    // own, which no language expresses.
+    let subtitle = playback
+        .subtitles
+        .then(|| playback.subtitle_language.clone());
+    let subtitle_name = |choice: &Option<Option<String>>| match choice {
+        None => "Off".to_owned(),
+        Some(tag) => name(tag),
+    };
+    ui::widgets::settings_row(
+        ui,
+        "Subtitles",
+        Some("Shown when a file has them in this language."),
+        |ui| {
+            egui::ComboBox::from_id_salt("subtitle-language")
+                .selected_text(subtitle_name(&subtitle))
+                .show_ui(ui, |ui| {
+                    let choices = [None, Some(None)]
+                        .into_iter()
+                        .chain(LANGUAGES.map(|tag| Some(Some(tag.to_owned()))));
+                    for choice in choices {
+                        if ui
+                            .selectable_label(subtitle == choice, subtitle_name(&choice))
+                            .clicked()
+                            && subtitle != choice
+                        {
+                            actions.push(Action::SetLanguages {
+                                audio: playback.audio_language.clone(),
+                                subtitles: choice.is_some(),
+                                subtitle: choice.flatten(),
+                            });
+                        }
+                    }
+                });
+        },
+    );
+}
+
 /// The streaming cache: how big it may get, and a way to empty it.
-fn storage_form(ui: &mut egui::Ui, prefs: Prefs, actions: &mut Vec<Action>) {
+fn storage_form(ui: &mut egui::Ui, prefs: Prefs<'_>, actions: &mut Vec<Action>) {
     ui::widgets::settings_group(
         ui,
         "Storage",

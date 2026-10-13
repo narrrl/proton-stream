@@ -223,6 +223,13 @@ pub enum Action {
     PlayAdjacent(Adjacent),
     /// Start or stop the next episode playing on its own at the end of one.
     SetAutoplay(bool),
+    /// The audio and subtitle languages a file is opened with, for titles
+    /// without a choice of their own. `subtitles` false is "off".
+    SetLanguages {
+        audio: Option<String>,
+        subtitles: bool,
+        subtitle: Option<String>,
+    },
     /// Play faster or slower, and keep doing so for the next file.
     SetSpeed(f64),
     /// Seek past openings and credits without being asked.
@@ -1877,6 +1884,17 @@ impl App {
                 prefs.autoplay_next = autoplay;
                 self.engine.set_playback_prefs(prefs, true);
             }
+            Action::SetLanguages {
+                audio,
+                subtitles,
+                subtitle,
+            } => {
+                let mut prefs = self.engine.playback_prefs();
+                prefs.audio_language = audio;
+                prefs.subtitles = subtitles;
+                prefs.subtitle_language = subtitle;
+                self.engine.set_playback_prefs(prefs, true);
+            }
             Action::SetAppearance(appearance) => {
                 self.engine.set_appearance(appearance);
                 theme::apply(ctx, appearance);
@@ -2218,6 +2236,7 @@ impl eframe::App for App {
             let prefs = ui::settings::Prefs {
                 autoplay: playback_prefs.autoplay_next,
                 auto_skip: playback_prefs.auto_skip,
+                playback: &playback_prefs,
                 appearance: self.engine.appearance(),
                 desktop: self.engine.desktop_prefs(),
                 cache_used: (self.page == Page::Settings)
