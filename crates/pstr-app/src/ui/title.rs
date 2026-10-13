@@ -8,6 +8,7 @@ use crate::app::{Action, Page};
 use crate::engine::{DownloadItem, DownloadKey, DownloadState};
 use crate::playback::PlaybackTarget;
 use crate::theme;
+use crate::ui::widgets::Named;
 use crate::ui::{self, Art, Card};
 
 pub struct OfflineView<'a> {
@@ -878,6 +879,7 @@ pub(crate) fn still(
     actions: &mut Vec<Action>,
 ) {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let response = response.named(format!("Play {}", episode.label()));
     if !ui.is_rect_visible(rect) {
         return;
     }

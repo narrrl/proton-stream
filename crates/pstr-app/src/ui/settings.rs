@@ -11,9 +11,10 @@ use pstr_core::prefs::PlaybackPrefs;
 use pstr_player::LANGUAGES;
 
 use crate::app::Action;
-use crate::desktop_prefs::{CACHE_CHOICES, DesktopPrefs};
+use crate::desktop_prefs::{CACHE_CHOICES, DesktopPrefs, TEXT_SIZE_CHOICES};
 use crate::theme;
 use crate::ui;
+use crate::ui::widgets::Named;
 
 /// The settings that are a single value rather than a form.
 ///
@@ -79,6 +80,7 @@ fn appearance_form(ui: &mut egui::Ui, appearance: Appearance, actions: &mut Vec<
         ui.horizontal_wrapped(|ui| {
             for flavor in Flavor::ALL {
                 if palette_card(ui, appearance, flavor)
+                    .named(flavor.label())
                     .on_hover_text(flavor.description())
                     .clicked()
                     && appearance.flavor != flavor
@@ -269,7 +271,7 @@ fn swatch(ui: &mut egui::Ui, appearance: Appearance, accent: Accent) -> egui::Re
         }
     }
     response
-        .on_hover_text(accent.label())
+        .hint(accent.label())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

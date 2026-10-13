@@ -315,8 +315,16 @@ fn shelf_controls(ui: &mut egui::Ui, view: &LibraryView, actions: &mut Vec<Actio
     }
     ui.add_space(theme::space::S);
     let mut grouped = view.grouped;
-    if ui
-        .toggle_value(&mut grouped, egui_phosphor::regular::STACK)
+    let toggle = ui.toggle_value(&mut grouped, egui_phosphor::regular::STACK);
+    toggle.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            true,
+            view.grouped,
+            "Group franchises",
+        )
+    });
+    if toggle
         .on_hover_text(if view.grouped {
             "One tile per franchise. Click to show every title"
         } else {

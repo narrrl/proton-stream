@@ -10,6 +10,7 @@ use pstr_core::library::{Episode, Library, Title, TitleKind};
 
 use crate::app::{Action, Page};
 use crate::theme;
+use crate::ui::widgets::Named;
 use crate::ui::{self, Art};
 
 const STILL: egui::Vec2 = egui::vec2(128.0, 72.0);
@@ -161,7 +162,7 @@ fn row(
                         )
                         .frame(false),
                     )
-                    .on_hover_text(if episode.is_watched() {
+                    .hint(if episode.is_watched() {
                         "Remove from history — marks it unwatched"
                     } else {
                         "Remove from history — forgets where you stopped"

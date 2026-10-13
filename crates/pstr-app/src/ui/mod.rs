@@ -25,6 +25,7 @@ use pstr_core::metadata::{ArtShape, EpisodeGuide, EpisodeMetadata, MetadataRecor
 
 use crate::engine::{Engine, ImageCache, WIDE_MAX_EDGE, thumbnail_key};
 use crate::theme;
+use widgets::Named;
 
 /// Everything the pages need to draw one title's picture.
 ///
@@ -324,7 +325,7 @@ pub fn search_field(ui: &mut egui::Ui, search: &mut String, focus: bool) {
         );
         if response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("Clear (Esc)")
+            .hint("Clear (Esc)")
             .clicked()
         {
             search.clear();
@@ -529,6 +530,7 @@ fn filled(ui: &mut egui::Ui, text: &str, fill: Fill, extra: Vec2) -> egui::Respo
     );
 
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let response = response.named(text);
     if !ui.is_rect_visible(rect) {
         return response;
     }
@@ -626,6 +628,11 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
 
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, image_height + text_height), Sense::click());
+    let response = if card.subtitle.is_empty() {
+        response.named(card.name)
+    } else {
+        response.named(format!("{}, {}", card.name, card.subtitle))
+    };
     // Reached with the arrow keys or Tab: bring it into view, before the
     // early return below would skip a tile that is just off screen.
     if response.gained_focus() {

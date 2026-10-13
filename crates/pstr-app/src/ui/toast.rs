@@ -9,6 +9,7 @@ use egui::{Align2, Color32, CornerRadius, Sense, Stroke, Vec2};
 
 use crate::app::Action;
 use crate::theme;
+use crate::ui::widgets::Named;
 
 /// How long a message stays up.
 const SECONDS: f64 = 5.0;
@@ -214,7 +215,7 @@ fn card(ui: &mut egui::Ui, toast: &Toast) -> Pressed {
                     [c + Vec2::new(-d, d), c + Vec2::new(d, -d)],
                     Stroke::new(1.5, ink),
                 );
-                if response.on_hover_text("Dismiss").clicked() {
+                if response.hint("Dismiss").clicked() {
                     pressed = Pressed::Close;
                 }
                 if let Some((label, _)) = &toast.action {

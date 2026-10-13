@@ -73,8 +73,10 @@ keyring = { version = "3" }
 clap = { version = "4", features = ["derive"] }
 # The UI. `glow` rather than `wgpu` because step two of the player hands mpv an
 # `MPV_RENDER_API_TYPE_OPENGL` context, and that has to be the same context
-# eframe is drawing into.
+# eframe is drawing into. `accesskit` hands the widget tree to the platform's
+# screen reader (AT-SPI, UI Automation, NSAccessibility).
 eframe = { version = "0.35", default-features = false, features = [
+    "accesskit",
     "default_fonts",
     "glow",
     "wayland",

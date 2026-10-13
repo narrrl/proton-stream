@@ -17,6 +17,7 @@ use crate::app::{Action, Adjacent, Page};
 use crate::playback::{Command, Playback};
 use crate::theme;
 use crate::ui;
+use crate::ui::widgets::Named;
 
 /// Height of the clickable seek bar. Comfortably larger than the few pixels it
 /// draws, because a seek bar you have to aim at is a seek bar nobody uses.
@@ -163,7 +164,7 @@ pub fn mini(
                         egui::StrokeKind::Inside,
                     );
                 }
-                if response.on_hover_text("Show the picture again").clicked() {
+                if response.hint("Show the picture again").clicked() {
                     actions.push(Action::Goto(Page::Player));
                 }
             }
@@ -313,7 +314,7 @@ fn play_pause(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>,
     }
 
     if response
-        .on_hover_text(if playback.paused {
+        .hint(if playback.paused {
             "Play (Space)"
         } else {
             "Pause (Space)"
@@ -354,7 +355,7 @@ fn step_button(
         enabled,
         egui::Button::new(theme::Role::Subhead.rich(label)).min_size(Vec2::new(38.0, 30.0)),
     );
-    if response.on_hover_text(hover).clicked() {
+    if response.hint(hover).clicked() {
         push(actions);
     }
 }
@@ -436,7 +437,7 @@ fn volume(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
     };
     if ui
         .button(theme::Role::Subhead.rich(icon))
-        .on_hover_text(format!("Mute (M) — {:.0}%", playback.volume))
+        .hint(format!("Mute (M) — {:.0}%", playback.volume))
         .clicked()
     {
         actions.push(Action::ToggleMute);
@@ -567,6 +568,13 @@ fn seek_bar(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>, t
     let width = ui.available_width();
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, SEEK_HIT_HEIGHT), Sense::click_and_drag());
+    response.widget_info(|| {
+        egui::WidgetInfo::slider(
+            playback.duration.is_some(),
+            playback.position,
+            format!("Position, {}", ui::format_time(playback.position)),
+        )
+    });
 
     let active = response.hovered() || response.dragged();
     // Grows rather than jumps when the pointer arrives.

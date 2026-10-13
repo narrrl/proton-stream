@@ -8,6 +8,31 @@ use egui::{Color32, CornerRadius, Sense, Stroke, Vec2};
 
 use crate::theme;
 
+/// A name for a screen reader, on a control whose face does not say it.
+///
+/// A button drawn as an icon glyph is announced as the icon font's private
+/// code point, and one painted by hand as nothing at all.
+pub trait Named {
+    /// The control's name to a screen reader.
+    fn named(self, name: impl Into<String>) -> Self;
+    /// Hover text that is also the control's name.
+    fn hint(self, text: impl Into<String>) -> Self;
+}
+
+impl Named for egui::Response {
+    fn named(self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        let enabled = self.enabled();
+        self.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+        self
+    }
+
+    fn hint(self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        self.named(text.clone()).on_hover_text(text)
+    }
+}
+
 /// An on/off switch with its label beside it, for settings.
 ///
 /// Replaces egui's checkbox, whose unchecked box is drawn in the card colour —
@@ -98,6 +123,9 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
 pub fn watched_mark(ui: &mut egui::Ui, watched: bool) -> egui::Response {
     const SIZE: f32 = 20.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(SIZE), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, watched, "Watched")
+    });
     if ui.is_rect_visible(rect) {
         let ctx = ui.ctx();
         let t = ctx.animate_bool_with_time(response.id, watched, theme::motion::STATE);
@@ -278,6 +306,12 @@ pub enum DownloadGlyph {
 pub fn download_button(ui: &mut egui::Ui, glyph: DownloadGlyph) -> egui::Response {
     const SIZE: f32 = 30.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(SIZE), Sense::click());
+    let response = response.named(match glyph {
+        DownloadGlyph::Download => "Download".to_owned(),
+        DownloadGlyph::Progress(done) => format!("Downloading, {:.0}%", done * 100.0),
+        DownloadGlyph::Paused(done) => format!("Download paused, {:.0}%", done * 100.0),
+        DownloadGlyph::Done => "Downloaded".to_owned(),
+    });
     if !ui.is_rect_visible(rect) {
         return response;
     }

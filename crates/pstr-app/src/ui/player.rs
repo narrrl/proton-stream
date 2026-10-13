@@ -20,6 +20,7 @@ use egui::{Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 use crate::app::{Action, Adjacent};
 use crate::playback::{Command, Playback};
 use crate::theme;
+use crate::ui::widgets::Named;
 use crate::ui::{self, transport::Neighbours};
 
 /// How long the controls stay up after the pointer stops moving.
@@ -586,7 +587,7 @@ fn up_next_card(
                         theme::Role::Body.font(),
                         Color32::WHITE,
                     );
-                    if response.on_hover_text("Play now").clicked() {
+                    if response.hint("Play now").clicked() {
                         actions.push(Action::PlayAdjacent(Adjacent::Next));
                     }
 
@@ -746,7 +747,7 @@ fn chrome(
                         .corner_radius(CornerRadius::same(theme::radius::MD))
                         .min_size(Vec2::new(38.0, 32.0)),
                     )
-                    .on_hover_text(if fullscreen {
+                    .hint(if fullscreen {
                         "Leave fullscreen (F)"
                     } else {
                         "Fullscreen (F)"
@@ -778,7 +779,7 @@ fn chrome(
                             .corner_radius(CornerRadius::same(theme::radius::MD))
                             .min_size(Vec2::new(38.0, 32.0)),
                         )
-                        .on_hover_text("Episodes (E)")
+                        .hint("Episodes (E)")
                         .clicked()
                     {
                         actions.push(Action::ToggleEpisodes);
@@ -798,7 +799,7 @@ fn chrome(
                         .corner_radius(CornerRadius::same(theme::radius::MD))
                         .min_size(Vec2::new(38.0, 32.0)),
                     )
-                    .on_hover_text("Stop")
+                    .hint("Stop")
                     .clicked()
                 {
                     actions.push(Action::Player(Command::Stop));
@@ -904,7 +905,7 @@ fn episode_drawer(
                                     )
                                     .frame(false),
                                 )
-                                .on_hover_text("Close (E)")
+                                .hint("Close (E)")
                                 .clicked()
                             {
                                 actions.push(Action::ToggleEpisodes);

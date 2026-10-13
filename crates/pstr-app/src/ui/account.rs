@@ -14,6 +14,7 @@ use crate::app::Action;
 use crate::engine::AccountStatus;
 use crate::theme;
 use crate::ui;
+use crate::ui::widgets::Named;
 
 /// What the account section holds between frames.
 #[derive(Default)]
@@ -379,7 +380,7 @@ pub fn browser(
             if !browser.trail.is_empty()
                 && ui
                     .button(egui_phosphor::regular::ARROW_LEFT)
-                    .on_hover_text("Up a folder")
+                    .hint("Up a folder")
                     .clicked()
             {
                 browser.up(actions);
