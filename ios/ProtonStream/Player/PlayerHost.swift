@@ -305,6 +305,16 @@ final class PlayerHost {
                 player.setMuted(global.muted)
                 player.setSpeed(global.speed)
                 player.setPaused(false)
+                // While mpv opens the episode; the player holds them until it has.
+                let generation = player.generation
+                let subtitleLanguage = show?.subtitleLanguage ?? global.subtitleLanguage
+                let subtitles = show?.subtitles ?? global.subtitles
+                Task {
+                    guard let files = try? await NativeRuntime.engine().openSubtitles(
+                        shareId: episode.shareId, linkId: episode.linkId, language: subtitleLanguage
+                    ) else { return }
+                    player.addSubtitles(generation: generation, files: files, subtitles: subtitles)
+                }
                 startSaving()
             } catch {
                 if Task.isCancelled || self.session !== session {

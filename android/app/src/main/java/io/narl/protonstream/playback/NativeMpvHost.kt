@@ -19,6 +19,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import uniffi.pstr_android.ChapterPlan
 import uniffi.pstr_android.ChapterRecord
+import uniffi.pstr_android.SubtitleFilesRecord
 import uniffi.pstr_android.chapterPlan
 
 /**
@@ -292,6 +293,30 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
 
     override fun releaseNativeStream(nativeHandle: ULong) = pstrAndroidStreamRelease(nativeHandle.toLong())
 
+    /**
+     * Hand mpv the subtitle files beside [media], the episode [play] loaded.
+     *
+     * Native code holds them until mpv has the file loaded, since an external
+     * track belongs to the file open at the time, and releases them instead
+     * if another episode has been loaded since. [SubtitleFilesRecord.preferred]
+     * is turned on only when the file has no subtitle of its own playing;
+     * pass [subtitles] false to turn none on.
+     */
+    fun addSubtitles(media: String, files: SubtitleFilesRecord, subtitles: Boolean) {
+        val generation = currentGeneration.toLong()
+        val added = withOpenHandle { handle ->
+            files.files.forEachIndexed { index, file ->
+                if (currentMedia == media) {
+                    val select = subtitles && files.preferred == index.toUInt()
+                    nativeAddSubtitle(handle, generation, file.handle.toLong(), file.title, file.language, select)
+                } else {
+                    pstrAndroidStreamRelease(file.handle.toLong())
+                }
+            }
+        }
+        if (added == null) files.files.forEach { pstrAndroidStreamRelease(it.handle.toLong()) }
+    }
+
     private fun startPolling() {
         if (poller?.isActive == true) return
         // Off the main thread deliberately: `nativeState` and `nativeTracks`
@@ -414,6 +439,14 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         subtitles: Boolean,
         hardwareDecoding: Boolean,
     ): Boolean
+    private external fun nativeAddSubtitle(
+        handle: Long,
+        generation: Long,
+        stream: Long,
+        title: String,
+        language: String?,
+        select: Boolean,
+    )
     private external fun nativePause(handle: Long, paused: Boolean)
     private external fun nativeSeek(handle: Long, position: Double)
     private external fun nativeVolume(handle: Long, volume: Double)

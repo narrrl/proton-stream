@@ -99,6 +99,11 @@ final class MpvPlayer {
     /// `END_FILE(stop)` that stopping it emits.
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var pendingMedia: String?
+    /// The load generation whose file mpv has loaded.
+    @ObservationIgnored private var loadedGeneration = -1
+    /// Subtitle files handed over before their file loaded, and whether each
+    /// is the one to turn on.
+    @ObservationIgnored private var pendingSubtitles: [(SubtitleFileRecord, Bool)] = []
 
     /// A core, or nil when libmpv would not start.
     static func create() -> MpvPlayer? {
@@ -209,6 +214,9 @@ final class MpvPlayer {
         problem = nil
         self.media = nil
         generation += 1
+        // Subtitles for the file being replaced will never be added.
+        pendingSubtitles.forEach { pstr_android_stream_release($0.0.handle) }
+        pendingSubtitles = []
         pendingMedia = media
         loading = true
         if command(["loadfile", "pstr://\(handle)", "replace"]) < 0 {
@@ -217,6 +225,46 @@ final class MpvPlayer {
             return false
         }
         return true
+    }
+
+    /// Add the subtitle files beside the file of load `generation`.
+    ///
+    /// Held until mpv has that file loaded, since an external track belongs to
+    /// the file open at the time, and released instead if another file has
+    /// been loaded since. `files.preferred` is turned on only when the file
+    /// has no subtitle of its own playing; `subtitles` false turns none on.
+    func addSubtitles(generation: Int, files: SubtitleFilesRecord, subtitles: Bool) {
+        let marked = files.files.enumerated().map { index, file in
+            (file, subtitles && files.preferred == UInt32(index))
+        }
+        if generation != self.generation {
+            marked.forEach { pstr_android_stream_release($0.0.handle) }
+        } else if loadedGeneration == generation {
+            attach(marked)
+        } else {
+            pendingSubtitles += marked
+        }
+    }
+
+    /// `sub-add` off the main thread: mpv reads the whole file before it
+    /// returns, through the stream protocol and so from the network.
+    private func attach(_ subtitles: [(SubtitleFileRecord, Bool)]) {
+        guard let mpv, !subtitles.isEmpty else { return }
+        let showing = getString("sid").map { $0 != "no" } ?? false
+        let core = UncheckedCore(mpv)
+        DispatchQueue.global(qos: .userInitiated).async {
+            for (file, select) in subtitles {
+                var args = ["sub-add", "pstr://\(file.handle)", select && !showing ? "select" : "auto", file.title]
+                if let language = file.language { args.append(language) }
+                var pointers = args.map { UnsafePointer<CChar>(strdup($0)) }
+                pointers.append(nil)
+                let status = mpv_command(core.pointer, &pointers)
+                pointers.forEach { free(UnsafeMutablePointer(mutating: $0)) }
+                // On failure mpv may never have opened it, so nothing will
+                // close it. Releasing one it did open and close is a no-op.
+                if status < 0 { pstr_android_stream_release(file.handle) }
+            }
+        }
     }
 
     /// Written through rather than left to the observer: a tap that only shows
@@ -370,6 +418,13 @@ final class MpvPlayer {
         case .loaded:
             refreshTracks()
             refreshChapters()
+            // Mid-load, this is the outgoing file finishing its load.
+            if !loading {
+                loadedGeneration = generation
+                let ready = pendingSubtitles
+                pendingSubtitles = []
+                attach(ready)
+            }
         case .restarted:
             seeking = false
         case let .ended(reason):
@@ -463,4 +518,12 @@ final class MpvPlayer {
         defer { mpv_free(raw) }
         return String(cString: raw)
     }
+}
+
+/// mpv's handle, for a command issued off the main thread. libmpv's client API
+/// is thread-safe, and the core is only destroyed when it shuts down, which
+/// nothing in the app asks it to.
+private struct UncheckedCore: @unchecked Sendable {
+    let pointer: OpaquePointer
+    init(_ pointer: OpaquePointer) { self.pointer = pointer }
 }

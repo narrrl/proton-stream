@@ -27,6 +27,7 @@ extern "C" {
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -212,6 +213,14 @@ struct PlaybackState {
     int64_t generation = 0;
 };
 
+/// A subtitle file published for mpv, and what to call it.
+struct Subtitle {
+    uint64_t handle = 0;
+    std::string title;
+    std::string language;
+    bool select = false;
+};
+
 class Player {
   public:
     Player() {
@@ -338,7 +347,10 @@ class Player {
             state_.generation = generation;
             state_.loading = true;
             error_.clear();
+            for (const auto &subtitle : pending_subtitles_) released_.push_back(subtitle.handle);
+            pending_subtitles_.clear();
         }
+        flush_released();
         const std::string url = "pstr://" + std::to_string(handle);
         const char *command[] = {"loadfile", url.c_str(), nullptr};
         if (mpv_command(mpv_, command) < 0) {
@@ -370,6 +382,27 @@ class Player {
         if (!mpv_) return;
         const char *command[] = {"stop", nullptr};
         mpv_command(mpv_, command);
+    }
+
+    /// A subtitle file beside the file of load `generation`, added once mpv
+    /// has that file loaded: an external track belongs to the file open at
+    /// the time. Handed over for a file already replaced, it is released
+    /// instead. `select` turns it on, but only when the file has no subtitle
+    /// of its own playing.
+    void add_subtitle(int64_t generation, Subtitle subtitle) {
+        bool now = false;
+        {
+            std::lock_guard lock(state_mutex_);
+            if (generation != state_.generation) {
+                released_.push_back(subtitle.handle);
+            } else if (loaded_generation_ == generation) {
+                now = true;
+            } else {
+                pending_subtitles_.push_back(std::move(subtitle));
+            }
+        }
+        flush_released();
+        if (now) attach_subtitle(subtitle);
     }
 
     PlaybackState state() const {
@@ -434,6 +467,35 @@ class Player {
     }
 
   private:
+    void attach_subtitle(const Subtitle &subtitle) {
+        bool showing = false;
+        if (char *sid = mpv_get_property_string(mpv_, "sid")) {
+            showing = std::strcmp(sid, "no") != 0;
+            mpv_free(sid);
+        }
+        const std::string url = "pstr://" + std::to_string(subtitle.handle);
+        std::vector<const char *> command{
+            "sub-add", url.c_str(), subtitle.select && !showing ? "select" : "auto",
+            subtitle.title.c_str()};
+        if (!subtitle.language.empty()) command.push_back(subtitle.language.c_str());
+        command.push_back(nullptr);
+        // On failure mpv may never have opened it, so nothing will close it.
+        // Releasing one it did open and close is a no-op.
+        if (mpv_command(mpv_, command.data()) < 0) pstr_android_stream_release(subtitle.handle);
+    }
+
+    /// Release the subtitle streams queued under `state_mutex_`, outside it:
+    /// a release runs Rust destructors, which must not run under a lock a
+    /// reader of the state may be waiting on.
+    void flush_released() {
+        std::vector<uint64_t> handles;
+        {
+            std::lock_guard lock(state_mutex_);
+            handles.swap(released_);
+        }
+        for (const uint64_t handle : handles) pstr_android_stream_release(handle);
+    }
+
     struct MpvFree {
         void operator()(char *value) const noexcept { if (value) mpv_free(value); }
     };
@@ -534,6 +596,16 @@ class Player {
             if (event->event_id == MPV_EVENT_FILE_LOADED) {
                 const double start = pending_start_.exchange(0.0);
                 if (start > 0.0) set_double("time-pos", start);
+                std::vector<Subtitle> ready;
+                {
+                    std::lock_guard lock(state_mutex_);
+                    // Mid-load, this is the outgoing file finishing its load.
+                    if (!state_.loading) {
+                        loaded_generation_ = state_.generation;
+                        ready.swap(pending_subtitles_);
+                    }
+                }
+                for (const auto &subtitle : ready) attach_subtitle(subtitle);
             }
             if (event->event_id == MPV_EVENT_END_FILE) {
                 const auto *end = static_cast<mpv_event_end_file *>(event->data);
@@ -757,6 +829,12 @@ class Player {
     bool surface_changed_ = false;
     std::atomic<bool> frame_ready_{false};
     std::atomic<double> pending_start_{0.0};
+    /// The load generation whose file mpv has loaded, under `state_mutex_`.
+    int64_t loaded_generation_ = -1;
+    /// Subtitles handed over before their file loaded, under `state_mutex_`.
+    std::vector<Subtitle> pending_subtitles_;
+    /// Streams to release once `state_mutex_` is let go.
+    std::vector<uint64_t> released_;
 };
 
 Player *from(jlong handle) { return reinterpret_cast<Player *>(handle); }
@@ -848,6 +926,17 @@ extern "C" JNIEXPORT jboolean JNICALL Java_io_narl_protonstream_playback_NativeM
                          hardware_decoding == JNI_TRUE)
                 ? JNI_TRUE
                 : JNI_FALSE);
+    });
+}
+extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeAddSubtitle(JNIEnv *env, jobject, jlong handle, jlong generation, jlong stream, jstring title, jstring language, jboolean select) noexcept {
+    c_boundary([=] {
+        Subtitle subtitle{static_cast<uint64_t>(stream), {}, {}, select == JNI_TRUE};
+        auto *p = from(handle);
+        if (!p || !utf8(env, title, subtitle.title) || !utf8(env, language, subtitle.language)) {
+            pstr_android_stream_release(subtitle.handle);
+            return;
+        }
+        p->add_subtitle(generation, std::move(subtitle));
     });
 }
 extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativePause(JNIEnv *, jobject, jlong h, jboolean value) noexcept {

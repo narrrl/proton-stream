@@ -13,7 +13,9 @@ use parking_lot::Mutex;
 use pstr_core::account::{DriveEntry, PendingSignIn, PlaceKind, SignIn};
 use pstr_core::appearance::{Accent, Appearance, Flavor, Palette};
 use pstr_core::browse::{Filter, Sort};
-use pstr_core::catalog::{Catalog, OfflineFile, TitleTrackPrefs, WatchState, build_rows};
+use pstr_core::catalog::{
+    Catalog, OfflineFile, TitleTrackPrefs, WatchState, build_rows, build_sidecars,
+};
 use pstr_core::chapters::{Chapter, ChapterRole};
 use pstr_core::config::AppDirs;
 use pstr_core::library::{Episode, Library, Title, TitleKind};
@@ -100,6 +102,26 @@ pub struct AndroidPaths {
     pub config: String,
     pub data: String,
     pub cache: String,
+}
+
+/// A subtitle file beside an episode, opened and published for the native
+/// player like the episode itself. The player releases `handle` when mpv
+/// closes it; one never handed to mpv goes back through
+/// `pstr_android_stream_release`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SubtitleFileRecord {
+    pub handle: u64,
+    /// What else the file name says — "forced", "SDH" — or "External".
+    pub title: String,
+    pub language: Option<String>,
+}
+
+/// An episode's subtitle files, and which to turn on when the episode has
+/// none of its own playing.
+#[derive(Debug, Clone, Default, uniffi::Record)]
+pub struct SubtitleFilesRecord {
+    pub files: Vec<SubtitleFileRecord>,
+    pub preferred: Option<u32>,
 }
 
 /// Android implements this with an AES-GCM key held by Android Keystore.
@@ -1972,6 +1994,83 @@ impl AndroidEngine {
         .map_err(BridgeError::from_display)?
     }
 
+    /// Open the subtitle files paired with an episode, for the native player
+    /// to add once it has the episode loaded. `language` is the subtitle
+    /// language in effect for it, which picks [`SubtitleFilesRecord::preferred`].
+    ///
+    /// Through the session already open: a downloaded episode played without
+    /// one goes without its subtitles rather than waiting on a handshake. One
+    /// that fails to open is left out; the episode plays either way.
+    pub async fn open_subtitles(
+        self: Arc<Self>,
+        share_id: String,
+        link_id: String,
+        language: Option<String>,
+    ) -> SubtitleFilesRecord {
+        let runtime = Arc::clone(&self.runtime);
+        let opened = spawned(&runtime, async move {
+            let sidecars = self
+                .catalog
+                .lock()
+                .sidecars(&share_id, &link_id)
+                .unwrap_or_default();
+            if sidecars.is_empty() {
+                return SubtitleFilesRecord::default();
+            }
+            let Some(connection) = self.cached_connection() else {
+                return SubtitleFilesRecord::default();
+            };
+            let (engine, connection) = (&self, &connection);
+            let opening = sidecars.into_iter().map(|sidecar| async move {
+                let uid = node_uid(&sidecar.volume_id, &sidecar.link_id);
+                match engine
+                    .open_from_source(connection, &sidecar.share_id, &uid)
+                    .await
+                {
+                    Ok(stream) => {
+                        stream.warm_edges();
+                        Some((sidecar, stream))
+                    }
+                    Err(error) => {
+                        log::debug!("opening subtitle {} failed: {error}", sidecar.name);
+                        None
+                    }
+                }
+            });
+            let opened: Vec<_> = futures::future::join_all(opening)
+                .await
+                .into_iter()
+                .flatten()
+                .collect();
+            let sidecars: Vec<_> = opened.iter().map(|(sidecar, _)| sidecar.clone()).collect();
+            let preferred = pstr_core::catalog::preferred_sidecar(&sidecars, language.as_deref())
+                .and_then(|index| u32::try_from(index).ok());
+            let files = opened
+                .into_iter()
+                .map(|(sidecar, stream)| {
+                    let handle = Arc::new(AndroidStream {
+                        runtime: Arc::clone(&self.runtime),
+                        stream,
+                        cancel: tokio::sync::Notify::new(),
+                        native_id: Mutex::new(None),
+                    })
+                    .native_handle();
+                    SubtitleFileRecord {
+                        handle,
+                        title: sidecar.title.unwrap_or_else(|| "External".to_owned()),
+                        language: sidecar.language,
+                    }
+                })
+                .collect();
+            SubtitleFilesRecord { files, preferred }
+        })
+        .await;
+        opened.unwrap_or_else(|error| {
+            log::debug!("opening subtitles stopped: {error}");
+            SubtitleFilesRecord::default()
+        })
+    }
+
     /// Fetch the blocks an episode opens with into the cache, without playing
     /// it: the next episode, near the end of this one, so that autoplay or
     /// "Play now" starts from the cache rather than from two round trips.
@@ -2645,10 +2744,14 @@ impl AndroidEngine {
                 }
             };
             let rows = build_rows(&id, &nodes);
-            self.catalog
-                .lock()
-                .replace_share(&id, &rows)
-                .map_err(BridgeError::from_display)?;
+            let sidecars = build_sidecars(&id, &nodes);
+            {
+                let mut catalog = self.catalog.lock();
+                catalog
+                    .replace_share(&id, &rows)
+                    .and_then(|()| catalog.replace_sidecars(&id, &sidecars))
+                    .map_err(BridgeError::from_display)?;
+            }
             let after = self
                 .catalog
                 .lock()

@@ -250,11 +250,19 @@ fun PlayerScreen(
                 startup.audioLanguage, startup.subtitleLanguage, startup.subtitles,
                 SettingsStore(context).hardwareDecoding,
             )
+
             // After the load, because mpv keeps none of the three across one.
             nativeHost.setVolume(startup.volume)
             nativeHost.setMuted(startup.muted)
             nativeHost.setSpeed(startup.speed)
             session.transferToPlayer()
+            // While mpv opens the episode, and off the spinner's path: the host
+            // holds them until it has the file.
+            launch(Dispatchers.IO) {
+                val files = NativeRuntime.engine()
+                    .openSubtitles(episode.shareId, episode.linkId, startup.subtitleLanguage)
+                nativeHost.addSubtitles(key, files, startup.subtitles)
+            }
         }.onFailure { playbackError = it.message ?: "Playback failed" }
         opening = false
     }
