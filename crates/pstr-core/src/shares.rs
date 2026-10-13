@@ -567,6 +567,25 @@ impl ShareStore {
         Ok(updated)
     }
 
+    /// Call a share something else. Only the name changes: the id, which the
+    /// catalog, watch state and offline files are keyed by, stays. Sync sees
+    /// the new name as a change to the share's register, like any other.
+    pub fn rename(&self, id: &str, name: &str) -> Result<Share> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(Error::Config("a share needs a name".to_owned()));
+        }
+        let mut shares = self.list()?;
+        let share = shares
+            .iter_mut()
+            .find(|share| share.id == id)
+            .ok_or_else(|| Error::NotFound(format!("no share with id {id}")))?;
+        share.name = name.to_owned();
+        let renamed = share.clone();
+        write_json(&self.dirs.shares_file(), &shares)?;
+        Ok(renamed)
+    }
+
     /// Forget a share and its secrets.
     ///
     /// The config entry goes first here, for the mirror-image reason: if the
@@ -1255,6 +1274,25 @@ mod tests {
                 .iter()
                 .any(|share| share.id == added.id && share.has_custom_password)
         );
+    }
+
+    #[test]
+    fn a_renamed_share_keeps_its_id_and_refuses_an_empty_name() {
+        let (store, _) = store_in("rename");
+        let added = store
+            .add(
+                "Library",
+                "https://drive.proton.me/urls/ABC123#s3cr3t",
+                None,
+            )
+            .expect("add");
+
+        let renamed = store.rename(&added.id, "  Anime  ").expect("rename");
+        assert_eq!(renamed.id, added.id);
+        assert_eq!(renamed.name, "Anime");
+        assert_eq!(store.list().expect("list")[0].name, "Anime");
+        assert!(store.rename(&added.id, "   ").is_err());
+        assert!(store.rename("share-missing", "Anime").is_err());
     }
 
     /// A different link is a different share. Repointing this one at it would

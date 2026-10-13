@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.DangerButton
 import io.narl.protonstream.ui.theme.TonalButton
+import androidx.compose.material.icons.filled.Edit
 import uniffi.pstr_android.AccountState
 import uniffi.pstr_android.ShareRecord
 import androidx.compose.foundation.layout.Box
@@ -70,8 +71,10 @@ internal fun SharesScreen(
     padding: PaddingValues,
     account: AccountUiState = AccountUiState(),
     accountActions: AccountActions? = null,
+    onRename: (String, String) -> Unit = { _, _ -> },
 ) {
     var showAdd by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf<ShareRecord?>(null) }
     var signingIn by remember { mutableStateOf(false) }
     var browsing by remember { mutableStateOf(false) }
     var repairing by remember { mutableStateOf<ShareRecord?>(null) }
@@ -108,6 +111,7 @@ internal fun SharesScreen(
                             onRefresh = { onRefresh(share.id) },
                             onRepair = { repairing = share },
                             onRemove = { removing = share },
+                            onRename = { renaming = share },
                         )
                     }
                 }
@@ -144,6 +148,21 @@ internal fun SharesScreen(
             share = share,
             onDismiss = { repairing = null },
             onRepair = { url, password -> onRepair(share.id, url, password) },
+        )
+    }
+    renaming?.let { share ->
+        var name by remember(share.id) { mutableStateOf(share.name) }
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("Rename ${share.name}") },
+            text = { OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true) },
+            confirmButton = {
+                AccentButton(enabled = name.isNotBlank(), onClick = {
+                    renaming = null
+                    onRename(share.id, name.trim())
+                }) { Text("Save") }
+            },
+            dismissButton = { TonalButton(onClick = { renaming = null }) { Text("Cancel") } },
         )
     }
     removing?.let { share ->
@@ -197,6 +216,7 @@ private fun ShareRow(
     onRefresh: () -> Unit,
     onRepair: () -> Unit,
     onRemove: () -> Unit,
+    onRename: () -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
     ListItem(
@@ -243,6 +263,11 @@ private fun ShareRow(
                         text = { Text("Refresh") },
                         leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
                         onClick = { menu = false; onRefresh() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                        onClick = { menu = false; onRename() },
                     )
                     // Not a remove: a share whose secret has become unreadable
                     // cannot be removed either, since removal deletes a secret

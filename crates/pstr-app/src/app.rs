@@ -146,6 +146,11 @@ pub enum Action {
     OpenShareForm,
     /// Stop offering posters and synopses on the library page.
     DismissMetadataOffer,
+    /// Call a share something else.
+    RenameShare {
+        id: String,
+        name: String,
+    },
     /// Store a new link, and password, for a share already in the library.
     RepairShare {
         id: String,
@@ -563,6 +568,9 @@ pub struct ShareForm {
     pub repairing: Option<String>,
     pub repair_url: String,
     pub repair_password: String,
+    /// The share being renamed in its own row, if any, and the name so far.
+    pub renaming: Option<String>,
+    pub rename_to: String,
 }
 
 pub struct App {
@@ -1670,6 +1678,10 @@ impl App {
                 self.form.url = url;
                 self.form.error = None;
                 self.note(ctx, "share link pasted — add it, or name it first", false);
+            }
+            Action::RenameShare { id, name } => {
+                self.form.renaming = None;
+                self.engine.rename_share(id, name);
             }
             Action::RepairShare { id, url, password } => {
                 self.crawling = true;

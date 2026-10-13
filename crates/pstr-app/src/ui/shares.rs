@@ -108,6 +108,10 @@ fn share_row(
                     if ui.button("Crawl").clicked() {
                         actions.push(Action::Crawl(Some(share.id.clone())));
                     }
+                    if ui.button("Rename").clicked() {
+                        form.renaming = Some(share.id.clone());
+                        form.rename_to = share.name.clone();
+                    }
                     // Not for a folder of the account, which has no link.
                     if share.folder.is_none()
                         && ui
@@ -127,8 +131,39 @@ fn share_row(
             if form.repairing.as_deref() == Some(share.id.as_str()) {
                 repair_form(ui, share, form, actions);
             }
+            if form.renaming.as_deref() == Some(share.id.as_str()) {
+                rename_form(ui, share, form, actions);
+            }
         });
     ui.add_space(theme::space::S);
+}
+
+/// A new name for a share, in its own row. Enter saves, as everywhere else.
+fn rename_form(ui: &mut egui::Ui, share: &Share, form: &mut ShareForm, actions: &mut Vec<Action>) {
+    ui.add_space(theme::space::M);
+    ui.horizontal(|ui| {
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut form.rename_to)
+                .hint_text("Name")
+                .desired_width(320.0),
+        );
+        let ready = !form.rename_to.trim().is_empty();
+        let entered = field.lost_focus() && ui_enter_pressed(ui.ctx());
+        if ui
+            .add_enabled_ui(ready, |ui| ui::accent_button(ui, "Save"))
+            .inner
+            .clicked()
+            || (ready && entered)
+        {
+            actions.push(Action::RenameShare {
+                id: share.id.clone(),
+                name: form.rename_to.trim().to_owned(),
+            });
+        }
+        if ui.button("Cancel").clicked() {
+            form.renaming = None;
+        }
+    });
 }
 
 /// The same link again, and a password if it has one, for a share already in

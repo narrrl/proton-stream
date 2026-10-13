@@ -13,6 +13,7 @@ struct SharesView: View {
     @State private var browsing = false
     @State private var repairing: ShareRecord?
     @State private var removing: ShareRecord?
+    @State private var renaming: ShareRecord?
 
     var body: some View {
         TabPage("Shares") {
@@ -34,6 +35,7 @@ struct SharesView: View {
                                     share: share,
                                     onRefresh: { model.refreshShare(share.id) },
                                     onRepair: { repairing = share },
+                                    onRename: { renaming = share },
                                     onRemove: { removing = share }
                                 )
                             }
@@ -77,6 +79,9 @@ struct SharesView: View {
         }
         .fullScreenCover(isPresented: $browsing) {
             DriveBrowser()
+        }
+        .sheet(item: $renaming) { share in
+            RenameShareSheet(share: share) { model.renameShare(id: share.id, name: $0) }
         }
         .sheet(item: $repairing) { share in
             RepairShareSheet(share: share) { url, password in
@@ -124,6 +129,7 @@ private struct ShareRow: View {
     let share: ShareRecord
     let onRefresh: () -> Void
     let onRepair: () -> Void
+    let onRename: () -> Void
     let onRemove: () -> Void
     @Environment(\.scheme) private var scheme
 
@@ -147,6 +153,7 @@ private struct ShareRow: View {
                 // One share, not the library: a link that has just had files
                 // added should not cost a walk of every other one.
                 Button(action: onRefresh) { Label("Refresh", systemImage: "arrow.clockwise") }
+                Button(action: onRename) { Label("Rename", systemImage: "pencil") }
                 // Not a remove: a share whose secret has become unreadable
                 // cannot be removed either.
                 if !share.fromAccount {
@@ -162,6 +169,34 @@ private struct ShareRow: View {
         .padding(.leading, 16)
         .padding(.trailing, 4)
         .padding(.vertical, 8)
+    }
+}
+
+/// A new name for a share. The library, history and downloads stay.
+private struct RenameShareSheet: View {
+    let share: ShareRecord
+    let onRename: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+
+    init(share: ShareRecord, onRename: @escaping (String) -> Void) {
+        self.share = share
+        self.onRename = onRename
+        _name = State(initialValue: share.name)
+    }
+
+    var body: some View {
+        DialogSheet("Rename \(share.name)") {
+            Field(label: "Name", text: $name)
+        } buttons: {
+            Button("Cancel") { dismiss() }.buttonStyle(.tonal)
+            Button("Save") {
+                onRename(name.trimmingCharacters(in: .whitespaces))
+                dismiss()
+            }
+            .buttonStyle(.accent)
+            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
     }
 }
 

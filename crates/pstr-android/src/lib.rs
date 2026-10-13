@@ -1386,6 +1386,14 @@ impl AndroidEngine {
         Ok(share_record(share))
     }
 
+    /// Call a share something else; see `ShareStore::rename`.
+    pub fn rename_share(&self, share_id: String, name: String) -> Result<ShareRecord, BridgeError> {
+        self.store
+            .rename(&share_id, &name)
+            .map(share_record)
+            .map_err(BridgeError::from_display)
+    }
+
     pub fn remove_share(&self, share_id: String) -> Result<(), BridgeError> {
         let _publication = self.share_publication.lock();
         let catalog = self.catalog.lock();

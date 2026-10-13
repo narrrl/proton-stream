@@ -696,6 +696,16 @@ impl Engine {
         });
     }
 
+    /// Call a share something else. See [`ShareStore::rename`].
+    pub fn rename_share(&self, id: String, name: String) {
+        let engine = self.clone();
+        self.runtime
+            .spawn_blocking(move || match engine.store.rename(&id, &name) {
+                Ok(_) => engine.load_shares(),
+                Err(error) => engine.fail("rename the share", error),
+            });
+    }
+
     /// Re-supply the link behind a share whose stored secret is unreadable —
     /// a keyring that was reset — or whose custom password changed, keeping
     /// its catalog, watch state and downloads. See

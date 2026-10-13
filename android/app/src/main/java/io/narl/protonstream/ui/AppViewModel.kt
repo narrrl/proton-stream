@@ -423,6 +423,15 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }
     }
 
+    /** Call a share something else. The library, history and downloads stay. */
+    fun renameShare(id: String, name: String) {
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().renameShare(id, name) } }
+                .onFailure(::reportError)
+            reload()
+        }
+    }
+
     fun removeShare(id: String) {
         viewModelScope.launch {
             runCatching {

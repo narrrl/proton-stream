@@ -316,6 +316,18 @@ final class AppModel {
         }
     }
 
+    /// Call a share something else. The library, history and downloads stay.
+    func renameShare(id: String, name: String) {
+        Task {
+            do {
+                _ = try await run { try $0.renameShare(shareId: id, name: name) }
+            } catch {
+                reportError(error)
+            }
+            reload()
+        }
+    }
+
     func removeShare(_ id: String) {
         Task {
             let name = shares.first { $0.id == id }?.name ?? "the share"

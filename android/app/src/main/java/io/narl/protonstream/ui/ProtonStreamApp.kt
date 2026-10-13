@@ -310,6 +310,7 @@ fun ProtonStreamApp(
                             addFolder = model::addAccountFolder,
                             onError = model::reportError,
                         ),
+                        onRename = model::renameShare,
                     )
                     Destination.History -> HistoryScreen(
                         state,
