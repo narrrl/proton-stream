@@ -152,10 +152,16 @@ final class AppModel {
     }
 
     /// Crawl one share, or all with nil, with the banner offering Stop meanwhile.
+    ///
+    /// Held under a background task: a crawl takes minutes, and without one
+    /// iOS suspends the app the moment it leaves the screen and tears down its
+    /// connections, so a glance at another app failed the crawl.
     private func crawlShares(_ id: String?) async throws {
         crawlsRunning += 1
         crawling = true
+        let task = BackgroundTask(name: "crawl")
         defer {
+            task.end()
             crawlsRunning -= 1
             crawling = crawlsRunning > 0
         }
