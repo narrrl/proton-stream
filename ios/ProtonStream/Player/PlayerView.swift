@@ -7,7 +7,13 @@ private let controlsSeconds = 4.0
 /// The narrowest layout the in-app volume slider is worth the room it costs.
 /// Below it — a phone held upright — the hardware volume buttons are the
 /// better answer.
-private let volumeSliderMinWidth: CGFloat = 600
+private let volumeSliderMinWidth: CGFloat = 720
+
+/// Narrower than this, the pickers past subtitles go behind "More".
+private let inlineControlsMinWidth: CGFloat = 560
+
+/// How far a double tap on either side of the picture seeks.
+private let doubleTapSeconds = 10
 
 /// The rates worth offering. A short list rather than a slider: the useful
 /// rates are a handful of ratios, and a slider lands on 1.07 as often as 1.0.
@@ -24,17 +30,47 @@ struct PlayerView: View {
     @State private var showControls = true
     @State private var hideTask: Task<Void, Never>?
     @State private var landscapeLocked = OrientationLock.landscape
+    /// Set by the rotation button: from then on the viewer decides.
+    @State private var rotationChosen = false
     @State private var sheet: PlayerSheet?
+    /// Which side was double-tapped, shown for a moment so the seek is seen
+    /// to have happened; the count makes a second tap on one side show again.
+    @State private var nudge: (seconds: Int, count: Int)?
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 Color.black.ignoresSafeArea()
                 MpvView(player: player).ignoresSafeArea()
+                // Double-tap a side to seek ten seconds, as every phone video
+                // player has taught; the middle plays or pauses. A single tap
+                // waits out the double-tap, which is the price of both.
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
+                    .onTapGesture(count: 2) { location in doubleTap(at: location.x, width: geometry.size.width) }
                     .onTapGesture { setControls(!showControls) }
+                    .accessibilityElement()
+                    .accessibilityLabel(showControls ? "Hide controls" : "Show controls")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { setControls(!showControls) }
+
+                if let nudge {
+                    Text(nudge.seconds < 0 ? "−\(-nudge.seconds) s" : "+\(nudge.seconds) s")
+                        .textStyle(.labelLarge)
+                        .foregroundStyle(.white)
+                        .frame(width: 72, height: 72)
+                        .background(Circle().fill(scheme.scrim.opacity(0.5)))
+                        .padding(.horizontal, 48)
+                        .frame(maxWidth: .infinity, alignment: nudge.seconds < 0 ? .leading : .trailing)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .task(id: nudge.count) {
+                            try? await Task.sleep(for: .milliseconds(700))
+                            if !Task.isCancelled { self.nudge = nil }
+                        }
+                }
 
                 VStack(spacing: 0) {
                     if showControls { topBar.transition(.opacity) }
@@ -44,8 +80,12 @@ struct PlayerView: View {
                             host: host,
                             player: player,
                             roomForVolume: geometry.size.width >= volumeSliderMinWidth,
+                            roomForAll: geometry.size.width >= inlineControlsMinWidth,
                             landscapeLocked: landscapeLocked,
-                            onRotate: { landscapeLocked = OrientationLock.toggle() },
+                            onRotate: {
+                                rotationChosen = true
+                                landscapeLocked = OrientationLock.toggle()
+                            },
                             onSheet: { sheet = $0 },
                             onInteract: { setControls(true) }
                         )
@@ -135,6 +175,16 @@ struct PlayerView: View {
         .persistentSystemOverlays(.hidden)
         .onAppear { setControls(true) }
         .onChange(of: player.paused) { setControls(showControls) }
+        // VoiceOver moves between controls by swiping, and a control that
+        // fades four seconds after it is reached cannot be found again.
+        .onChange(of: voiceOver) { setControls(true) }
+        // A wide picture fills a phone only on its side, so it turns there by
+        // itself, once per episode, until the viewer picks for themselves.
+        .onChange(of: player.videoWidth > player.videoHeight && player.videoHeight > 0) { _, wide in
+            guard wide, host.playingOpenEpisode, !rotationChosen, !landscapeLocked else { return }
+            OrientationLock.set(true)
+            landscapeLocked = true
+        }
         .sheet(item: $sheet) { which in
             switch which {
             case .speed: SpeedSheet(current: host.speed, onSelect: host.setSpeed)
@@ -180,10 +230,21 @@ struct PlayerView: View {
     private func setControls(_ shown: Bool) {
         showControls = shown
         hideTask?.cancel()
-        guard shown, !player.paused else { return }
+        guard shown, !player.paused, !voiceOver else { return }
         hideTask = Task {
             try? await Task.sleep(for: .seconds(controlsSeconds))
             if !Task.isCancelled { showControls = false }
+        }
+    }
+
+    private func doubleTap(at x: CGFloat, width: CGFloat) {
+        let third = width / 3
+        let seconds = x < third ? -doubleTapSeconds : x > width - third ? doubleTapSeconds : 0
+        if seconds == 0 {
+            host.setPaused(!player.paused)
+        } else {
+            host.seek(to: max(player.position + Double(seconds), 0))
+            nudge = (seconds, (nudge?.count ?? 0) + 1)
         }
     }
 }
@@ -209,6 +270,7 @@ private struct PlayerControls: View {
     let host: PlayerHost
     let player: MpvPlayer
     let roomForVolume: Bool
+    let roomForAll: Bool
     let landscapeLocked: Bool
     let onRotate: () -> Void
     let onSheet: (PlayerSheet) -> Void
@@ -257,48 +319,85 @@ private struct PlayerControls: View {
                 CompactIcon("goforward.30", "Forward thirty seconds") { host.seek(to: player.position + 30) }
                 CompactIcon("forward.end.fill", "Next episode", enabled: host.next != nil, action: host.advance)
                 Spacer(minLength: 4)
-                if host.episodes.count > 1 {
-                    CompactIcon("rectangle.stack", "Episodes") { onSheet(.episodes) }
-                }
-                if host.chapters.entries.count > 1 {
-                    CompactIcon("list.bullet", "Chapters") { onSheet(.chapters) }
-                }
-                CompactIcon("speedometer", "Playback speed") { onSheet(.speed) }
-                CompactIcon("waveform", "Audio track") { onSheet(.tracks("audio")) }
-                CompactIcon("captions.bubble", "Subtitles") { onSheet(.tracks("sub")) }
-                CompactIcon(player.muted ? "speaker.slash.fill" : "speaker.wave.2.fill", "Mute") {
-                    player.setMuted(!player.muted)
-                    host.rememberVolume(muted: !player.muted)
-                }
-                // The app's own volume, which is not the device's: a file
-                // mastered quiet is turned up here and stays up for the next.
-                if roomForVolume {
-                    Slider(
-                        value: Binding(
-                            get: { dragVolume ?? min(max(player.volume, 0), 100) },
-                            set: { dragVolume = $0; player.setVolume($0) }
-                        ),
-                        in: 0 ... 100
-                    ) { editing in
-                        onInteract()
-                        if !editing, let chosen = dragVolume {
-                            dragVolume = nil
-                            host.rememberVolume(volume: chosen)
+                if roomForAll {
+                    pickers
+                } else {
+                    // A phone held upright has room for the transport and two
+                    // more buttons at a thumb's size; the rest go behind More
+                    // rather than off the edge.
+                    CompactIcon("captions.bubble", "Subtitles") { onSheet(.tracks("sub")) }
+                    Menu {
+                        if host.episodes.count > 1 {
+                            Button("Episodes", systemImage: "rectangle.stack") { onSheet(.episodes) }
                         }
+                        if host.chapters.entries.count > 1 {
+                            Button("Chapters", systemImage: "list.bullet") { onSheet(.chapters) }
+                        }
+                        Button("Playback speed", systemImage: "speedometer") { onSheet(.speed) }
+                        Button("Audio track", systemImage: "waveform") { onSheet(.tracks("audio")) }
+                        Button(player.muted ? "Unmute" : "Mute", systemImage: player.muted ? "speaker.wave.2.fill" : "speaker.slash.fill", action: toggleMute)
+                        Button(
+                            landscapeLocked ? "Unlock rotation" : "Lock to landscape",
+                            systemImage: landscapeLocked ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                            action: onRotate
+                        )
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .tint(scheme.primary)
-                    .frame(width: 96)
+                    .accessibilityLabel("More")
                 }
-                CompactIcon(
-                    landscapeLocked ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                    landscapeLocked ? "Unlock rotation" : "Lock to landscape",
-                    action: onRotate
-                )
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(scheme.scrim.opacity(0.68).ignoresSafeArea(edges: [.bottom, .horizontal]))
+    }
+
+    private func toggleMute() {
+        player.setMuted(!player.muted)
+        host.rememberVolume(muted: !player.muted)
+    }
+
+    /// The pickers, laid out in a row where there is room for them all.
+    @ViewBuilder private var pickers: some View {
+        if host.episodes.count > 1 {
+            CompactIcon("rectangle.stack", "Episodes") { onSheet(.episodes) }
+        }
+        if host.chapters.entries.count > 1 {
+            CompactIcon("list.bullet", "Chapters") { onSheet(.chapters) }
+        }
+        CompactIcon("speedometer", "Playback speed") { onSheet(.speed) }
+        CompactIcon("waveform", "Audio track") { onSheet(.tracks("audio")) }
+        CompactIcon("captions.bubble", "Subtitles") { onSheet(.tracks("sub")) }
+        CompactIcon(player.muted ? "speaker.slash.fill" : "speaker.wave.2.fill", player.muted ? "Unmute" : "Mute", action: toggleMute)
+        // The app's own volume, which is not the device's: a file
+        // mastered quiet is turned up here and stays up for the next.
+        if roomForVolume {
+            Slider(
+                value: Binding(
+                    get: { dragVolume ?? min(max(player.volume, 0), 100) },
+                    set: { dragVolume = $0; player.setVolume($0) }
+                ),
+                in: 0 ... 100
+            ) { editing in
+                onInteract()
+                if !editing, let chosen = dragVolume {
+                    dragVolume = nil
+                    host.rememberVolume(volume: chosen)
+                }
+            }
+            .tint(scheme.primary)
+            .frame(width: 96)
+        }
+        CompactIcon(
+            landscapeLocked ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+            landscapeLocked ? "Unlock rotation" : "Lock to landscape",
+            action: onRotate
+        )
     }
 }
 
@@ -318,9 +417,10 @@ private struct CompactIcon: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 19))
+                .font(.system(size: 20))
                 .foregroundStyle(enabled ? Color.white : Color.white.opacity(0.35))
-                .frame(width: 40, height: 40)
+                // 44pt: the smallest target Apple's guidelines allow.
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableStyle(circle: true, wash: .white))

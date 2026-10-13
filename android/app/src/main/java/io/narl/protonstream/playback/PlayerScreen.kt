@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -12,7 +13,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -48,6 +49,8 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,6 +66,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -118,6 +126,12 @@ private const val CONTROLS_SECONDS = 4L
 /** How long the "up next" card counts down before it loads the next episode. */
 private const val UP_NEXT_SECONDS = 10
 
+/** How far a double tap on either side of the picture seeks. */
+private const val DOUBLE_TAP_SECONDS = 10
+
+/** How long the double-tap seek mark stays up. */
+private const val NUDGE_MS = 700L
+
 /** How close to the end the next episode's opening blocks are fetched. */
 private const val WARM_NEXT_SECONDS = 120.0
 
@@ -133,7 +147,10 @@ private const val MAX_VOLUME = 100f
  * Below it — a phone held upright — the transport row is already five controls
  * wide, and the device's own volume keys are the better answer.
  */
-private val VOLUME_SLIDER_MIN_WIDTH = 600.dp
+private val VOLUME_SLIDER_MIN_WIDTH = 720.dp
+
+/** Narrower than this, the pickers past subtitles go behind "More". */
+private val INLINE_CONTROLS_MIN_WIDTH = 560.dp
 
 /**
  * The player, as its own screen on the activity's own window.
@@ -388,24 +405,71 @@ fun PlayerScreen(
     }
 
     var landscapeLocked by remember { mutableStateOf(false) }
+    // Set by the rotation button: from then on the viewer decides.
+    var rotationChosen by remember { mutableStateOf(false) }
+    // A wide picture fills a phone only on its side, so it turns there by
+    // itself, once per episode, until the viewer picks for themselves.
+    LaunchedEffect(key, playingThis, state.videoWidth > state.videoHeight) {
+        if (!playingThis || rotationChosen || landscapeLocked) return@LaunchedEffect
+        if (state.videoHeight > 0.0 && state.videoWidth > state.videoHeight) {
+            landscapeLocked = activity?.lockLandscape() ?: false
+        }
+    }
     var showControls by remember { mutableStateOf(true) }
-    LaunchedEffect(showControls, state.paused) {
-        if (showControls && !state.paused) {
+    // TalkBack moves between controls by swiping, and a control that fades
+    // four seconds after it is reached cannot be found again.
+    val exploring = rememberTouchExploration()
+    LaunchedEffect(exploring) { if (exploring) showControls = true }
+    LaunchedEffect(showControls, state.paused, exploring) {
+        if (showControls && !state.paused && !exploring) {
             delay(CONTROLS_SECONDS * 1_000)
             showControls = false
         }
     }
+    // Which side was double-tapped, shown for a moment so the seek is seen
+    // to have happened; the count makes a second tap on one side show again.
+    var nudge by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(nudge) {
+        if (nudge != null) {
+            delay(NUDGE_MS)
+            nudge = null
+        }
+    }
+    val current by rememberUpdatedState(state)
     if (minimized) return
 
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = { showControls = !showControls },
-            ),
+            // Double-tap a side to seek ten seconds, as every phone video
+            // player has taught; the middle plays or pauses. A single tap
+            // waits out the double-tap timeout, which is the price of both.
+            .pointerInput(host) {
+                detectTapGestures(
+                    onTap = { showControls = !showControls },
+                    onDoubleTap = { offset ->
+                        val third = size.width / 3f
+                        val seconds = when {
+                            offset.x < third -> -DOUBLE_TAP_SECONDS
+                            offset.x > size.width - third -> DOUBLE_TAP_SECONDS
+                            else -> 0
+                        }
+                        if (seconds == 0) {
+                            host.setPaused(!current.paused)
+                        } else {
+                            host.seek((current.position + seconds).coerceAtLeast(0.0))
+                            nudge = seconds to (nudge?.second ?: 0) + 1
+                        }
+                    },
+                )
+            }
+            .semantics {
+                onClick(label = if (showControls) "Hide controls" else "Show controls") {
+                    showControls = !showControls
+                    true
+                }
+            },
     ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -497,7 +561,10 @@ fun PlayerScreen(
                 episodes = episodes,
                 playing = index,
                 onEpisode = { jumpTo(it) },
-                onRotate = { landscapeLocked = activity?.toggleLandscape() ?: false },
+                onRotate = {
+                    rotationChosen = true
+                    landscapeLocked = activity?.toggleLandscape() ?: false
+                },
                 landscapeLocked = landscapeLocked,
             )
         }
@@ -513,6 +580,20 @@ fun PlayerScreen(
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(end = 16.dp, bottom = if (showControls) 132.dp else 24.dp),
             ) { Text(skip.label) }
+        }
+
+        nudge?.let { (seconds, _) ->
+            Box(
+                Modifier
+                    .align(if (seconds < 0) Alignment.CenterStart else Alignment.CenterEnd)
+                    .padding(horizontal = 48.dp)
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(if (seconds < 0) "−${-seconds} s" else "+$seconds s", color = Color.White)
+            }
         }
 
         // A file with no chapters has no credits to count over, so the card
@@ -659,6 +740,26 @@ private fun ImmersiveWindow(activity: Activity?) {
     }
 }
 
+/** Lock to landscape. Reports whether it is. */
+private fun Activity.lockLandscape(): Boolean {
+    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    return true
+}
+
+/** Whether TalkBack, or anything else that explores by touch, is on. */
+@Composable
+private fun rememberTouchExploration(): Boolean {
+    val context = LocalContext.current
+    val manager = remember(context) { context.getSystemService(AccessibilityManager::class.java) }
+    var exploring by remember { mutableStateOf(manager?.isTouchExplorationEnabled == true) }
+    DisposableEffect(manager) {
+        val listener = AccessibilityManager.TouchExplorationStateChangeListener { exploring = it }
+        manager?.addTouchExplorationStateChangeListener(listener)
+        onDispose { manager?.removeTouchExplorationStateChangeListener(listener) }
+    }
+    return exploring
+}
+
 /** Lock to landscape, or hand rotation back to the sensor. Reports which. */
 private fun Activity.toggleLandscape(): Boolean {
     val lock = requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -705,8 +806,15 @@ private fun PlayerControls(
     }
     val duration = state.duration.toFloat().coerceAtLeast(1f)
     val density = LocalDensity.current
-    val roomForVolume = with(density) {
-        LocalWindowInfo.current.containerSize.width.toDp() >= VOLUME_SLIDER_MIN_WIDTH
+    val width = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
+    val roomForVolume = width >= VOLUME_SLIDER_MIN_WIDTH
+    // A phone in portrait has room for the transport and two more buttons at
+    // a thumb's size. The rest go behind "More" there rather than off the edge.
+    val roomForAll = width >= INLINE_CONTROLS_MIN_WIDTH
+    val toggleMute = {
+        host.setMuted(!state.muted)
+        scope.launch(Dispatchers.IO) { rememberVolume(muted = !state.muted) }
+        Unit
     }
 
     Column(
@@ -768,45 +876,80 @@ private fun PlayerControls(
                 CompactIcon(Icons.Default.SkipNext, "Next episode", enabled = hasNext, onClick = onNext)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (episodes.size > 1) {
-                    CompactIcon(Icons.Default.VideoLibrary, "Episodes") { showEpisodes = true }
-                }
-                if (chapters.size > 1) {
-                    CompactIcon(Icons.AutoMirrored.Filled.Toc, "Chapters") { showChapters = true }
-                }
-                CompactIcon(Icons.Default.Speed, "Playback speed") { showSpeeds = true }
-                CompactIcon(Icons.Default.Audiotrack, "Audio track") { choosing = "audio" }
-                CompactIcon(Icons.Default.Subtitles, "Subtitles") { choosing = "sub" }
-                CompactIcon(
-                    if (state.muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                    "Mute",
-                ) {
-                    host.setMuted(!state.muted)
-                    scope.launch(Dispatchers.IO) { rememberVolume(muted = !state.muted) }
-                }
-                // The app's own volume, which is not the device's: a file
-                // mastered quiet is turned up here and stays up for the next
-                // one. Only where there is room for it — a phone in portrait
-                // has the system volume keys and no width to spare.
-                if (roomForVolume) {
-                    var dragging by remember { mutableStateOf<Float?>(null) }
-                    Slider(
-                        value = dragging ?: state.volume.toFloat().coerceIn(0f, MAX_VOLUME),
-                        onValueChange = { dragging = it; host.setVolume(it.toDouble()) },
-                        onValueChangeFinished = {
-                            val chosen = dragging?.toDouble()
-                            dragging = null
-                            chosen?.let { scope.launch(Dispatchers.IO) { rememberVolume(volume = it) } }
-                        },
-                        valueRange = 0f..MAX_VOLUME,
-                        modifier = Modifier.width(96.dp),
+                if (!roomForAll) {
+                    CompactIcon(Icons.Default.Subtitles, "Subtitles") { choosing = "sub" }
+                    var more by remember { mutableStateOf(false) }
+                    Box {
+                        CompactIcon(Icons.Default.MoreVert, "More") { more = true }
+                        DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                            val entries = buildList {
+                                if (episodes.size > 1) add(Triple(Icons.Default.VideoLibrary, "Episodes") { showEpisodes = true })
+                                if (chapters.size > 1) add(Triple(Icons.AutoMirrored.Filled.Toc, "Chapters") { showChapters = true })
+                                add(Triple(Icons.Default.Speed, "Playback speed") { showSpeeds = true })
+                                add(Triple(Icons.Default.Audiotrack, "Audio track") { choosing = "audio" })
+                                add(
+                                    Triple(
+                                        if (state.muted) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                                        if (state.muted) "Unmute" else "Mute",
+                                        toggleMute,
+                                    ),
+                                )
+                                add(
+                                    Triple(
+                                        if (landscapeLocked) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                        if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
+                                        onRotate,
+                                    ),
+                                )
+                            }
+                            entries.forEach { (icon, label, action) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    leadingIcon = { Icon(icon, contentDescription = null) },
+                                    onClick = { more = false; action() },
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    if (episodes.size > 1) {
+                        CompactIcon(Icons.Default.VideoLibrary, "Episodes") { showEpisodes = true }
+                    }
+                    if (chapters.size > 1) {
+                        CompactIcon(Icons.AutoMirrored.Filled.Toc, "Chapters") { showChapters = true }
+                    }
+                    CompactIcon(Icons.Default.Speed, "Playback speed") { showSpeeds = true }
+                    CompactIcon(Icons.Default.Audiotrack, "Audio track") { choosing = "audio" }
+                    CompactIcon(Icons.Default.Subtitles, "Subtitles") { choosing = "sub" }
+                    CompactIcon(
+                        if (state.muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        if (state.muted) "Unmute" else "Mute",
+                        onClick = toggleMute,
+                    )
+                    // The app's own volume, which is not the device's: a file
+                    // mastered quiet is turned up here and stays up for the next
+                    // one. Only where there is room for it — a phone in portrait
+                    // has the system volume keys and no width to spare.
+                    if (roomForVolume) {
+                        var dragging by remember { mutableStateOf<Float?>(null) }
+                        Slider(
+                            value = dragging ?: state.volume.toFloat().coerceIn(0f, MAX_VOLUME),
+                            onValueChange = { dragging = it; host.setVolume(it.toDouble()) },
+                            onValueChangeFinished = {
+                                val chosen = dragging?.toDouble()
+                                dragging = null
+                                chosen?.let { scope.launch(Dispatchers.IO) { rememberVolume(volume = it) } }
+                            },
+                            valueRange = 0f..MAX_VOLUME,
+                            modifier = Modifier.width(96.dp),
+                        )
+                    }
+                    CompactIcon(
+                        if (landscapeLocked) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                        if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
+                        onClick = onRotate,
                     )
                 }
-                CompactIcon(
-                    if (landscapeLocked) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                    if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
-                    onClick = onRotate,
-                )
             }
         }
     }
@@ -1238,12 +1381,14 @@ private fun CompactIcon(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(40.dp)) {
+    // 48dp: the smallest target Android's accessibility guidance allows, and
+    // the size a thumb on a moving train actually hits.
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(48.dp)) {
         Icon(
             icon,
             contentDescription = description,
             tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(24.dp),
         )
     }
 }
