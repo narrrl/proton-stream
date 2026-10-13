@@ -813,6 +813,15 @@ pub fn is_video_file(name: &str) -> bool {
         .is_some_and(|(_, ext)| VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
+/// Subtitle formats mpv reads from a file of their own.
+const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "ass", "ssa", "vtt"];
+
+/// Whether a filename names a subtitle file a video can be paired with.
+pub fn is_subtitle_file(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, ext)| SUBTITLE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,8 +35,8 @@ use pstr_core::catalog::CatalogNode;
 use pstr_core::library::{Episode, Title};
 use pstr_core::prefs::PlaybackPrefs;
 use pstr_player::{
-    Chapter, ChapterRole, EndReason, Player, PlayerConfig, PlayerEvent, Track, TrackKind,
-    VideoOutput,
+    Chapter, ChapterRole, EndReason, Player, PlayerConfig, PlayerEvent, StreamHandle, Track,
+    TrackKind, VideoOutput,
 };
 use pstr_stream::VideoStream;
 
@@ -530,6 +530,15 @@ fn run(
         }
     };
 
+    // Opened while mpv opens the video, and added once it has: an external
+    // track belongs to the file loaded at the time.
+    let mut sidecars = Some(engine.runtime().spawn({
+        let engine = engine.clone();
+        let target = target.clone();
+        async move { engine.open_sidecars(&target).await }
+    }));
+    let mut subtitles: Vec<StreamHandle> = Vec::new();
+
     let mut position = target.resume_at.unwrap_or(0.0);
     let mut duration: Option<f64> = None;
     let mut watched = false;
@@ -558,6 +567,10 @@ fn run(
         match &event {
             PlayerEvent::FileLoaded => {
                 duration = player.duration();
+                if let Some(opening) = sidecars.take() {
+                    let opened = engine.runtime().block_on(opening).unwrap_or_default();
+                    subtitles = add_sidecars(&engine, &target, &player, opened);
+                }
                 // The first moment there is a track list to read: mpv has
                 // demuxed the file and made its own default selection. Put the
                 // title's own choice over it before the menus are told, so they
@@ -607,6 +620,7 @@ fn run(
     // the other `Arc`, and mpv must be destroyed there, on the thread whose
     // OpenGL context its render context was built against.
     drop(handle);
+    drop(subtitles);
     drop(player);
 
     engine.release(
@@ -719,6 +733,47 @@ fn restore_tracks(player: &Player, show: &pstr_core::catalog::TitleTrackPrefs) {
             tracing::warn!("restore {} track {track}: {error}", kind.label());
         }
     }
+}
+
+/// Hand mpv the subtitle files paired with the video it has just loaded.
+///
+/// One is turned on only when subtitles are on and the video has none of its
+/// own playing — a file's own track was chosen by name and language already,
+/// and an external one is the fallback, not an override.
+fn add_sidecars(
+    engine: &Engine,
+    target: &PlaybackTarget,
+    player: &Player,
+    opened: Vec<(pstr_core::catalog::Sidecar, VideoStream)>,
+) -> Vec<StreamHandle> {
+    let config = from_prefs(&engine.playback_prefs(), target.track_prefs.as_deref());
+    let playing = player
+        .tracks()
+        .iter()
+        .any(|track| track.kind == TrackKind::Subtitle && track.selected);
+    let (sidecars, streams): (Vec<_>, Vec<_>) = opened.into_iter().unzip();
+    let select = (config.subtitles && !playing)
+        .then(|| {
+            pstr_core::catalog::preferred_sidecar(&sidecars, config.subtitle_language.as_deref())
+        })
+        .flatten();
+    sidecars
+        .iter()
+        .zip(streams)
+        .enumerate()
+        .filter_map(|(index, (sidecar, stream))| {
+            let title = sidecar.title.as_deref().unwrap_or("External");
+            player
+                .add_subtitle(
+                    stream,
+                    title,
+                    sidecar.language.as_deref(),
+                    select == Some(index),
+                )
+                .inspect_err(|error| tracing::warn!(%error, "add subtitle {}", sidecar.name))
+                .ok()
+        })
+        .collect()
 }
 
 /// Tell the UI what the file contains and what of it is playing.

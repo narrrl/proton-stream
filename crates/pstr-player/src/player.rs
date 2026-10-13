@@ -342,6 +342,28 @@ impl Player {
         Ok(handle)
     }
 
+    /// Add a subtitle file to the one playing, read through the same
+    /// registry as the video, so mpv never learns where either came from.
+    ///
+    /// Only once the video has loaded: mpv attaches an external track to the
+    /// file open now. `select` turns it on; otherwise it waits in the list.
+    /// The handle keeps it readable, like [`Self::play`]'s.
+    pub fn add_subtitle(
+        &self,
+        stream: VideoStream,
+        title: &str,
+        language: Option<&str>,
+        select: bool,
+    ) -> Result<StreamHandle> {
+        let handle = self.registry.publish(stream);
+        let url = handle.url();
+        let flag = if select { "select" } else { "auto" };
+        let mut args = vec![url.as_str(), flag, title];
+        args.extend(language);
+        self.mpv.command("sub-add", &args)?;
+        Ok(handle)
+    }
+
     /// Start playing a stream `seconds` in.
     ///
     /// Through mpv's `start` option rather than a seek once the file has

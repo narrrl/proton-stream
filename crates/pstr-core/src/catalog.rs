@@ -24,7 +24,7 @@ use crate::metadata::{
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -225,6 +225,23 @@ CREATE TABLE share_crawls (
 );
 "#;
 
+/// Subtitle files beside a video, which the crawl used to drop with the
+/// `.nfo` files. Rebuilt by every crawl, like `nodes`; a subtitle belongs to
+/// one video, the one it was paired with by name.
+const MIGRATION_V12: &str = r#"
+CREATE TABLE sidecars (
+    share_id       TEXT NOT NULL,
+    link_id        TEXT NOT NULL,
+    volume_id      TEXT NOT NULL,
+    video_link_id  TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    language       TEXT,
+    title          TEXT,
+    PRIMARY KEY (share_id, link_id)
+);
+CREATE INDEX sidecars_by_video ON sidecars (share_id, video_link_id);
+"#;
+
 /// How old a share's last crawl may be before an app looks again on its own.
 /// Long enough that a launch rarely costs a crawl; short enough that a new
 /// episode turns up the same day.
@@ -327,6 +344,21 @@ pub struct CatalogNode {
     pub active_revision_id: Option<String>,
     /// What [`naming::parse`] made of the file name.
     pub parsed: ParsedName,
+}
+
+/// A subtitle file paired with the video beside it. See [`build_sidecars`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sidecar {
+    pub share_id: String,
+    pub link_id: String,
+    pub volume_id: String,
+    /// The video this subtitle is for.
+    pub video_link_id: String,
+    pub name: String,
+    /// The [`crate::language::LANGUAGES`] tag its name states, if any.
+    pub language: Option<String>,
+    /// What else its name says about it — "forced", "SDH" — for the picker.
+    pub title: Option<String>,
 }
 
 /// Where playback left off.
@@ -459,6 +491,12 @@ impl Catalog {
             tx.pragma_update(None, "user_version", 11)?;
             tx.commit()?;
         }
+        if version < 12 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V12)?;
+            tx.pragma_update(None, "user_version", 12)?;
+            tx.commit()?;
+        }
 
         Ok(())
     }
@@ -545,6 +583,59 @@ impl Catalog {
 
         tx.commit()?;
         Ok(())
+    }
+
+    /// Replace one share's subtitle files with `sidecars`.
+    ///
+    /// Apart from [`Self::replace_share`] rather than inside it: a subtitle
+    /// left over from the crawl before is one that fails to open, quietly,
+    /// which is no reason to make every caller of that pass these along.
+    pub fn replace_sidecars(&mut self, share_id: &str, sidecars: &[Sidecar]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM sidecars WHERE share_id = ?1",
+            params![share_id],
+        )?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT OR REPLACE INTO sidecars (
+                     share_id, link_id, volume_id, video_link_id, name, language, title
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for sidecar in sidecars {
+                insert.execute(params![
+                    share_id,
+                    sidecar.link_id,
+                    sidecar.volume_id,
+                    sidecar.video_link_id,
+                    sidecar.name,
+                    sidecar.language,
+                    sidecar.title,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The subtitle files paired with one video, in name order.
+    pub fn sidecars(&self, share_id: &str, video_link_id: &str) -> Result<Vec<Sidecar>> {
+        let mut select = self.conn.prepare_cached(
+            "SELECT share_id, link_id, volume_id, video_link_id, name, language, title
+             FROM sidecars WHERE share_id = ?1 AND video_link_id = ?2 ORDER BY name",
+        )?;
+        let rows = select.query_map(params![share_id, video_link_id], |row| {
+            Ok(Sidecar {
+                share_id: row.get(0)?,
+                link_id: row.get(1)?,
+                volume_id: row.get(2)?,
+                video_link_id: row.get(3)?,
+                name: row.get(4)?,
+                language: row.get(5)?,
+                title: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Record that a crawl of `share_id` failed, keeping what the last
@@ -670,6 +761,10 @@ impl Catalog {
             params![share_id],
         )?;
         tx.execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
+        tx.execute(
+            "DELETE FROM sidecars WHERE share_id = ?1",
+            params![share_id],
+        )?;
         tx.execute(
             "DELETE FROM offline_files WHERE share_id = ?1",
             params![share_id],
@@ -1509,6 +1604,182 @@ pub fn build_rows(share_id: &str, nodes: &[proton_drive_rs::Node]) -> Vec<Catalo
         .collect()
 }
 
+/// Pair each subtitle file in a crawl with the video it is for.
+///
+/// By name, the way every player looks for one, in the three layouts shares
+/// actually have:
+///
+/// ```text
+/// Show/Season 01/S01E01.mkv + S01E01.srt, S01E01.en.srt, S01E01.en.forced.ass
+/// Show/Season 01/Subs/S01E01.en.srt          a subtitles folder beside the videos
+/// Film (2020)/Subs/Film (2020)/2_English.srt a folder per video inside that
+/// ```
+///
+/// A subtitle whose name starts with no video's is still paired when its
+/// folder holds one video only — `Film/film.mkv` beside `English.srt`. One
+/// that matches nothing is left out: offering it under the wrong episode is
+/// worse than not offering it.
+pub fn build_sidecars(share_id: &str, nodes: &[proton_drive_rs::Node]) -> Vec<Sidecar> {
+    use std::collections::HashMap;
+
+    let by_link: HashMap<&str, &proton_drive_rs::Node> = nodes
+        .iter()
+        .map(|node| (node.uid.link_id.as_str(), node))
+        .collect();
+    let parent_of = |node: &proton_drive_rs::Node| {
+        node.parent_uid
+            .as_ref()
+            .and_then(|uid| by_link.get(uid.link_id.as_str()).copied())
+    };
+    let mut videos: HashMap<&str, Vec<(&proton_drive_rs::Node, &str)>> = HashMap::new();
+    for node in nodes {
+        if !node.is_folder()
+            && naming::is_video_file(&node.name)
+            && let Some(parent) = &node.parent_uid
+        {
+            videos
+                .entry(parent.link_id.as_str())
+                .or_default()
+                .push((node, stem(&node.name)));
+        }
+    }
+
+    let mut sidecars: Vec<Sidecar> = nodes
+        .iter()
+        .filter(|node| !node.is_folder() && naming::is_subtitle_file(&node.name))
+        .filter_map(|node| {
+            let own = stem(&node.name);
+            let parent = parent_of(node)?;
+            let (video, rest) = if is_subtitles_folder(&parent.name) {
+                // `Subs/S01E01.en.srt`, for the videos beside `Subs`.
+                beside(
+                    videos.get(parent.parent_uid.as_ref()?.link_id.as_str())?,
+                    own,
+                )?
+            } else if let Some(holder) = parent_of(parent)
+                && is_subtitles_folder(&holder.name)
+            {
+                // `Subs/<video>/2_English.srt`: the folder is named for the video.
+                let candidates = videos.get(holder.parent_uid.as_ref()?.link_id.as_str())?;
+                let (video, _) = candidates
+                    .iter()
+                    .find(|(_, video)| video.eq_ignore_ascii_case(&parent.name))?;
+                (*video, own)
+            } else {
+                beside(videos.get(node.parent_uid.as_ref()?.link_id.as_str())?, own)?
+            };
+            let (language, title) = describe_subtitle(rest);
+            Some(Sidecar {
+                share_id: share_id.to_owned(),
+                link_id: node.uid.link_id.to_string(),
+                volume_id: node.uid.volume_id.to_string(),
+                video_link_id: video.uid.link_id.to_string(),
+                name: node.name.clone(),
+                language,
+                title,
+            })
+        })
+        .collect();
+    sidecars.sort_by(|a, b| (&a.video_link_id, &a.name).cmp(&(&b.video_link_id, &b.name)));
+    sidecars
+}
+
+/// Which of a video's subtitle files to turn on when the video itself has
+/// no subtitle playing: the first in the preferred language, or with no
+/// preference the first of all. One in no stated language is taken over
+/// nothing, since it is most often the only one there is.
+///
+/// Never one in another language: a viewer who asked for English subtitles
+/// and gets German ones has not been helped.
+pub fn preferred_sidecar(sidecars: &[Sidecar], language: Option<&str>) -> Option<usize> {
+    let Some(wanted) = language else {
+        return (!sidecars.is_empty()).then_some(0);
+    };
+    sidecars
+        .iter()
+        .position(|sidecar| {
+            sidecar
+                .language
+                .as_deref()
+                .is_some_and(|have| crate::language::same_language(wanted, have))
+        })
+        .or_else(|| {
+            sidecars
+                .iter()
+                .position(|sidecar| sidecar.language.is_none())
+        })
+}
+
+/// A file name without its extension.
+fn stem(name: &str) -> &str {
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+}
+
+fn is_subtitles_folder(name: &str) -> bool {
+    ["subs", "sub", "subtitles", "subtitle"]
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(name.trim()))
+}
+
+/// Which of the videos in one folder a subtitle named `own` is for, and what
+/// its name says past the video's.
+///
+/// The longest video name the subtitle's starts with, followed by a dot or
+/// nothing: `S01E1.en` is not `S01E10`'s. Failing that, the only video there.
+fn beside<'a, 'b>(
+    videos: &[(&'a proton_drive_rs::Node, &str)],
+    own: &'b str,
+) -> Option<(&'a proton_drive_rs::Node, &'b str)> {
+    let lower = own.to_lowercase();
+    let named = videos
+        .iter()
+        .filter_map(|(video, name)| {
+            let name = name.to_lowercase();
+            if lower == name {
+                Some((*video, name.len(), ""))
+            } else if lower.starts_with(&format!("{name}.")) {
+                // Lowercasing keeps the length of what these names hold;
+                // `get` covers the names where it does not.
+                Some((*video, name.len(), own.get(name.len() + 1..)?))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|(_, length, _)| *length)
+        .map(|(video, _, rest)| (video, rest));
+    named.or(match videos {
+        [(video, _)] => Some((*video, own)),
+        _ => None,
+    })
+}
+
+/// The language and the rest of what a subtitle's name says past its video's:
+/// `en.forced` is English, "forced"; `2_English_SDH` is English, "SDH".
+///
+/// The last word naming a language is the language — in `Film.2020.English`
+/// the words before it are the film's. Numbers are an index, not a title.
+fn describe_subtitle(rest: &str) -> (Option<String>, Option<String>) {
+    let words: Vec<&str> = rest
+        .split(['.', '_', ' ', '-', '(', ')', '[', ']'])
+        .filter(|word| !word.is_empty())
+        .collect();
+    let found = words
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, word)| crate::language::language_tag(word).map(|tag| (index, tag)));
+    let title_words: Vec<&str> = words
+        .iter()
+        .enumerate()
+        .filter(|(index, word)| {
+            Some(*index) != found.map(|(at, _)| at) && !word.chars().all(|c| c.is_ascii_digit())
+        })
+        .map(|(_, word)| *word)
+        .collect();
+    let title = (!title_words.is_empty()).then(|| title_words.join(" "));
+    (found.map(|(_, tag)| tag.to_owned()), title)
+}
+
 /// What a file's ancestors say about it.
 #[derive(Debug, Default)]
 struct Ancestry {
@@ -2321,6 +2592,30 @@ mod tests {
         assert!(catalog.crawls().expect("read").is_empty());
     }
 
+    #[test]
+    fn migration_v12_opens_a_v11_catalog() {
+        let conn = Connection::open_in_memory().expect("open");
+        for migration in [
+            MIGRATION_V1,
+            MIGRATION_V2,
+            MIGRATION_V3,
+            MIGRATION_V4,
+            MIGRATION_V5,
+            MIGRATION_V6,
+            MIGRATION_V7,
+            MIGRATION_V8,
+            MIGRATION_V9,
+            MIGRATION_V10,
+            MIGRATION_V11,
+        ] {
+            conn.execute_batch(migration).expect("migrate");
+        }
+        conn.pragma_update(None, "user_version", 11)
+            .expect("set version");
+        let catalog = Catalog::from_connection(conn).expect("upgrade");
+        assert!(catalog.sidecars("s", "a").expect("read").is_empty());
+    }
+
     /// A file keeps the moment it first appeared across recrawls, and one
     /// that was there before this was recorded reads as 0.
     #[test]
@@ -3081,5 +3376,129 @@ mod tests {
                 .expect("read offline row"),
             None
         );
+    }
+
+    // ---- build_sidecars: subtitles paired by name --------------------------
+
+    fn paired(sidecars: &[Sidecar]) -> Vec<(&str, &str, Option<&str>, Option<&str>)> {
+        sidecars
+            .iter()
+            .map(|sidecar| {
+                (
+                    sidecar.name.as_str(),
+                    sidecar.video_link_id.as_str(),
+                    sidecar.language.as_deref(),
+                    sidecar.title.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_subtitle_named_after_a_video_is_paired_with_it_and_says_its_language() {
+        let nodes = vec![
+            root(),
+            folder("s1", Some("root"), "Season 01"),
+            video("ep1", "s1", "S01E1.mkv"),
+            video("ep10", "s1", "S01E10.mkv"),
+            video("plain", "s1", "S01E1.srt"),
+            video("en", "s1", "S01E10.en.srt"),
+            video("forced", "s1", "S01E10.eng.forced.ass"),
+            video("nfo", "s1", "S01E10.nfo"),
+        ];
+        assert_eq!(
+            paired(&build_sidecars("share", &nodes)),
+            vec![
+                ("S01E1.srt", "ep1", None, None),
+                ("S01E10.en.srt", "ep10", Some("eng"), None),
+                ("S01E10.eng.forced.ass", "ep10", Some("eng"), Some("forced")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_subtitles_folder_beside_the_videos_holds_theirs() {
+        let nodes = vec![
+            root(),
+            folder("film", Some("root"), "Film (2020)"),
+            video("video", "film", "Film (2020).mkv"),
+            folder("subs", Some("film"), "Subs"),
+            video("de", "subs", "Film (2020).German.srt"),
+            folder("per-video", Some("subs"), "Film (2020)"),
+            video("sdh", "per-video", "3_English_SDH.srt"),
+        ];
+        assert_eq!(
+            paired(&build_sidecars("share", &nodes)),
+            vec![
+                ("3_English_SDH.srt", "video", Some("eng"), Some("SDH")),
+                ("Film (2020).German.srt", "video", Some("ger"), None),
+            ]
+        );
+    }
+
+    /// One video in the folder can only be the one; two leave a subtitle
+    /// named after neither unpaired rather than guessed.
+    #[test]
+    fn a_subtitle_named_after_no_video_is_paired_only_when_its_folder_has_one() {
+        let nodes = vec![
+            root(),
+            folder("film", Some("root"), "Film"),
+            video("video", "film", "film.1080p.mkv"),
+            video("english", "film", "English.srt"),
+            folder("s1", Some("root"), "Season 01"),
+            video("ep1", "s1", "S01E01.mkv"),
+            video("ep2", "s1", "S01E02.mkv"),
+            video("stray", "s1", "English.srt"),
+        ];
+        assert_eq!(
+            paired(&build_sidecars("share", &nodes)),
+            vec![("English.srt", "video", Some("eng"), None)]
+        );
+    }
+
+    #[test]
+    fn a_recrawl_replaces_a_shares_subtitles_and_removing_the_share_drops_them() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let sidecar = |link: &str| Sidecar {
+            share_id: "s".into(),
+            link_id: link.into(),
+            volume_id: "vol".into(),
+            video_link_id: "a".into(),
+            name: format!("{link}.srt"),
+            language: Some("eng".into()),
+            title: None,
+        };
+        catalog
+            .replace_sidecars("s", &[sidecar("old")])
+            .expect("crawl");
+        catalog
+            .replace_sidecars("s", &[sidecar("new")])
+            .expect("recrawl");
+        assert_eq!(
+            catalog.sidecars("s", "a").expect("read"),
+            vec![sidecar("new")]
+        );
+        catalog.remove_share("s").expect("remove");
+        assert!(catalog.sidecars("s", "a").expect("read").is_empty());
+    }
+
+    #[test]
+    fn the_subtitle_turned_on_is_one_in_the_preferred_language_and_never_another() {
+        let sidecar = |language: Option<&str>| Sidecar {
+            share_id: "s".into(),
+            link_id: "l".into(),
+            volume_id: "v".into(),
+            video_link_id: "a".into(),
+            name: "a.srt".into(),
+            language: language.map(str::to_owned),
+            title: None,
+        };
+        let ger_eng = [sidecar(Some("ger")), sidecar(Some("eng"))];
+        assert_eq!(preferred_sidecar(&ger_eng, Some("en")), Some(1));
+        assert_eq!(preferred_sidecar(&ger_eng, None), Some(0));
+        assert_eq!(preferred_sidecar(&ger_eng, Some("jpn")), None);
+        let ger_unknown = [sidecar(Some("ger")), sidecar(None)];
+        assert_eq!(preferred_sidecar(&ger_unknown, Some("eng")), Some(1));
+        assert_eq!(preferred_sidecar(&[], None), None);
     }
 }

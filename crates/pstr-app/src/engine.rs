@@ -28,7 +28,7 @@ use parking_lot::Mutex;
 use pstr_core::account::{DriveEntry, DrivePlace, PendingSignIn, SignIn};
 use pstr_core::appearance::Appearance;
 use pstr_core::catalog::{
-    Catalog, CatalogNode, OfflineFile, TitleTrackPrefs, WatchState, build_rows,
+    Catalog, CatalogNode, OfflineFile, TitleTrackPrefs, WatchState, build_rows, build_sidecars,
 };
 use pstr_core::config::AppDirs;
 use pstr_core::library::{Library, Title, TitleKind};
@@ -1513,6 +1513,7 @@ impl Engine {
             }
         };
         let rows = build_rows(&share_id, &nodes);
+        let sidecars = build_sidecars(&share_id, &nodes);
         let files = rows.len();
 
         // A writer opened before the crawl may be producing the revision
@@ -1574,7 +1575,7 @@ impl Engine {
                     for (link_id, _) in &stale {
                         catalog.remove_offline_file(&share_id, link_id)?;
                     }
-                    Ok(())
+                    catalog.replace_sidecars(&share_id, &sidecars)
                 })
         };
         if let Err(error) = stored {
@@ -1716,6 +1717,55 @@ impl Engine {
                 Err(error) => engine.fail(&format!("open {}", target.name), error),
             }
         });
+    }
+
+    /// Open the subtitle files paired with `target`, for the player to add
+    /// once mpv has the video.
+    ///
+    /// Through the session already open: a local copy played without one goes
+    /// without its subtitles rather than waiting on a handshake. Each is
+    /// warmed — most are one block — so mpv reads it from the cache. One that
+    /// fails is left out quietly; the video plays either way.
+    pub async fn open_sidecars(
+        &self,
+        target: &PlaybackTarget,
+    ) -> Vec<(pstr_core::catalog::Sidecar, VideoStream)> {
+        let sidecars = self
+            .catalog
+            .lock()
+            .sidecars(&target.share_id, &target.link_id)
+            .unwrap_or_default();
+        if sidecars.is_empty() {
+            return Vec::new();
+        }
+        let Some((library, source)) = self.opened() else {
+            return Vec::new();
+        };
+        let opening = sidecars.into_iter().map(|sidecar| {
+            let library = Arc::clone(&library);
+            let source = source.clone();
+            async move {
+                let uid = node_uid(&sidecar.volume_id, &sidecar.link_id);
+                match library
+                    .reauthenticating(&sidecar.share_id, || source.open(&sidecar.share_id, &uid))
+                    .await
+                {
+                    Ok(stream) => {
+                        stream.warm_edges();
+                        Some((sidecar, stream))
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "open subtitle {}", sidecar.name);
+                        None
+                    }
+                }
+            }
+        });
+        futures::future::join_all(opening)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// How far into the file `target` resumes, as a fraction of its running

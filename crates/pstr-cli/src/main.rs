@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use proton_sdk::ids::{LinkId, NodeUid, VolumeId};
 use pstr_core::account::{PlaceKind, SignIn};
-use pstr_core::catalog::{Catalog, build_rows};
+use pstr_core::catalog::{Catalog, build_rows, build_sidecars};
 use pstr_core::config::AppDirs;
 use pstr_core::shares::AccountFolder;
 use pstr_core::sync::WatchSync;
@@ -425,6 +425,9 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
 
                 catalog
                     .replace_share(&share_id, &rows)
+                    .and_then(|()| {
+                        catalog.replace_sidecars(&share_id, &build_sidecars(&share_id, &nodes))
+                    })
                     .with_context(|| format!("store {share_id}"))?;
 
                 println!(
