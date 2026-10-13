@@ -166,7 +166,7 @@ final class AppModel {
     /// the one being read keeps what it had.
     func stopCrawl() {
         crawlStopped = true
-        NativeRuntime.engine().stopCrawl()
+        Task { try? await NativeRuntime.engine().stopCrawl() }
     }
 
     /// The crawl itself, for pull to refresh, which holds its spinner until
