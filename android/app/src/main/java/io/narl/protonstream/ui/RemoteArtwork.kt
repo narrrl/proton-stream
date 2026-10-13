@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
 import io.narl.protonstream.native.NativeRuntime
 import kotlinx.coroutines.Dispatchers
@@ -87,16 +88,20 @@ internal fun RemoteArtwork(
     modifier: Modifier = Modifier,
     fallback: ThumbnailSource? = null,
     labelled: Boolean = true,
+    maxEdge: Dp? = null,
 ) {
     val context = LocalContext.current
     val enabled = LocalArtworkLoading.current
+    // Decoded at the size it is drawn: a grid tile is a few hundred pixels,
+    // and decoding its poster at 1024 holds four times the memory for nothing.
+    val edge = with(LocalDensity.current) { maxEdge?.roundToPx() }?.coerceIn(1, MAX_ART_EDGE) ?: MAX_ART_EDGE
     var image by remember(url, fallback) { mutableStateOf<ArtworkLoad>(ArtworkLoad.Pending) }
     LaunchedEffect(url, fallback, enabled) {
         if (!enabled) {
             image = ArtworkLoad.Missing
             return@LaunchedEffect
         }
-        image = (loadArtwork(context, url) ?: loadThumbnail(fallback))
+        image = (loadArtwork(context, url, edge) ?: loadThumbnail(fallback, edge))
             ?.let { ArtworkLoad.Loaded(it.asImageBitmap()) }
             ?: ArtworkLoad.Missing
     }
@@ -186,8 +191,8 @@ internal fun initials(name: String): String {
  * loader's protocol checks and exactly this disk cache, so the artwork the shade
  * shows costs no second download.
  */
-internal suspend fun loadArtwork(context: Context, url: String?): Bitmap? = url?.let { requested ->
-    decoded.get(requested) ?: withContext(Dispatchers.IO) {
+internal suspend fun loadArtwork(context: Context, url: String?, edge: Int = MAX_ART_EDGE): Bitmap? = url?.let { requested ->
+    decoded.get(sized(requested, edge)) ?: withContext(Dispatchers.IO) {
         runCatching {
             val uri = URI(requested)
             require(uri.scheme.equals("https", ignoreCase = true)) { "Artwork must use HTTPS" }
@@ -197,7 +202,7 @@ internal suspend fun loadArtwork(context: Context, url: String?): Bitmap? = url?
             val cached = directory.resolve("$digest.img")
             val fresh = !cached.isFile
             val bytes = if (fresh) download(uri) else cached.readBytes()
-            val bitmap = requireNotNull(decodeSampled(bytes)) { "Artwork is not a decodable image" }
+            val bitmap = requireNotNull(decodeSampled(bytes, edge)) { "Artwork is not a decodable image" }
             if (fresh) {
                 // Written only once it has decoded. Caching the bytes first is
                 // what turns one hostile poster into a crash on every launch
@@ -210,7 +215,7 @@ internal suspend fun loadArtwork(context: Context, url: String?): Bitmap? = url?
                 cached.setLastModified(System.currentTimeMillis())
             }
             bitmap
-        }.getOrNull()?.also { decoded.put(requested, it) }
+        }.getOrNull()?.also { decoded.put(sized(requested, edge), it) }
     }
 }
 
@@ -224,21 +229,21 @@ internal suspend fun loadArtwork(context: Context, url: String?): Bitmap? = url?
  * share or a session that has to be reopened is transient, and the next
  * composition should try again.
  */
-internal suspend fun loadThumbnail(source: ThumbnailSource?): Bitmap? {
+internal suspend fun loadThumbnail(source: ThumbnailSource?, edge: Int = MAX_ART_EDGE): Bitmap? {
     val file = source ?: return null
     val key = file.key
-    decoded.get(key)?.let { return it }
+    decoded.get(sized(key, edge))?.let { return it }
     if (key in missing) return null
     val fetched = withContext(Dispatchers.IO) {
         runCatching { NativeRuntime.engine().thumbnail(file.shareId, file.volumeId, file.linkId) }
     }
     val bytes = fetched.getOrElse { return null }
-    val bitmap = bytes?.let { withContext(Dispatchers.Default) { decodeSampled(it) } }
+    val bitmap = bytes?.let { withContext(Dispatchers.Default) { decodeSampled(it, edge) } }
     if (bitmap == null) {
         missing.add(key)
         return null
     }
-    decoded.put(key, bitmap)
+    decoded.put(sized(key, edge), bitmap)
     return bitmap
 }
 
@@ -257,27 +262,42 @@ private fun download(uri: URI): ByteArray {
 }
 
 /**
- * Decode within a bound the display can actually use.
+ * Decode with its longest edge at most [edge] pixels.
  *
  * [MAX_ART_BYTES] bounds the *compressed* image, which says nothing about what
  * it costs decoded: a 12 MiB PNG can be 12000×12000, and that is a 576 MB
  * `ARGB_8888` allocation on a device that will not give it. The bounds pass
  * costs no allocation and settles a sample size before anything is committed.
+ *
+ * Sampling halves, so it stops while the image is still at least [edge]; the
+ * decoder scales the rest of the way, which a poster sampled straight to under
+ * its tile would show as blur.
  */
-private fun decodeSampled(bytes: ByteArray): Bitmap? {
+private fun decodeSampled(bytes: ByteArray, edge: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     val longest = maxOf(bounds.outWidth, bounds.outHeight)
     if (longest <= 0) return null
     var sample = 1
-    while (longest / sample > MAX_ART_EDGE) sample *= 2
+    while (longest / (sample * 2) >= edge) sample *= 2
+    val sampled = longest / sample
     return BitmapFactory.decodeByteArray(
         bytes,
         0,
         bytes.size,
-        BitmapFactory.Options().apply { inSampleSize = sample },
+        BitmapFactory.Options().apply {
+            inSampleSize = sample
+            if (sampled > edge) {
+                inScaled = true
+                inDensity = sampled
+                inTargetDensity = edge
+            }
+        },
     )
 }
+
+/** The decoded cache's key for one image at one size. */
+private fun sized(key: String, edge: Int) = "$key#$edge"
 
 /**
  * Hold the cache directory under [MAX_ART_CACHE_BYTES], oldest first.
@@ -315,7 +335,7 @@ private val missing: MutableSet<String> = Collections.synchronizedSet(mutableSet
  * is a full-resolution decode per item.
  */
 private val decoded = object : LruCache<String, Bitmap>(
-    (Runtime.getRuntime().maxMemory() / 8).coerceIn(4L * 1024 * 1024, 32L * 1024 * 1024).toInt(),
+    (Runtime.getRuntime().maxMemory() / 8).coerceIn(4L * 1024 * 1024, 64L * 1024 * 1024).toInt(),
 ) {
     override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
 }

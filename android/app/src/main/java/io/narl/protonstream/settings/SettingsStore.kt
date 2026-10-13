@@ -65,6 +65,11 @@ class SettingsStore(context: Context) {
 
         fun gibToBytes(gib: Int): ULong = gib.toULong() * 1024uL * 1024uL * 1024uL
 
+        /** Load the file into memory, so no later read waits on the disk. */
+        fun preload(context: Context) {
+            context.getSharedPreferences(NAME, Context.MODE_PRIVATE).all
+        }
+
         private const val NAME = "proton_stream_settings"
         private const val KEY_WIFI_ONLY = "wifi_only"
         private const val KEY_BACKGROUND_AUDIO = "background_audio"

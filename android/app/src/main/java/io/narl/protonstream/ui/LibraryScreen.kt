@@ -693,6 +693,7 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
                 entry.title.displayName,
                 Modifier.fillMaxSize().clearAndSetSemantics {},
                 fallback = entry.episode.thumbnailSource,
+                maxEdge = 220.dp,
             )
             entry.episode.progress?.let { progress ->
                 AccentProgress(
@@ -754,6 +755,8 @@ private fun PosterTile(
                     .clip(MaterialTheme.shapes.medium)
                     .clearAndSetSemantics {},
                 fallback = title.thumbnailSource,
+                // The tile's height, at the widest a grid column gets.
+                maxEdge = 280.dp,
             )
             if (folded > 0) {
                 Text(

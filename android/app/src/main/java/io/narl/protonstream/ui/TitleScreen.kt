@@ -51,6 +51,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -147,7 +148,11 @@ internal fun TitleScreen(
     // without a trip to the Downloads tab.
     val work by WorkManager.getInstance(context)
         .getWorkInfosByTagLiveData(DownloadCoordinator.TAG).observeAsState(emptyList())
-    val downloads = remember(work) { DownloadStateStore(context).records() }
+    // Decoded off the main thread: WorkManager reports progress several times
+    // a second while a season downloads, and each report re-reads every record.
+    val downloads by produceState(emptyList<RetainedDownload>(), work) {
+        value = withContext(Dispatchers.IO) { DownloadStateStore(context).records() }
+    }
 
     // On a tablet the page keeps a phone's reading width, centred: a Play
     // button and synopsis lines two thousand pixels wide are read by turning
