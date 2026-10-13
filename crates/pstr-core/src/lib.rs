@@ -13,6 +13,7 @@ pub mod chapters;
 pub mod config;
 pub mod error;
 pub mod franchise;
+pub mod language;
 pub mod library;
 pub mod metadata;
 pub mod naming;

@@ -152,11 +152,6 @@ pub fn pick_track(
     )
 }
 
-/// Whether two container tags name the same language: "en" and "eng" do.
-fn same_language(a: &str, b: &str) -> bool {
-    a.eq_ignore_ascii_case(b) || language_name(a) == language_name(b)
-}
-
 fn read_one(mpv: &Mpv, index: i64) -> Option<Track> {
     let kind = TrackKind::from_mpv(&text(mpv, index, "type")?)?;
     let id: i64 = mpv
@@ -190,73 +185,7 @@ fn flag(mpv: &Mpv, index: i64, field: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The languages offered by name where a preference is chosen ahead of any
-/// file, as the three-letter tag a Matroska file carries. The same list
-/// [`language_name`] knows, and the phones' `LANGUAGES`; mpv treats the two-
-/// and three-letter forms as one.
-pub const LANGUAGES: [&str; 29] = [
-    "jpn", "eng", "ger", "fre", "spa", "ita", "por", "dut", "rus", "pol", "swe", "dan", "nor",
-    "fin", "cze", "hun", "tur", "ara", "heb", "hin", "kor", "chi", "tha", "vie", "ukr", "rum",
-    "gre", "ind", "may",
-];
-
-/// A readable name for a language tag, falling back to the tag itself.
-///
-/// Deliberately a short list rather than a full ISO 639 table: it covers what
-/// the shares this app is pointed at actually contain, and an unrecognised tag
-/// still shows as something a viewer can pick between — `"por-BR"` reads fine
-/// on its own.
-pub fn language_name(tag: &str) -> String {
-    // Container tags come in both the two- and three-letter forms, and often
-    // with a region suffix: "en", "eng", "en-US", "pt-BR".
-    let base = tag
-        .split(['-', '_'])
-        .next()
-        .unwrap_or(tag)
-        .to_ascii_lowercase();
-
-    let name = match base.as_str() {
-        "en" | "eng" => "English",
-        "ja" | "jpn" => "Japanese",
-        "de" | "ger" | "deu" => "German",
-        "fr" | "fre" | "fra" => "French",
-        "es" | "spa" => "Spanish",
-        "it" | "ita" => "Italian",
-        "pt" | "por" => "Portuguese",
-        "nl" | "dut" | "nld" => "Dutch",
-        "ru" | "rus" => "Russian",
-        "pl" | "pol" => "Polish",
-        "sv" | "swe" => "Swedish",
-        "da" | "dan" => "Danish",
-        "no" | "nor" => "Norwegian",
-        "fi" | "fin" => "Finnish",
-        "cs" | "cze" | "ces" => "Czech",
-        "hu" | "hun" => "Hungarian",
-        "tr" | "tur" => "Turkish",
-        "ar" | "ara" => "Arabic",
-        "he" | "heb" => "Hebrew",
-        "hi" | "hin" => "Hindi",
-        "ko" | "kor" => "Korean",
-        "zh" | "chi" | "zho" => "Chinese",
-        "th" | "tha" => "Thai",
-        "vi" | "vie" => "Vietnamese",
-        "uk" | "ukr" => "Ukrainian",
-        "ro" | "rum" | "ron" => "Romanian",
-        "el" | "gre" | "ell" => "Greek",
-        "id" | "ind" => "Indonesian",
-        "ms" | "may" | "msa" => "Malay",
-        _ => return tag.to_string(),
-    };
-
-    // The region matters when there is one — Brazilian Portuguese is not
-    // Portuguese to anyone choosing between the two.
-    match tag.split_once(['-', '_']) {
-        Some((_, region)) if !region.is_empty() => {
-            format!("{name} ({})", region.to_ascii_uppercase())
-        }
-        _ => name.to_string(),
-    }
-}
+pub use pstr_core::language::{LANGUAGES, language_name, same_language};
 
 #[cfg(test)]
 mod tests {
@@ -290,16 +219,6 @@ mod tests {
         sub.title = Some("Signs & Songs".into());
         sub.codec = Some("ass".into());
         assert_eq!(sub.label(), "English — Signs & Songs [ass]");
-    }
-
-    #[test]
-    fn language_tags_resolve_in_both_iso_forms_and_keep_their_region() {
-        assert_eq!(language_name("jpn"), "Japanese");
-        assert_eq!(language_name("ja"), "Japanese");
-        assert_eq!(language_name("pt-BR"), "Portuguese (BR)");
-        // An unknown tag is shown as it stands rather than as "Unknown", which
-        // would make two of them indistinguishable.
-        assert_eq!(language_name("mis"), "mis");
     }
 
     fn named(kind: TrackKind, id: i64, language: Option<&str>, title: Option<&str>) -> Track {
