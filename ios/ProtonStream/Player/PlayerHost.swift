@@ -13,6 +13,9 @@ private let watchedFraction = 0.9
 /// How long a stall lasts before the player offers to open the episode again.
 private let stallLimit: TimeInterval = 20
 
+/// How close to the end the next episode's opening blocks are fetched.
+private let warmNextSeconds = 120.0
+
 /// How an episode is named in watch state and player readings.
 func mediaKey(_ episode: EpisodeRecord) -> String { "\(episode.shareId):\(episode.linkId)" }
 
@@ -115,6 +118,8 @@ final class PlayerHost {
     /// Chapters already auto-skipped in this episode: seeking back into an
     /// opening on purpose must not be undone by the setting that skipped it.
     @ObservationIgnored private var skipped = Set<Int64>()
+    /// The episode whose next one has been warmed; see `tick`.
+    @ObservationIgnored private var warmedAfter: String?
     @ObservationIgnored private var pausedByInterruption = false
     @ObservationIgnored private var artworkFor: String?
 
@@ -389,6 +394,21 @@ final class PlayerHost {
            let chapter = chapters.entries.last(where: { player.position + 0.001 >= $0.start }),
            skipped.insert(chapter.index).inserted {
             player.seek(to: offer.target)
+        }
+        // Near the end, fetch the next episode's opening blocks, so autoplay
+        // or "Play now" starts from the cache. The last two minutes or the
+        // credits, whichever comes first: late enough that stopping after one
+        // episode has not cost a download, early enough to matter.
+        let nearEnd = player.duration > 0 && (
+            player.duration - player.position < warmNextSeconds
+                || chapters.creditsStart.map { player.position >= $0 } == true
+        )
+        if nearEnd, let key, warmedAfter != key, let next {
+            warmedAfter = key
+            let (shareId, volumeId, linkId) = (next.shareId, next.volumeId, next.linkId)
+            Task.detached {
+                try? await NativeRuntime.engine().warmEpisode(shareId: shareId, volumeId: volumeId, linkId: linkId)
+            }
         }
     }
 

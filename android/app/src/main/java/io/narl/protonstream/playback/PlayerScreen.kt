@@ -118,6 +118,9 @@ private const val CONTROLS_SECONDS = 4L
 /** How long the "up next" card counts down before it loads the next episode. */
 private const val UP_NEXT_SECONDS = 10
 
+/** How close to the end the next episode's opening blocks are fetched. */
+private const val WARM_NEXT_SECONDS = 120.0
+
 /** Past this much of an episode it counts as watched. */
 internal const val WATCHED_FRACTION = 0.9
 
@@ -359,6 +362,21 @@ fun PlayerScreen(
     val offer = remember(chapters, key, playingThis, (state.position * 4).roundToInt()) {
         if (!playingThis) return@remember null
         runCatching { skipOffer(chapters, state.position) }.getOrNull()
+    }
+    // Near the end, fetch the next episode's opening blocks, so autoplay or
+    // "Play now" starts from the cache. The last two minutes or the credits,
+    // whichever comes first: late enough that stopping after one episode has
+    // not cost a download, early enough to matter.
+    val nearEnd = playingThis && state.duration > 0.0 && (
+        state.duration - state.position < WARM_NEXT_SECONDS ||
+            chapters.creditsStart?.let { state.position >= it } == true
+        )
+    LaunchedEffect(key, nearEnd) {
+        val upcoming = next ?: return@LaunchedEffect
+        if (!nearEnd) return@LaunchedEffect
+        runCatching {
+            NativeRuntime.engine().warmEpisode(upcoming.shareId, upcoming.volumeId, upcoming.linkId)
+        }
     }
     // Auto-skip is offered once per chapter: seeking back into an opening on
     // purpose must not be undone by the setting that skipped it.

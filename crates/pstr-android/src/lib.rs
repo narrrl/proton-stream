@@ -1972,6 +1972,47 @@ impl AndroidEngine {
         .map_err(BridgeError::from_display)?
     }
 
+    /// Fetch the blocks an episode opens with into the cache, without playing
+    /// it: the next episode, near the end of this one, so that autoplay or
+    /// "Play now" starts from the cache rather than from two round trips.
+    ///
+    /// Quietly nothing for a downloaded episode, and on any failure: all a
+    /// failure costs is the head start.
+    pub async fn warm_episode(
+        self: Arc<Self>,
+        share_id: String,
+        volume_id: String,
+        link_id: String,
+    ) {
+        let runtime = Arc::clone(&self.runtime);
+        let warmed = spawned(&runtime, async move {
+            let offline = self
+                .catalog
+                .lock()
+                .offline_file(&share_id, &link_id)
+                .ok()
+                .flatten()
+                .is_some();
+            if offline {
+                return;
+            }
+            let Ok(connection) = self.connection().await else {
+                return;
+            };
+            match self
+                .open_from_source(&connection, &share_id, &node_uid(&volume_id, &link_id))
+                .await
+            {
+                Ok(stream) => stream.warm_edges(),
+                Err(error) => log::debug!("warming the next episode failed: {error}"),
+            }
+        })
+        .await;
+        if let Err(error) = warmed {
+            log::debug!("warming the next episode stopped: {error}");
+        }
+    }
+
     pub async fn download_episode(
         self: Arc<Self>,
         share_id: String,
@@ -2670,8 +2711,35 @@ impl AndroidEngine {
         }
 
         let connection = self.connection().await?;
-        self.open_from_source(&connection, share_id, &node_uid(volume_id, link_id))
-            .await
+        let stream = self
+            .open_from_source(&connection, share_id, &node_uid(volume_id, link_id))
+            .await?;
+        // Before mpv has the handle: building its core and surface takes a
+        // moment, and the network can spend that moment on the two reads
+        // every file opens with — and, resuming, on the one it seeks to.
+        match self.resume_fraction(share_id, link_id) {
+            Some(fraction) => stream.warm_resume(fraction),
+            None => stream.warm_edges(),
+        }
+        Ok(stream)
+    }
+
+    /// How far into the file an episode resumes, as a fraction of its
+    /// running time, from what was saved the last time it played. `None` for
+    /// one that starts from the beginning, as the clients do for a finished
+    /// episode or one barely begun.
+    fn resume_fraction(&self, share_id: &str, link_id: &str) -> Option<f64> {
+        let state = self
+            .catalog
+            .lock()
+            .watch_state(share_id, link_id)
+            .ok()
+            .flatten()?;
+        if state.watched || state.position_secs < pstr_core::library::RESUME_FLOOR_SECS {
+            return None;
+        }
+        let duration = state.duration_secs.filter(|duration| *duration > 0.0)?;
+        Some(state.position_secs / duration)
     }
 
     async fn download_episode_inner(
