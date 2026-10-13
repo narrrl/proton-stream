@@ -124,6 +124,16 @@ pub struct SubtitleFilesRecord {
     pub preferred: Option<u32>,
 }
 
+/// Episodes of one title that a background crawl found, for a notification.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct NewEpisodesRecord {
+    pub title_key: String,
+    pub title: String,
+    pub count: u32,
+    /// The first new episode's label — "S01E04" — when there is one.
+    pub first: Option<String>,
+}
+
 /// Android implements this with an AES-GCM key held by Android Keystore.
 #[uniffi::export(callback_interface)]
 pub trait AndroidSecretStore: Send + Sync {
@@ -1335,6 +1345,49 @@ impl AndroidEngine {
             .collect())
     }
 
+    /// Crawl the shares due a look and say which titles gained episodes, for
+    /// a notification from a background job.
+    ///
+    /// Only shares crawled here before: the first crawl of one finds every
+    /// file new, and "312 new episodes" is not news. A share that fails is
+    /// skipped, so one revoked link does not hide another's episodes.
+    pub async fn crawl_for_news(self: Arc<Self>) -> Result<Vec<NewEpisodesRecord>, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let crawls = self
+                .catalog
+                .lock()
+                .crawls()
+                .map_err(BridgeError::from_display)?;
+            let due: Vec<String> = self
+                .uncrawled_shares()?
+                .into_iter()
+                .filter(|id| crawls.get(id).is_some_and(|record| record.crawled_at > 0))
+                .collect();
+            if due.is_empty() {
+                return Ok(Vec::new());
+            }
+            let since = now();
+            for id in due {
+                if let Err(error) = self.crawl_inner(Some(id)).await {
+                    log::debug!("background crawl failed: {error}");
+                }
+            }
+            self.with_library(|cached| {
+                let mut news = news_since(&cached.library, &cached.first_seen, since);
+                // By the name the library shows, which may be the provider's.
+                for item in &mut news {
+                    if let Some(record) = cached.titles.iter().find(|t| t.key == item.title_key) {
+                        item.title.clone_from(&record.display_name);
+                    }
+                }
+                news
+            })
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
     /// Every configured share, with what its last crawl here came to.
     pub fn shares(&self) -> Result<Vec<ShareRecord>, BridgeError> {
         let shares = self.store.list().map_err(BridgeError::from_display)?;
@@ -2420,6 +2473,7 @@ impl AndroidEngine {
             added,
             titles,
             offline: offline.into_keys().collect(),
+            first_seen,
         };
         let answer = read(&cached);
         *self.library_cache.lock() = Some(cached);
@@ -3299,6 +3353,40 @@ struct CachedLibrary {
     titles: Vec<TitleRecord>,
     /// The files kept on this device, by share and link id.
     offline: HashSet<(String, String)>,
+    /// When each file first appeared in a crawl; see [`Catalog::first_seen`].
+    first_seen: HashMap<(String, String), i64>,
+}
+
+/// The titles whose files first appeared at or after `since`, with how many
+/// and the first of them, most new episodes first.
+fn news_since(
+    library: &Library,
+    first_seen: &HashMap<(String, String), i64>,
+    since: i64,
+) -> Vec<NewEpisodesRecord> {
+    let mut news: Vec<NewEpisodesRecord> = library
+        .titles
+        .iter()
+        .filter_map(|title| {
+            let fresh: Vec<&pstr_core::library::Episode> = title
+                .episodes()
+                .filter(|episode| {
+                    first_seen
+                        .get(&(episode.node.share_id.clone(), episode.node.link_id.clone()))
+                        .is_some_and(|seen| *seen >= since)
+                })
+                .collect();
+            let first = fresh.first()?;
+            Some(NewEpisodesRecord {
+                title_key: title.key.clone(),
+                title: title.name.clone(),
+                count: u32::try_from(fresh.len()).unwrap_or(u32::MAX),
+                first: Some(first.label()),
+            })
+        })
+        .collect();
+    news.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.title.cmp(&b.title)));
+    news
 }
 
 /// How many provider lookups may be in flight at once.
@@ -3664,7 +3752,7 @@ mod tests {
     use super::{
         AccentChoice, AndroidEngine, AndroidPaths, AndroidSecretStore, AndroidStream,
         AppearanceRecord, BridgeError, ChapterKind, ChapterRecord, FlavorChoice, PartialMarker,
-        chapter_plan, match_record, node_uid, normalized_language, palette_record,
+        chapter_plan, match_record, news_since, node_uid, normalized_language, palette_record,
         prepare_partial_file, pstr_android_stream_read, pstr_android_stream_release,
         pstr_android_stream_size, read_partial_marker, resume_position, skip_offer, title_metadata,
         write_partial_marker,
@@ -4218,6 +4306,54 @@ mod tests {
 
         drop(engine);
         std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn news_is_the_titles_that_gained_files_since_the_crawl_began_most_first() {
+        let file = |link: &str, name: &str| pstr_core::catalog::CatalogNode {
+            share_id: "s".into(),
+            link_id: link.into(),
+            volume_id: "v".into(),
+            parent_link_id: None,
+            name: name.into(),
+            is_folder: false,
+            media_type: None,
+            size: None,
+            active_revision_id: None,
+            parsed: pstr_core::naming::parse(name),
+        };
+        let library = pstr_core::library::Library::build(
+            vec![
+                file("f1", "Frieren S01E01.mkv"),
+                file("f2", "Frieren S01E02.mkv"),
+                file("f3", "Frieren S01E03.mkv"),
+                file("m1", "Mushishi S01E01.mkv"),
+                file("m2", "Mushishi S01E02.mkv"),
+                file("o1", "Monster S01E01.mkv"),
+            ],
+            &HashMap::new(),
+        );
+        let seen = |link: &str, at: i64| (("s".to_string(), link.to_string()), at);
+        let first_seen: HashMap<_, _> = [
+            seen("f1", 10),
+            seen("f2", 100),
+            seen("f3", 100),
+            seen("m1", 10),
+            seen("m2", 100),
+            seen("o1", 10),
+        ]
+        .into();
+        let news: Vec<(String, u32, Option<String>)> = news_since(&library, &first_seen, 100)
+            .into_iter()
+            .map(|news| (news.title, news.count, news.first))
+            .collect();
+        assert_eq!(
+            news,
+            vec![
+                ("Frieren".to_string(), 2, Some("S01E02".to_string())),
+                ("Mushishi".to_string(), 1, Some("S01E02".to_string())),
+            ]
+        );
     }
 }
 
