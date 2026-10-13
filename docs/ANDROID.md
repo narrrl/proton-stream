@@ -7,6 +7,18 @@ screens, while UniFFI exposes the existing catalog, share, streaming, watch-stat
 and offline logic. Keep reusable behavior in the Rust crates rather than
 reimplementing it in Kotlin.
 
+## Android TV
+
+The same build installs on Android TV: it is listed in the TV launcher
+(`LEANBACK_LAUNCHER`, with the banner `scripts/render-tv-banner.sh` renders)
+and requires neither a touch screen nor leanback. Every screen is Compose
+`clickable`s, which the D-pad already moves between. The player takes a
+remote's keys while its controls are down: left and right seek ten seconds,
+the middle button brings the controls up, and play/pause works as on a
+keyboard. There is no TV-specific layout yet, and none of it has been run on a
+TV. Signing in to an account, so that shares arrive through sync, is the way
+to set one up without typing a share link on a remote.
+
 ## Toolchain
 
 Install JDK 17, Android SDK Platform/Build Tools 36, NDK

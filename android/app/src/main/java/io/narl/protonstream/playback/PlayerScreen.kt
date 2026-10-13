@@ -68,6 +68,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -444,12 +452,46 @@ fun PlayerScreen(
         }
     }
     val current by rememberUpdatedState(state)
+    // Where a remote's keys land while the controls are down. Once they are
+    // up, the D-pad moves between their buttons as it does anywhere else.
+    val keys = remember { FocusRequester() }
+    LaunchedEffect(showControls) { if (!showControls) runCatching { keys.requestFocus() } }
     if (minimized) return
 
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
+            // A TV remote, a keyboard: left and right seek as a double tap
+            // does, the middle button brings the controls up, and play/pause
+            // and space do what they say.
+            .focusRequester(keys)
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (event.key) {
+                    Key.DirectionLeft, Key.DirectionRight -> {
+                        if (showControls) return@onKeyEvent false
+                        val seconds = if (event.key == Key.DirectionLeft) -DOUBLE_TAP_SECONDS else DOUBLE_TAP_SECONDS
+                        host.seek((current.position + seconds).coerceAtLeast(0.0))
+                        nudge = seconds to (nudge?.second ?: 0) + 1
+                        true
+                    }
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.DirectionUp, Key.DirectionDown -> {
+                        if (showControls) return@onKeyEvent false
+                        showControls = true
+                        true
+                    }
+                    Key.MediaPlayPause, Key.Spacebar -> {
+                        host.setPaused(!current.paused)
+                        showControls = true
+                        true
+                    }
+                    Key.MediaPlay -> { host.setPaused(false); true }
+                    Key.MediaPause -> { host.setPaused(true); true }
+                    else -> false
+                }
+            }
+            .focusable()
             // Double-tap a side to seek ten seconds, as every phone video
             // player has taught; the middle plays or pauses. A single tap
             // waits out the double-tap timeout, which is the price of both.

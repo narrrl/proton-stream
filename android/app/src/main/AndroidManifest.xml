@@ -7,6 +7,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
+    <!--
+      Android TV: listed in its launcher, and installable without a touch
+      screen. Neither is required, so phones are offered the same build.
+    -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
     <application
         android:name=".ProtonStreamApplication"
         android:allowBackup="false"
@@ -14,6 +21,7 @@
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="33"
         android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.ProtonStream">
@@ -39,6 +47,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
             <!--
               Proton Drive public links. autoVerify="false", said explicitly:
