@@ -33,6 +33,13 @@ struct ProtonStreamApp: App {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_: UIApplication, didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        NewEpisodes.register()
+        NewEpisodes.schedule()
+        NewEpisodes.requestPermission()
+        return true
+    }
+
     func application(_: UIApplication, supportedInterfaceOrientationsFor _: UIWindow?) -> UIInterfaceOrientationMask {
         MainActor.assumeIsolated { OrientationLock.mask }
     }

@@ -72,6 +72,12 @@ struct SettingsStore {
         nonmutating set { defaults.set(newValue, forKey: Key.libraryGrouped) }
     }
 
+    /// Whether a background crawl may say that a show gained episodes.
+    var newEpisodeNotifications: Bool {
+        get { bool(Key.newEpisodeNotifications, default: true) }
+        nonmutating set { defaults.set(newValue, forKey: Key.newEpisodeNotifications) }
+    }
+
     static let filters: [LibraryFilter] = [.all, .series, .films, .watching, .unwatched, .downloaded]
     private static let sorts: [LibrarySort] = [.name, .recent, .added, .release, .rating, .popularity]
 
@@ -88,5 +94,6 @@ struct SettingsStore {
         static let libraryFilter = "library_filter"
         static let libraryGrouped = "library_grouped"
         static let metadataOfferDismissed = "metadata_offer_dismissed"
+        static let newEpisodeNotifications = "new_episode_notifications"
     }
 }

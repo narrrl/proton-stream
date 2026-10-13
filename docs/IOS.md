@@ -16,6 +16,7 @@ file of the same name is the one to change with it.
 | `ui/*Screen.kt`, `ui/AccountUi.kt`, `ui/LanguagePicker.kt` | `UI/*View.swift`, `UI/AccountUI.swift`, `UI/LanguagePicker.swift` |
 | `ui/RemoteArtwork.kt`, `ui/theme/*` | `UI/RemoteArtwork.swift`, `UI/Theme/*` |
 | `download/*` | `Download/*` |
+| `sync/NewEpisodesWorker.kt` | `App/NewEpisodes.swift` |
 | `playback/PlayerScreen.kt`, `NativeMpvHost.kt`, `PlaybackService.kt`, `StreamSession.kt` | `Player/PlayerView.swift`, `Player/PlayerHost.swift` |
 | `cpp/pstr_mpv.cpp` | `Player/MpvPlayer.swift`, `Player/StreamProtocol.swift` |
 
@@ -79,6 +80,11 @@ Each of these is the platform's doing, not a choice to diverge.
   place of Android's `WatchSyncWorker`, and every five minutes while it is open.
 - **Background audio off pauses** the episode when the app leaves the screen, where
   Android stops it.
+- **New-episode checks run when iOS chooses.** Android's `NewEpisodesWorker`
+  crawls every six hours on a network. iOS's `BGProcessingTask` is asked for no
+  sooner than six hours, and the system decides when, mostly overnight on a
+  charger. An app refresh would come more often but gets about thirty seconds,
+  which a crawl of a large share does not fit in.
 - **Presses are drawn by hand.** Compose's ripple shows every press; SwiftUI's
   `.plain` button style and `onTapGesture` show none, which on a slow iPad reads as
   a tap that missed. `PressableStyle` and `tapAndHold` (`UI/Theme/Accent.swift`)

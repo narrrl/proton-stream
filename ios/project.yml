@@ -64,7 +64,9 @@ targets:
         CFBundleDisplayName: Proton Stream
         LSRequiresIPhoneOS: true
         ITSAppUsesNonExemptEncryption: false
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - io.narl.protonstream.new-episodes
         # The Proton palette's page colour, so a dark app does not open on white.
         UILaunchScreen:
           UIColorName: LaunchBackground

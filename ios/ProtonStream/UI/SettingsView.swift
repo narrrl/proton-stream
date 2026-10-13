@@ -162,6 +162,7 @@ struct SettingsView: View {
         }
         SwitchRow(headline: "Hardware decoding", supporting: "Turn off if video shows green or torn frames", isOn: $settings.hardwareDecoding)
         SwitchRow(headline: "Background audio", supporting: "Keeps playing with the app closed, from the lock screen", isOn: $settings.backgroundAudio)
+        SwitchRow(headline: "New episode notifications", supporting: "Looks at your shares now and then and says when a show gains episodes", isOn: $settings.newEpisodeNotifications)
     }
 
     @ViewBuilder private var storage: some View {
@@ -264,12 +265,20 @@ private final class SettingsValues {
     private let store = SettingsStore()
     var wifiOnly: Bool { didSet { store.wifiOnly = wifiOnly } }
     var backgroundAudio: Bool { didSet { store.backgroundAudio = backgroundAudio } }
+    var newEpisodeNotifications: Bool {
+        didSet {
+            store.newEpisodeNotifications = newEpisodeNotifications
+            NewEpisodes.schedule()
+            NewEpisodes.requestPermission()
+        }
+    }
     var hardwareDecoding: Bool { didSet { store.hardwareDecoding = hardwareDecoding } }
     var cacheBudgetGib: Int { didSet { store.cacheBudgetGib = cacheBudgetGib } }
 
     init() {
         wifiOnly = store.wifiOnly
         backgroundAudio = store.backgroundAudio
+        newEpisodeNotifications = store.newEpisodeNotifications
         hardwareDecoding = store.hardwareDecoding
         cacheBudgetGib = store.cacheBudgetGib
     }
