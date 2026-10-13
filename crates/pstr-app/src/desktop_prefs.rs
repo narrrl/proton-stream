@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 /// What the settings page offers for the streaming cache, in GiB.
 pub const CACHE_CHOICES: [u32; 5] = [1, 2, 4, 8, 16];
 
+/// What the settings page offers for the size of everything, in percent.
+pub const TEXT_SIZE_CHOICES: [u16; 5] = [90, 100, 115, 130, 150];
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 // A file from an older version, or edited by hand, missing a field: the rest
 // still counts, and the missing one takes its default.
@@ -27,6 +30,9 @@ pub struct DesktopPrefs {
     pub grouped: bool,
     /// The library's offer of posters and synopses was turned down.
     pub metadata_offer_dismissed: bool,
+    /// How large text and controls are drawn, in percent. Per computer, not
+    /// synced: what reads well depends on the screen and how far away it is.
+    pub text_size: u16,
 }
 
 impl Default for DesktopPrefs {
@@ -40,11 +46,17 @@ impl Default for DesktopPrefs {
             // of the same picture otherwise.
             grouped: true,
             metadata_offer_dismissed: false,
+            text_size: 100,
         }
     }
 }
 
 impl DesktopPrefs {
+    /// [`Self::text_size`] as egui's zoom factor, kept to what is offered.
+    pub fn zoom(&self) -> f32 {
+        f32::from(self.text_size.clamp(50, 200)) / 100.0
+    }
+
     pub fn cache_bytes(&self) -> u64 {
         u64::from(self.cache_gib.clamp(1, 64)) << 30
     }
@@ -103,6 +115,17 @@ mod tests {
         let prefs: DesktopPrefs = serde_json::from_str(r#"{ "cache_gib": 8 }"#).unwrap();
         assert_eq!(prefs.cache_gib, 8);
         assert!(prefs.hardware_decoding);
+    }
+
+    #[test]
+    fn a_text_size_from_an_older_file_is_full_size_and_a_wild_one_is_kept_in_range() {
+        let prefs: DesktopPrefs = serde_json::from_str(r#"{ "cache_gib": 8 }"#).unwrap();
+        assert_eq!(prefs.zoom(), 1.0);
+        let wild = DesktopPrefs {
+            text_size: 900,
+            ..DesktopPrefs::default()
+        };
+        assert_eq!(wild.zoom(), 2.0);
     }
 
     #[test]

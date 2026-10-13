@@ -715,6 +715,7 @@ impl App {
         let (engine, events) = Engine::new(runtime, dirs, cc.egui_ctx.clone())?;
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, engine.appearance());
+        cc.egui_ctx.set_zoom_factor(engine.desktop_prefs().zoom());
 
         // Paint from the catalog immediately; the network catches up. A library
         // that was crawled yesterday is on screen before the shares open.
@@ -1829,7 +1830,10 @@ impl App {
                     self.note(ctx, text, false);
                 }
             }
-            Action::SetDesktopPrefs(prefs) => self.engine.set_desktop_prefs(prefs),
+            Action::SetDesktopPrefs(prefs) => {
+                ctx.set_zoom_factor(prefs.zoom());
+                self.engine.set_desktop_prefs(prefs);
+            }
             Action::SetTitleWatched { key, watched } => {
                 let Some(title) = self.library.get(&key) else {
                     return;
@@ -2101,6 +2105,14 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.pump(ctx, frame);
+        // Ctrl+plus and Ctrl+minus zoom too, through egui: keep what they
+        // settled on, so Settings shows it and the next launch opens at it.
+        let mut desktop = self.engine.desktop_prefs();
+        if (ctx.zoom_factor() - desktop.zoom()).abs() > 0.005 {
+            desktop.text_size = ((ctx.zoom_factor() * 100.0).round() as u16).clamp(50, 200);
+            ctx.set_zoom_factor(desktop.zoom());
+            self.engine.set_desktop_prefs(desktop);
+        }
         // The window manager can leave fullscreen without asking (F11, a
         // double-click on a title bar), and `F` then toggled the wrong way.
         if let Some(actual) = ctx.input(|input| input.viewport().fullscreen) {

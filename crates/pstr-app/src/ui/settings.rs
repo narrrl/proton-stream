@@ -56,7 +56,7 @@ pub fn show(
                 ui.vertical(|ui| {
                     ui.set_width(width);
                     ui.add_space(theme::space::M);
-                    appearance_form(ui, prefs.appearance, actions);
+                    appearance_form(ui, prefs.appearance, prefs.desktop, actions);
                     playback_form(ui, prefs, actions);
                     storage_form(ui, prefs, actions);
                     metadata_form(ui, settings, api_key, actions);
@@ -71,7 +71,12 @@ pub fn show(
 /// Every control here repaints the whole window the moment it is clicked —
 /// there is no "apply" — because the preview *is* the app. A swatch row that
 /// only changed a small square would be asking someone to imagine the result.
-fn appearance_form(ui: &mut egui::Ui, appearance: Appearance, actions: &mut Vec<Action>) {
+fn appearance_form(
+    ui: &mut egui::Ui,
+    appearance: Appearance,
+    desktop: DesktopPrefs,
+    actions: &mut Vec<Action>,
+) {
     ui::widgets::settings_group(ui, "Appearance", None, |ui| {
         ui.add_space(theme::space::L);
         ui.label(theme::Role::Body.rich("Palette").color(theme::text()));
@@ -108,6 +113,27 @@ fn appearance_form(ui: &mut egui::Ui, appearance: Appearance, actions: &mut Vec<
             }
         });
 
+        ui::widgets::settings_row(
+            ui,
+            "Text size",
+            Some("Everything grows with it. Kept on this computer only."),
+            |ui| {
+                let choices: Vec<(u16, String)> = TEXT_SIZE_CHOICES
+                    .iter()
+                    .map(|&percent| (percent, format!("{percent}%")))
+                    .collect();
+                let labels: Vec<(u16, &str)> = choices
+                    .iter()
+                    .map(|(percent, label)| (*percent, label.as_str()))
+                    .collect();
+                if let Some(text_size) = ui::widgets::segmented(ui, desktop.text_size, &labels) {
+                    actions.push(Action::SetDesktopPrefs(DesktopPrefs {
+                        text_size,
+                        ..desktop
+                    }));
+                }
+            },
+        );
         ui::widgets::settings_row(
             ui,
             "Library tiles",
