@@ -145,6 +145,27 @@ and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
 ## Fixed
 
+### B65 — the desktop app quit at start on a variable CJK font
+
+**Symptom.** On Secureblue (Fedora Atomic) the window showed for a moment and
+the process panicked: `Error parsing "system-cjk-fallback" TTF/OTF font file:
+Invalid index 262144 for font collection`
+([#1](https://github.com/narrrl/proton-stream/issues/1)).
+
+**Cause.** The CJK fallback is whatever `fc-match "Noto Sans CJK JP"` names,
+with the face taken from `%{index}`. For a variable font fontconfig packs the
+named instance into that number's high 16 bits; Fedora ships Noto Sans CJK as a
+variable font, so it answered 262144 — instance 4 of face 0. egui took it as a
+face index, found no such face, and panics on a font it cannot parse.
+
+**Fix.** `theme.rs` keeps only the low 16 bits, the face. And the fallback is
+parsed with skrifa, as egui parses it, before it is handed over; one that fails
+is logged and left out, so no installed font can stop the app again.
+
+**Verified.** Workspace gate, with
+`a_variable_fonts_named_instance_is_not_taken_for_a_face` and
+`a_fallback_font_egui_cannot_read_is_left_out`. Not yet run on Secureblue.
+
 ### B64 — Android offline downloads looked stuck
 
 **Symptom.** A queued episode, and more so a queued season, sat at a progress

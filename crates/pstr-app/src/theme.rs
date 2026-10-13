@@ -248,13 +248,37 @@ fn install_cjk_fallback(ctx: &egui::Context) {
     let Some((path, index)) = system_cjk_font() else {
         return;
     };
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(bytes) = std::fs::read(&path) else {
         return;
     };
-    let mut data = egui::FontData::from_owned(bytes);
-    data.index = index;
+    let Some(data) = cjk_font_data(bytes, index) else {
+        tracing::debug!("CJK fallback {}#{index} does not parse", path.display());
+        return;
+    };
     ctx.set_fonts(font_definitions(Some(data)));
     ctx.request_repaint();
+}
+
+/// The fallback font, if egui can read it.
+///
+/// egui panics on a font it cannot parse, and this one comes from whatever the
+/// system has installed. So it is parsed here first, the same way egui does,
+/// and a font that fails is left out rather than taking the app down.
+fn cjk_font_data(bytes: Vec<u8>, index: u32) -> Option<egui::FontData> {
+    skrifa::FontRef::from_index(&bytes, index).ok()?;
+    let mut data = egui::FontData::from_owned(bytes);
+    data.index = index;
+    Some(data)
+}
+
+/// The face within a font collection that fontconfig's `%{index}` names.
+///
+/// Fontconfig packs a variable font's named instance into the high 16 bits —
+/// Fedora's variable Noto Sans CJK answers 262144, instance 4 of face 0. The
+/// instance is not a face, and passing it to egui as one stopped the app at
+/// start.
+fn fontconfig_face(index: u32) -> u32 {
+    index & 0xFFFF
 }
 
 #[cfg(target_os = "linux")]
@@ -269,6 +293,7 @@ fn system_cjk_font() -> Option<(std::path::PathBuf, u32)> {
     let index = lines
         .next()
         .and_then(|value| value.parse().ok())
+        .map(fontconfig_face)
         .unwrap_or(0);
     path.is_file().then_some((path, index))
 }
@@ -854,6 +879,20 @@ const RAMP_STOPS: usize = 64;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_variable_fonts_named_instance_is_not_taken_for_a_face() {
+        assert_eq!(fontconfig_face(262_144), 0);
+        assert_eq!(fontconfig_face(0x0002_0001), 1);
+        assert_eq!(fontconfig_face(2), 2);
+    }
+
+    #[test]
+    fn a_fallback_font_egui_cannot_read_is_left_out() {
+        assert!(cjk_font_data(INTER.to_vec(), 0).is_some());
+        assert!(cjk_font_data(INTER.to_vec(), 4).is_none());
+        assert!(cjk_font_data(b"not a font".to_vec(), 0).is_none());
+    }
 
     #[test]
     fn the_bundled_inter_leaves_the_icon_codepoints_to_phosphor() {

@@ -25,6 +25,8 @@ tracing-subscriber.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui-phosphor.workspace = true
+# The parser egui reads fonts with, to check a system font before handing it over.
+skrifa.workspace = true
 image.workspace = true
 sha2.workspace = true
 parking_lot.workspace = true
@@ -39,8 +41,6 @@ tao.workspace = true
 [build-dependencies]
 embed-resource.workspace = true
 
-[dev-dependencies]
-skrifa.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus.workspace = true
