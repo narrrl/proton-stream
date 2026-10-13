@@ -516,7 +516,11 @@ fn run(
     orders: std::sync::mpsc::Receiver<Command>,
     finished: Arc<AtomicBool>,
 ) {
-    let handle = match player.play(stream) {
+    let opened = match target.resume_at {
+        Some(at) => player.play_from(stream, at),
+        None => player.play(stream),
+    };
+    let handle = match opened {
         Ok(handle) => handle,
         Err(error) => {
             engine.emit(Event::Error(format!("load {}: {error}", target.name)));
@@ -529,7 +533,6 @@ fn run(
     let mut position = target.resume_at.unwrap_or(0.0);
     let mut duration: Option<f64> = None;
     let mut watched = false;
-    let mut resumed = target.resume_at.is_none();
     let mut last_save = std::time::Instant::now();
 
     'playback: loop {
@@ -563,13 +566,6 @@ fn run(
                     restore_tracks(&player, show);
                 }
                 emit_tracks(&engine, id, &player);
-                // Only now is there a timeline to seek within.
-                if !resumed && let Some(at) = target.resume_at {
-                    resumed = true;
-                    if let Err(error) = player.seek_to(at) {
-                        tracing::warn!("resume at {at}: {error}");
-                    }
-                }
             }
             PlayerEvent::Duration(value) => duration = Some(*value),
             PlayerEvent::Position(value) => {

@@ -217,6 +217,9 @@ pub struct Player {
     /// no stream callback can be running.
     mpv: Mpv,
     registry: Arc<StreamRegistry>,
+    /// [`Self::play_from`] set mpv's `start`, which holds for every file
+    /// after until it is put back.
+    start_set: std::sync::atomic::AtomicBool,
 }
 
 impl Player {
@@ -298,7 +301,11 @@ impl Player {
 
         protocol::register(&mpv, &registry)?;
 
-        let player = Self { mpv, registry };
+        let player = Self {
+            mpv,
+            registry,
+            start_set: std::sync::atomic::AtomicBool::new(false),
+        };
         player.observe_playback_properties()?;
         Ok(player)
     }
@@ -325,9 +332,40 @@ impl Player {
     /// The returned handle keeps the URL resolvable; drop it once the file is
     /// done with. Dropping it does not interrupt playback already underway.
     pub fn play(&self, stream: VideoStream) -> Result<StreamHandle> {
+        self.clear_start();
+        self.load(stream)
+    }
+
+    fn load(&self, stream: VideoStream) -> Result<StreamHandle> {
         let handle = self.registry.publish(stream);
         self.mpv.command("loadfile", &[&handle.url()])?;
         Ok(handle)
+    }
+
+    /// Start playing a stream `seconds` in.
+    ///
+    /// Through mpv's `start` option rather than a seek once the file has
+    /// loaded: by then the demuxer has begun reading ahead from the
+    /// beginning, which on a stream is blocks fetched only to be thrown away,
+    /// queued in front of the ones the seek wants.
+    pub fn play_from(&self, stream: VideoStream, seconds: f64) -> Result<StreamHandle> {
+        self.mpv.set_property("start", format!("{seconds}"))?;
+        self.start_set
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.load(stream)
+    }
+
+    /// Put `start` back once the file it was for has loaded, so the next
+    /// one starts at its beginning. [`Self::play`] puts it back too, for a
+    /// file that never loaded.
+    fn clear_start(&self) {
+        if self
+            .start_set
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+            && let Err(error) = self.mpv.set_property("start", "none")
+        {
+            tracing::warn!(%error, "could not clear mpv's start");
+        }
     }
 
     /// Play anything else mpv can open: a local path, or one of its own
@@ -351,7 +389,15 @@ impl Player {
     /// property that briefly has no value is normal, not fatal.
     pub fn poll_event(&self, timeout: f64) -> Option<PlayerEvent> {
         match self.mpv.wait_event(timeout)? {
-            Ok(event) => Some(translate(event)),
+            Ok(event) => {
+                let event = translate(event);
+                // Not on an end of file: loading one file ends the one it
+                // replaces, before the new one has read `start`.
+                if matches!(event, PlayerEvent::FileLoaded) {
+                    self.clear_start();
+                }
+                Some(event)
+            }
             Err(error) => {
                 tracing::debug!(%error, "mpv event carried an error");
                 Some(PlayerEvent::Other)

@@ -1702,8 +1702,12 @@ impl Engine {
                 Ok(stream) => {
                     // Before mpv is even built: building it takes the UI thread
                     // a moment, and the network can spend that moment on the
-                    // two reads every file opens with.
-                    stream.warm_edges();
+                    // two reads every file opens with — and, resuming, on the
+                    // one it is about to seek to.
+                    match engine.resume_fraction(&target) {
+                        Some(fraction) => stream.warm_resume(fraction),
+                        None => stream.warm_edges(),
+                    }
                     engine.emit(Event::PlaybackReady {
                         target: Box::new(target),
                         stream,
@@ -1712,6 +1716,20 @@ impl Engine {
                 Err(error) => engine.fail(&format!("open {}", target.name), error),
             }
         });
+    }
+
+    /// How far into the file `target` resumes, as a fraction of its running
+    /// time — known from the last time it played.
+    fn resume_fraction(&self, target: &PlaybackTarget) -> Option<f64> {
+        let at = target.resume_at?;
+        let state = self
+            .catalog
+            .lock()
+            .watch_state(&target.share_id, &target.link_id)
+            .ok()
+            .flatten()?;
+        let duration = state.duration_secs.filter(|duration| *duration > 0.0)?;
+        Some(at / duration)
     }
 
     /// Fetch the blocks a file opens with into the cache, without playing it.

@@ -223,20 +223,48 @@ impl VideoStream {
     /// seek, and a seek cancels read-ahead — which here would cancel the very
     /// fetch it was meant to have started.
     pub fn warm_edges(&self) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
         let count = self.inner.map.len();
         let edges: &[usize] = match count {
             0 => &[],
             1 => &[0],
             _ => &[0, count - 1],
         };
-        for &index in edges {
+        self.warm(edges);
+    }
+
+    /// [`Self::warm_edges`], and the block `fraction` of the way through the
+    /// file: where a resumed episode seeks once its index is read.
+    ///
+    /// An estimate, from the bytes being spread evenly over the running time.
+    /// A video's bitrate is not even, so it can land a block off the one the
+    /// seek wants. Then it is one block fetched for nothing, against a round
+    /// trip saved, after the two the edges cost, when it lands.
+    pub fn warm_resume(&self, fraction: f64) {
+        self.warm_edges();
+        if !(0.0..1.0).contains(&fraction) {
+            return;
+        }
+        let offset = (self.inner.map.size() as f64 * fraction) as u64;
+        let count = self.inner.map.len();
+        if let Some(index) = self.inner.map.block_at(offset)
+            && index != 0
+            && index + 1 != count
+        {
+            self.warm(&[index]);
+        }
+    }
+
+    /// Fetch these blocks in the background. Detached: see
+    /// [`Self::warm_edges`] for why not read-ahead.
+    fn warm(&self, indices: &[usize]) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        for &index in indices {
             let inner = Arc::clone(&self.inner);
             runtime.spawn(async move {
                 if let Err(error) = block_at(inner, index).await {
-                    tracing::debug!(index, %error, "warming an edge block failed");
+                    tracing::debug!(index, %error, "warming a block failed");
                 }
             });
         }
@@ -1035,6 +1063,21 @@ mod tests {
         stream.read_range(0, 10).await.unwrap();
         stream.read_range(9_990, 10).await.unwrap();
         assert_eq!(fake.fetches(), 2);
+    }
+
+    #[tokio::test]
+    async fn warming_a_resume_fetches_the_block_that_far_in_besides_the_edges() {
+        let fake = Fake::new(&[1000; 10]);
+        let stream = stream_over(Arc::clone(&fake), 0);
+
+        stream.warm_resume(0.45);
+        assert!(
+            eventually(|| {
+                fake.fetches_of(0) == 1 && fake.fetches_of(4) == 1 && fake.fetches_of(9) == 1
+            })
+            .await
+        );
+        assert_eq!(fake.fetches(), 3);
     }
 
     #[tokio::test]
