@@ -277,6 +277,7 @@ fn cjk_font_data(bytes: Vec<u8>, index: u32) -> Option<egui::FontData> {
 /// Fedora's variable Noto Sans CJK answers 262144, instance 4 of face 0. The
 /// instance is not a face, and passing it to egui as one stopped the app at
 /// start.
+#[cfg(any(target_os = "linux", test))]
 fn fontconfig_face(index: u32) -> u32 {
     index & 0xFFFF
 }
