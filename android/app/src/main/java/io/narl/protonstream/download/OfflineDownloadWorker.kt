@@ -1,11 +1,15 @@
 package io.narl.protonstream.download
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.ForegroundInfo
@@ -25,12 +29,27 @@ class OfflineDownloadWorker(
 ) : CoroutineWorker(appContext, parameters) {
     override suspend fun doWork(): Result {
         createNotificationChannel()
-        setForeground(createForegroundInfo(null))
         val shareId = inputData.getString(KEY_SHARE_ID) ?: return Result.failure(error("missing share"))
         val volumeId = inputData.getString(KEY_VOLUME_ID) ?: return Result.failure(error("missing volume"))
         val linkId = inputData.getString(KEY_LINK_ID) ?: return Result.failure(error("missing link"))
         val label = inputData.getString(KEY_LABEL) ?: linkId
         val store = DownloadStateStore(applicationContext)
+        setForeground(createForegroundInfo(label, null))
+        postSummary(store)
+        try {
+            return transfer(store, shareId, volumeId, linkId, label)
+        } finally {
+            postSummary(store)
+        }
+    }
+
+    private suspend fun transfer(
+        store: DownloadStateStore,
+        shareId: String,
+        volumeId: String,
+        linkId: String,
+        label: String,
+    ): Result {
         // Queued, not running: the engine lets two downloads transfer at once
         // and holds the rest back, and only the first progress report means
         // this one has a slot.
@@ -62,7 +81,7 @@ class OfflineDownloadWorker(
                 reportedAt = now
                 reportedPercent = percent
                 setProgressAsync(workDataOf(KEY_DOWNLOADED to downloaded.toLong(), KEY_TOTAL to total.toLong()))
-                setForegroundAsync(createForegroundInfo(percent))
+                setForegroundAsync(createForegroundInfo(label, percent))
                 // Under the store's lock: `pause()` is a concurrent writer, and
                 // this read-modify-write used to put RUNNING back over the
                 // viewer's PAUSED and then report the download as cancelled.
@@ -120,20 +139,55 @@ class OfflineDownloadWorker(
         )
     }
 
-    /** [progress] is a percentage, or null while waiting for a download slot. */
-    private fun createForegroundInfo(progress: Int?): ForegroundInfo {
+    /**
+     * This episode's line, under [GROUP]: a season is fourteen workers, and
+     * fourteen loose notifications saying the same thing named nothing.
+     * [progress] is a percentage, or null while waiting for a download slot.
+     */
+    private fun createForegroundInfo(label: String, progress: Int?): ForegroundInfo {
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(io.narl.protonstream.R.drawable.ic_launcher_foreground)
-            .setContentTitle(
-                if (progress == null) "Waiting to download" else "Making episode available offline",
-            )
+            .setContentTitle(label)
+            .setContentText(if (progress == null) "Waiting to download" else "$progress %")
             .setProgress(100, progress ?: 0, progress == null || progress == 0)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setGroup(GROUP)
             .build()
         return ForegroundInfo(
             stableNotificationId(id),
             notification,
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        )
+    }
+
+    /**
+     * The one line the group folds into — "Downloading 12 episodes" — or none
+     * once nothing is left to download. Posted as each worker starts and
+     * ends rather than on progress, which each episode's own line carries.
+     */
+    private fun postSummary(store: DownloadStateStore) {
+        val manager = applicationContext.getSystemService(NotificationManager::class.java)
+        val left = store.records().count {
+            it.status == RetainedDownload.STATUS_QUEUED || it.status == RetainedDownload.STATUS_RUNNING
+        }
+        if (left == 0) {
+            manager.cancel(SUMMARY_ID)
+            return
+        }
+        val allowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!allowed) return
+        manager.notify(
+            SUMMARY_ID,
+            NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+                .setSmallIcon(io.narl.protonstream.R.drawable.ic_launcher_foreground)
+                .setContentTitle(if (left == 1) "Downloading 1 episode" else "Downloading $left episodes")
+                .setOnlyAlertOnce(true)
+                .setGroup(GROUP)
+                .setGroupSummary(true)
+                .build(),
         )
     }
 
@@ -149,6 +203,10 @@ class OfflineDownloadWorker(
         const val KEY_TOTAL = "total"
         private const val MAX_RETRIES = 3
         private const val CHANNEL_ID = "offline-downloads"
+        private const val GROUP = "offline-downloads"
+
+        /** Below [stableNotificationId]'s range, so no episode's line replaces it. */
+        internal const val SUMMARY_ID = 1
 
         /** Shortest gap between two identical-looking progress reports. */
         private const val PROGRESS_INTERVAL_MS = 1_000L
@@ -186,4 +244,4 @@ internal class TransferRate {
 }
 
 internal fun stableNotificationId(workId: UUID): Int =
-    (workId.hashCode() and Int.MAX_VALUE).coerceAtLeast(1)
+    (workId.hashCode() and Int.MAX_VALUE).coerceAtLeast(OfflineDownloadWorker.SUMMARY_ID + 1)

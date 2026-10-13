@@ -9,6 +9,8 @@ private struct OfflineGroup: Identifiable {
 }
 
 struct DownloadsView: View {
+    var onPlay: (TitleRecord, Int) -> Void = { _, _ in }
+    var onOpen: (TitleRecord) -> Void = { _ in }
     @Environment(AppModel.self) private var model
     @Environment(\.scheme) private var scheme
     // Deleting a saved episode asks first: it is the viewer's own choice to
@@ -48,7 +50,7 @@ struct DownloadsView: View {
                                 caption: "\(group.files.count) \(group.files.count == 1 ? "episode" : "episodes") · \(formatBytes(group.files.reduce(0) { $0 + $1.size }))"
                             )
                             ForEach(group.files, id: \.linkId) { file in
-                                SavedRow(file: file, title: group.title) { deleting = file }
+                                SavedRow(file: file, title: group.title, onPlay: onPlay, onOpen: onOpen) { deleting = file }
                             }
                         }
                     }
@@ -102,11 +104,16 @@ private struct SectionHeading: View {
 private struct SavedRow: View {
     let file: OfflineRecord
     let title: TitleRecord?
+    let onPlay: (TitleRecord, Int) -> Void
+    let onOpen: (TitleRecord) -> Void
     let onDelete: () -> Void
     @Environment(\.scheme) private var scheme
 
     var body: some View {
         let episode = file.episode
+        // What a download is for: tapping it plays it, from where it was
+        // left, without going back through the library to find it.
+        let index = title?.playlist.firstIndex { $0.linkId == file.linkId }
         HStack(spacing: 16) {
             RemoteArtwork(episode?.stillUrl ?? title?.backdropUrl, title?.name ?? file.linkId, fallback: episode?.thumbnailSource, labelled: episode == nil)
                 .frame(width: 96)
@@ -118,11 +125,21 @@ private struct SavedRow: View {
                     .textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
             }
             Spacer(minLength: 0)
+            if let title {
+                IconButton("info.circle", "Open \(title.displayName)") { onOpen(title) }
+            }
             IconButton("trash", "Delete download", action: onDelete)
         }
         .padding(.leading, 16)
         .padding(.trailing, 4)
         .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let title, let index { onPlay(title, index) }
+        }
+        .accessibilityAction(named: "Play") {
+            if let title, let index { onPlay(title, index) }
+        }
     }
 }
 
@@ -138,7 +155,7 @@ private struct PartialRow: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(download.label).textStyle(.bodyLarge).foregroundStyle(scheme.onSurface).lineLimit(2)
-                Text(downloadStatusLine(download)).textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
+                Text(downloadStatusLine(download, waitingFor: DownloadCoordinator.shared.queueReason)).textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
                 if download.total > 0 {
                     AccentProgress(progress: Double(download.downloaded) / Double(download.total)).padding(.top, 8)
                 }

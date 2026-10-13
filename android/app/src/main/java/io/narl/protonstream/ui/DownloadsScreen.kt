@@ -3,6 +3,7 @@ package io.narl.protonstream.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,6 +60,8 @@ internal fun DownloadsScreen(
     onResume: (RetainedDownload) -> Unit,
     onDeletePartial: (RetainedDownload) -> Unit,
     padding: PaddingValues,
+    onPlay: (TitleRecord, Int) -> Unit = { _, _ -> },
+    onOpen: (TitleRecord) -> Unit = {},
 ) {
     val context = LocalContext.current
     val work = WorkManager.getInstance(context).getWorkInfosByTagLiveData(DownloadCoordinator.TAG)
@@ -122,7 +126,7 @@ internal fun DownloadsScreen(
                     )
                 }
                 items(group.files, key = { "${it.shareId}/${it.linkId}" }) { file ->
-                    SavedRow(file, group.title, onDelete = { deleting = file })
+                    SavedRow(file, group.title, onDelete = { deleting = file }, onPlay = onPlay, onOpen = onOpen)
                 }
             }
         }
@@ -160,9 +164,23 @@ private fun SectionHeading(title: String, caption: String? = null) {
 
 /** A saved episode: its still, what it is, its size, and a way to remove it. */
 @Composable
-private fun SavedRow(file: OfflineRecord, title: TitleRecord?, onDelete: () -> Unit) {
+private fun SavedRow(
+    file: OfflineRecord,
+    title: TitleRecord?,
+    onDelete: () -> Unit,
+    onPlay: (TitleRecord, Int) -> Unit,
+    onOpen: (TitleRecord) -> Unit,
+) {
     val episode = file.episode
+    // What a download is for: tapping it plays it, from where it was left,
+    // without going back through the library to find it.
+    val index = title?.seasons?.flatMap(SeasonRecord::episodes)?.indexOfFirst { it.linkId == file.linkId } ?: -1
     ListItem(
+        modifier = if (title != null && index >= 0) {
+            Modifier.clickable(onClickLabel = "Play") { onPlay(title, index) }
+        } else {
+            Modifier
+        },
         leadingContent = {
             RemoteArtwork(
                 episode?.stillUrl ?: title?.backdropUrl,
@@ -179,8 +197,15 @@ private fun SavedRow(file: OfflineRecord, title: TitleRecord?, onDelete: () -> U
             Text(listOfNotNull(episode?.label, formatBytes(file.size)).joinToString(" · "))
         },
         trailingContent = {
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Outlined.Delete, contentDescription = "Delete download")
+            Row {
+                title?.let {
+                    IconButton(onClick = { onOpen(it) }) {
+                        Icon(Icons.Outlined.Info, contentDescription = "Open ${it.displayName}")
+                    }
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Outlined.Delete, contentDescription = "Delete download")
+                }
             }
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),

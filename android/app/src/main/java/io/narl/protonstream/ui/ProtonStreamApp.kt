@@ -329,6 +329,15 @@ fun ProtonStreamApp(
                         model::resumeDownload,
                         model::deletePartial,
                         body,
+                        onPlay = { title, index ->
+                            playingTitleKey = title.key
+                            playingIndex = index
+                            playerMinimized = false
+                        },
+                        onOpen = { title ->
+                            destination = Destination.Library
+                            selectedTitleKey = title.key
+                        },
                     )
                     Destination.Settings -> SettingsScreen(
                         state,

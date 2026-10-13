@@ -19,6 +19,11 @@ final class DownloadCoordinator {
     /// Every retained download, sorted by label. Re-read after each write.
     private(set) var records: [RetainedDownload] = []
 
+    /// Why a queued download is not running, when it is not merely a free
+    /// slot: a Wi-Fi-only download on mobile data waits without a word, and
+    /// "Queued" for an hour on the bus reads as stuck.
+    private(set) var queueReason: String?
+
     /// A download finished or was removed: the catalog has changed.
     @ObservationIgnored var onFinished: (() -> Void)?
 
@@ -125,6 +130,10 @@ final class DownloadCoordinator {
     /// Re-apply "Wi-Fi only" to what is queued and running: a season queued
     /// before the setting was turned on must not then download over cellular.
     func applyNetworkPolicy() {
+        queueReason = switch path?.status {
+        case .satisfied?: allowed ? nil : "Waiting for Wi-Fi"
+        default: "Waiting for a connection"
+        }
         if allowed {
             resumeQueued()
         } else {

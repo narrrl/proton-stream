@@ -185,7 +185,10 @@ struct RootView: View {
             // on a form that has done its job.
             SharesView(incomingLink: $incomingLink, onFirstShareAdded: { select(.library) })
         case .downloads:
-            DownloadsView()
+            DownloadsView(onPlay: play, onOpen: { title in
+                destination = .library
+                selectedTitleKey = title.key
+            })
         case .settings:
             SettingsView()
         }

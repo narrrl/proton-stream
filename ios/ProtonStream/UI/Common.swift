@@ -327,9 +327,11 @@ func formatBytes(_ bytes: UInt64) -> String {
 }
 
 /// One line under a download that has not finished: "Running · 120.0 MiB of
-/// 1.2 GiB · 2.4 MiB/s", or "Queued" while it waits for a slot.
-func downloadStatusLine(_ download: RetainedDownload) -> String {
-    var parts = [download.status.prefix(1).uppercased() + download.status.dropFirst()]
+/// 1.2 GiB · 2.4 MiB/s", or "Queued" while it waits for a slot — or, given a
+/// `waitingFor`, what it is really waiting on.
+func downloadStatusLine(_ download: RetainedDownload, waitingFor: String? = nil) -> String {
+    let status = download.status == RetainedDownload.statusQueued ? waitingFor : nil
+    var parts = [status ?? download.status.prefix(1).uppercased() + download.status.dropFirst()]
     if download.total > 0, download.downloaded > 0 {
         parts.append("\(formatBytes(UInt64(download.downloaded))) of \(formatBytes(UInt64(download.total)))")
     }

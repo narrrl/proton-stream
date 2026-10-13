@@ -462,7 +462,7 @@ private struct EpisodeRow: View {
             if let active = download, active.total > 0, !episode.offline {
                 AccentProgress(progress: Double(active.downloaded) / Double(active.total), solid: scheme.tertiary)
                     .padding(.top, 8)
-                Text(downloadStatusLine(active)).textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant)
+                Text(downloadStatusLine(active, waitingFor: DownloadCoordinator.shared.queueReason)).textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant)
             }
         }
         .padding(.horizontal, 16)
