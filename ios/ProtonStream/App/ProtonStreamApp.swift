@@ -107,6 +107,9 @@ struct RootView: View {
                 .animation(.easeInOut(duration: 0.2), value: model.activity)
             }
             .background(scheme.background.ignoresSafeArea())
+            // Covered by the player, but still there to VoiceOver, which
+            // would otherwise walk the library behind the picture.
+            .accessibilityHidden(host.isOpen && !host.minimized)
         }
         .overlay {
             // Over the shell rather than instead of it: the page behind stays

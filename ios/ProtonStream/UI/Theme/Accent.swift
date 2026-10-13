@@ -115,6 +115,14 @@ private struct TapAndHold: ViewModifier {
             .animation(.easeOut(duration: 0.1), value: pressed)
             .onTapGesture(perform: onTap)
             .onLongPressGesture(perform: { onHold?() }, onPressingChanged: { pressed = $0 })
+            // One element to VoiceOver, a button, with the long press as an
+            // action: a gesture is not something it can perform.
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, onTap)
+            .accessibilityActions {
+                if let onHold { Button("More", action: onHold) }
+            }
     }
 }
 

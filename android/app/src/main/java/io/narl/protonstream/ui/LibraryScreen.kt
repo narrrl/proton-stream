@@ -73,6 +73,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -681,13 +684,14 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
         Modifier
             .width(220.dp)
             .clip(MaterialTheme.shapes.medium)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this episode"),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.medium)) {
+            // Named by the text under it; read as well, the name came twice.
             RemoteArtwork(
                 entry.episode.stillUrl ?: entry.title.backdropUrl,
                 entry.title.displayName,
-                Modifier.fillMaxSize(),
+                Modifier.fillMaxSize().clearAndSetSemantics {},
                 fallback = entry.episode.thumbnailSource,
             )
             entry.episode.progress?.let { progress ->
@@ -738,7 +742,7 @@ private fun PosterTile(
     Column(
         modifier
             .clip(MaterialTheme.shapes.medium)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this title"),
     ) {
         Box {
             RemoteArtwork(
@@ -747,7 +751,8 @@ private fun PosterTile(
                 (if (shared) Modifier.sharedArt(title.key) else Modifier)
                     .fillMaxWidth()
                     .aspectRatio(2f / 3f)
-                    .clip(MaterialTheme.shapes.medium),
+                    .clip(MaterialTheme.shapes.medium)
+                    .clearAndSetSemantics {},
                 fallback = title.thumbnailSource,
             )
             if (folded > 0) {
@@ -760,7 +765,8 @@ private fun PosterTile(
                         .padding(6.dp)
                         .clip(MaterialTheme.shapes.small)
                         .background(Color.Black.copy(alpha = 0.7f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .semantics { contentDescription = "and $folded more" },
                 )
             }
         }

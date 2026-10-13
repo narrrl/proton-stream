@@ -541,7 +541,9 @@ private struct ContinueCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Named by the text under it; read as well, the name came twice.
             RemoteArtwork(entry.episode.stillUrl ?? entry.title.backdropUrl, entry.title.displayName, fallback: entry.episode.thumbnailSource)
+                .accessibilityHidden(true)
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .overlay(alignment: .bottom) {
                     if let progress = entry.episode.progress { AccentProgress(progress: progress) }
@@ -571,6 +573,7 @@ struct PosterTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             RemoteArtwork(title.posterUrl ?? title.backdropUrl, title.displayName, fallback: title.thumbnailSource)
+                .accessibilityHidden(true)
                 .aspectRatio(2 / 3, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Corner.standard))
                 .overlay(alignment: .topTrailing) {
@@ -581,6 +584,7 @@ struct PosterTile: View {
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: Corner.standard))
                             .padding(6)
+                            .accessibilityLabel("and \(folded) more")
                     }
                 }
             Text(title.displayName).textStyle(.bodyMedium, semibold: true).foregroundStyle(scheme.onSurface)
