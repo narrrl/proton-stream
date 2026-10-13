@@ -59,6 +59,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.unit.dp
 import io.narl.protonstream.settings.SettingsStore
+import io.narl.protonstream.sync.NewEpisodesWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -104,6 +105,7 @@ internal fun SettingsScreen(
     val settings = remember { SettingsStore(context) }
     var wifiOnly by remember { mutableStateOf(settings.wifiOnly) }
     var backgroundAudio by remember { mutableStateOf(settings.backgroundAudio) }
+    var newEpisodes by remember { mutableStateOf(settings.newEpisodeNotifications) }
     var hardwareDecoding by remember { mutableStateOf(settings.hardwareDecoding) }
     var cacheBudgetGib by remember { mutableStateOf(settings.cacheBudgetGib) }
     // Playback preferences are the shared store's, not this app's: they are the
@@ -206,6 +208,15 @@ internal fun SettingsScreen(
             ) {
                 backgroundAudio = it
                 settings.backgroundAudio = it
+            }
+            SettingSwitch(
+                "New episode notifications",
+                "Looks at your shares every few hours and says when a show gains episodes",
+                newEpisodes,
+            ) {
+                newEpisodes = it
+                settings.newEpisodeNotifications = it
+                NewEpisodesWorker.schedule(context)
             }
         }
         SettingsPage.Storage -> SettingsSubPage(SettingsPage.Storage, padding, back) {

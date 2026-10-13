@@ -21,6 +21,7 @@ import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.playback.NativeMpvHost
 import io.narl.protonstream.playback.PlaybackService
 import io.narl.protonstream.settings.SettingsStore
+import io.narl.protonstream.sync.NewEpisodesWorker
 import io.narl.protonstream.sync.WatchSyncWorker
 import io.narl.protonstream.ui.ProtonStreamApp
 import io.narl.protonstream.ui.theme.AppearanceState
@@ -79,6 +80,7 @@ class MainActivity : ComponentActivity() {
             playbackConnection,
             Context.BIND_AUTO_CREATE,
         )
+        NewEpisodesWorker.schedule(this)
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED

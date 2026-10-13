@@ -56,6 +56,11 @@ class SettingsStore(context: Context) {
         get() = preferences.getBoolean(KEY_LIBRARY_GROUPED, true)
         set(value) { preferences.edit { putBoolean(KEY_LIBRARY_GROUPED, value) } }
 
+    /** Whether a background crawl may say that a show gained episodes. */
+    var newEpisodeNotifications: Boolean
+        get() = preferences.getBoolean(KEY_NEW_EPISODE_NOTIFICATIONS, true)
+        set(value) { preferences.edit { putBoolean(KEY_NEW_EPISODE_NOTIFICATIONS, value) } }
+
     companion object {
         /** The desktop's range, in the steps a phone's storage is bought in. */
         val CACHE_BUDGET_CHOICES = listOf(1, 2, 4, 8, 16)
@@ -78,6 +83,7 @@ class SettingsStore(context: Context) {
         private const val KEY_LIBRARY_SORT = "library_sort"
         private const val KEY_LIBRARY_GROUPED = "library_grouped"
         private const val KEY_LIBRARY_FILTER = "library_filter"
+        private const val KEY_NEW_EPISODE_NOTIFICATIONS = "new_episode_notifications"
         private const val KEY_METADATA_OFFER_DISMISSED = "metadata_offer_dismissed"
     }
 }
