@@ -203,7 +203,8 @@ struct RootView: View {
             onAddShare: {
                 incomingLink = ""
                 destination = .shares
-            }
+            },
+            onOpenSettings: { select(.settings) }
         )
         if width >= twoPaneWidth {
             HStack(spacing: 0) {

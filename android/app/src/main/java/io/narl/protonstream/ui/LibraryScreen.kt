@@ -19,6 +19,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.graphics.Brush
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.TonalButton
+import androidx.compose.material3.Surface
+import androidx.compose.ui.platform.LocalContext
+import io.narl.protonstream.settings.SettingsStore
+import io.narl.protonstream.ui.theme.QuietButton
 import java.time.LocalDate
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.CheckCircle
@@ -105,6 +109,29 @@ private data class Resumable(
 /** One tile of the grid: the title drawn, and how many more of its franchise it stands for. */
 private data class Tile(val title: TitleRecord, val folded: Int)
 
+/** The offer of posters and synopses, and its two answers. */
+internal class MetadataOffer(val onOpenSettings: () -> Unit, val onDismiss: () -> Unit)
+
+@Composable
+private fun MetadataOfferCard(offer: MetadataOffer) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp)) {
+            Text("Add posters and synopses?", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Turning it on in Settings sends the titles in your library — not your files, and " +
+                    "nothing about what you have watched — to AniList or TMDB.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, end = 8.dp),
+            )
+            Row(Modifier.align(Alignment.End)) {
+                QuietButton(onClick = offer.onDismiss) { Text("Not now") }
+                QuietButton(onClick = offer.onOpenSettings) { Text("Open settings") }
+            }
+        }
+    }
+}
+
 /** A row above the grid: titles that share a director, a studio or a genre. */
 private data class Shelf(val label: String, val titles: List<TitleRecord>)
 
@@ -123,8 +150,13 @@ internal fun LibraryScreen(
     onError: (Throwable) -> Unit = {},
     onArrange: (LibrarySort, Boolean) -> Unit = { _, _ -> },
     onAddShare: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
     val download = rememberDownload()
+    val context = LocalContext.current
+    // Posters and synopses, offered once there is a library to put them on
+    // and never turned on unasked: switching them on sends title names out.
+    var offerDismissed by remember { mutableStateOf(SettingsStore(context).metadataOfferDismissed) }
     // What a long press opened a menu for: a title, or a Continue watching card.
     var menuFor by remember { mutableStateOf<TitleRecord?>(null) }
     var menuResume by remember { mutableStateOf<Resumable?>(null) }
@@ -204,6 +236,14 @@ internal fun LibraryScreen(
                     onTitle,
                     onTitleMenu = { menuFor = it },
                     onResumeMenu = { menuResume = it },
+                    metadataOffer = if (state.metadataSettings.enabled || offerDismissed) {
+                        null
+                    } else {
+                        MetadataOffer(onOpenSettings) {
+                            offerDismissed = true
+                            SettingsStore(context).metadataOfferDismissed = true
+                        }
+                    },
                 )
             }
         }
@@ -398,6 +438,7 @@ private fun LibraryGrid(
     onTitle: (TitleRecord) -> Unit,
     onTitleMenu: (TitleRecord) -> Unit,
     onResumeMenu: (Resumable) -> Unit,
+    metadataOffer: MetadataOffer? = null,
 ) {
     // The arrangement names titles by key; before it has arrived, the titles
     // as they came are the grid.
@@ -424,6 +465,9 @@ private fun LibraryGrid(
         // opening the app wants is almost always the thing they were part way
         // through. Inside the grid rather than pinned over it, so the shelf
         // scrolls away with the rest.
+        if (metadataOffer != null && state.query.isBlank()) {
+            item(key = "metadata-offer", span = { GridItemSpan(maxLineSpan) }) { MetadataOfferCard(metadataOffer) }
+        }
         val featured = if (state.query.isBlank()) featured(state.titles, resumable) else null
         featured?.let { title ->
             item(key = "featured", span = { GridItemSpan(maxLineSpan) }) {

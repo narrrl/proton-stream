@@ -51,6 +51,12 @@ struct SettingsStore {
         nonmutating set { defaults.set(String(describing: newValue), forKey: Key.librarySort) }
     }
 
+    /// The library's offer of posters and synopses was turned down.
+    var metadataOfferDismissed: Bool {
+        get { bool(Key.metadataOfferDismissed, default: false) }
+        nonmutating set { defaults.set(newValue, forKey: Key.metadataOfferDismissed) }
+    }
+
     /// Whether the library folds each franchise into one tile.
     var libraryGrouped: Bool {
         get { bool(Key.libraryGrouped, default: true) }
@@ -70,5 +76,6 @@ struct SettingsStore {
         static let cacheBudgetGib = "cache_budget_gib"
         static let librarySort = "library_sort"
         static let libraryGrouped = "library_grouped"
+        static let metadataOfferDismissed = "metadata_offer_dismissed"
     }
 }

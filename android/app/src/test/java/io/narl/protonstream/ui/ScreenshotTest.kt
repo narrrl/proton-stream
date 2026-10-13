@@ -27,6 +27,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import uniffi.pstr_android.ArrangementRecord
 import uniffi.pstr_android.EpisodeRecord
+import uniffi.pstr_android.MetadataProvider
+import uniffi.pstr_android.MetadataSettingsRecord
 import uniffi.pstr_android.OfflineRecord
 import uniffi.pstr_android.PaletteRecord
 import uniffi.pstr_android.SeasonRecord
@@ -79,18 +81,23 @@ class ScreenshotTest {
 
     @Test
     fun `the library on a phone`() = capture("library-phone") {
+        LibraryScreen(MATCHED, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
+    fun `the library offering posters while they are off`() = capture("library-phone-offer") {
         LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
     }
 
     @Test
     @Config(qualifiers = RobolectricDeviceQualifiers.MediumTablet)
     fun `the library on a tablet`() = capture("library-tablet") {
-        LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+        LibraryScreen(MATCHED, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
     }
 
     @Test
     fun `the library in the light palette`() = captureLight("library-phone-light") {
-        LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+        LibraryScreen(MATCHED, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
     }
 
     @Test
@@ -116,7 +123,7 @@ class ScreenshotTest {
         // reads it from, so the scale is set there.
         val density = LocalDensity.current
         CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.5f)) {
-            LibraryScreen(LIBRARY, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+            LibraryScreen(MATCHED, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
         }
     }
 
@@ -292,6 +299,16 @@ class ScreenshotTest {
 
         val FILM = title("akira", "Akira", listOf(SeasonRecord(null, "Film", listOf(episode(1u, 1u)))))
             .copy(kind = TitleType.FILM, year = 1988u)
+
+        /** [LIBRARY] with posters on, as the shelf above its grid implies. */
+        val MATCHED get() = LIBRARY.copy(
+            metadataSettings = MetadataSettingsRecord(
+                enabled = true,
+                provider = MetadataProvider.ANI_LIST,
+                language = "en",
+                ready = true,
+            ),
+        )
 
         val LIBRARY = AppUiState(
             loading = false,

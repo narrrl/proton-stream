@@ -58,12 +58,16 @@ struct LibraryView: View {
     let onResume: (TitleRecord, Int) -> Void
     let onTitle: (TitleRecord) -> Void
     var onAddShare: () -> Void = {}
+    var onOpenSettings: () -> Void = {}
 
     // What a long press opened a menu for: a title, or a Continue watching card.
     @State private var menuFor: TitleRecord?
     @State private var menuResume: Resumable?
     @State private var matching: TitleRecord?
     @State private var downloading: DownloadRequest?
+    // Posters and synopses, offered once there is a library to put them on
+    // and never turned on unasked: switching them on sends title names out.
+    @State private var offerDismissed = SettingsStore().metadataOfferDismissed
     /// The same, for a download asked about once the menu has gone.
     @State private var pendingDownload: DownloadRequest?
     /// "Change match" picked in the tile menu, waiting for that menu to finish
@@ -195,6 +199,12 @@ struct LibraryView: View {
                                 }
                             }
                         }
+                }
+                if browsing, !model.metadataSettings.enabled, !offerDismissed {
+                    MetadataOfferCard(onOpenSettings: onOpenSettings) {
+                        offerDismissed = true
+                        SettingsStore().metadataOfferDismissed = true
+                    }
                 }
                 if let featured {
                     FeaturedBanner(
@@ -408,6 +418,29 @@ private struct LibrarySkeleton: View {
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 24, trailing: 16))
         }
         .scrollDisabled(true)
+    }
+}
+
+/// The offer of posters and synopses, and its two answers.
+private struct MetadataOfferCard: View {
+    let onOpenSettings: () -> Void
+    let onDismiss: () -> Void
+    @Environment(\.scheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Add posters and synopses?").textStyle(.titleSmall).foregroundStyle(scheme.onSurface)
+            Text("Turning it on in Settings sends the titles in your library — not your files, and nothing about what you have watched — to AniList or TMDB.")
+                .textStyle(.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            HStack {
+                Spacer()
+                Button("Not now", action: onDismiss).buttonStyle(.quiet)
+                Button("Open settings", action: onOpenSettings).buttonStyle(.quiet)
+            }
+        }
+        .padding(EdgeInsets(top: 12, leading: 16, bottom: 4, trailing: 8))
+        .background(scheme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
