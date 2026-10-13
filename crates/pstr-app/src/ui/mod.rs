@@ -387,6 +387,19 @@ pub enum Answer {
 /// inside the app — stored secrets, downloaded bytes. Everything else acts on
 /// the click.
 pub fn confirm(ctx: &egui::Context, id: &str, heading: &str, body: &str, verb: &str) -> Answer {
+    confirm_with(ctx, id, heading, body, verb, true)
+}
+
+/// [`confirm`], for a question whose yes loses nothing — a large download —
+/// and so is the accent rather than the danger colour.
+pub fn confirm_with(
+    ctx: &egui::Context,
+    id: &str,
+    heading: &str,
+    body: &str,
+    verb: &str,
+    destroys: bool,
+) -> Answer {
     let mut answer = Answer::Pending;
     let modal = egui::Modal::new(egui::Id::new(("confirm", id)))
         .frame(
@@ -407,7 +420,12 @@ pub fn confirm(ctx: &egui::Context, id: &str, heading: &str, body: &str, verb: &
             ui.label(theme::Role::Body.rich(body).color(theme::muted()));
             ui.add_space(theme::space::XL);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if danger_button(ui, verb).clicked() {
+                let yes = if destroys {
+                    danger_button(ui, verb)
+                } else {
+                    accent_button(ui, verb)
+                };
+                if yes.clicked() {
                     answer = Answer::Confirmed;
                 }
                 if ui.button("Cancel").clicked() {

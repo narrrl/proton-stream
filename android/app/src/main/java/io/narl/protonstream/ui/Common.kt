@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -17,7 +18,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -25,9 +29,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import io.narl.protonstream.download.DownloadCoordinator
 import io.narl.protonstream.download.RetainedDownload
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.TonalButton
 import uniffi.pstr_android.EpisodeRecord
 
 /**
@@ -138,6 +144,45 @@ internal fun formatBytes(bytes: ULong): String {
         value >= 1024 * 1024 -> "%.1f MiB".format(value / (1024 * 1024))
         value >= 1024 -> "%.1f KiB".format(value / 1024)
         else -> "$bytes bytes"
+    }
+}
+
+/**
+ * Download episodes, asking first when it is more than one: a season or a
+ * show is tens of gigabytes, and one tap should not fill a phone. The
+ * question says how many and how big. Call it in composition; it draws the
+ * dialog where it is called and returns what starts the download.
+ */
+@Composable
+internal fun rememberDownload(): (List<EpisodeRecord>, String) -> Unit {
+    val context = LocalContext.current
+    var asking by remember { mutableStateOf<Pair<List<EpisodeRecord>, String>?>(null) }
+    asking?.let { (episodes, what) ->
+        val bytes = episodes.sumOf { it.size ?: 0uL }
+        AlertDialog(
+            onDismissRequest = { asking = null },
+            title = { Text("Download ${episodes.size} episodes of $what?") },
+            text = {
+                Text(
+                    "They are kept on this device for watching without a connection" +
+                        (if (bytes > 0uL) " — about ${formatBytes(bytes)}" else "") +
+                        ". Delete them from Downloads.",
+                )
+            },
+            confirmButton = {
+                AccentButton(onClick = {
+                    asking = null
+                    DownloadCoordinator.enqueue(context, episodes)
+                }) { Text("Download") }
+            },
+            dismissButton = { TonalButton(onClick = { asking = null }) { Text("Cancel") } },
+        )
+    }
+    return remember(context) {
+        { episodes, what ->
+            val wanted = episodes.filterNot(EpisodeRecord::offline)
+            if (wanted.size > 1) asking = wanted to what else DownloadCoordinator.enqueue(context, wanted)
+        }
     }
 }
 

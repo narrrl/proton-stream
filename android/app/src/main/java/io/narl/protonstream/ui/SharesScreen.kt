@@ -38,6 +38,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.unit.dp
 import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.DangerButton
 import io.narl.protonstream.ui.theme.TonalButton
 import uniffi.pstr_android.AccountState
 import uniffi.pstr_android.ShareRecord
@@ -158,7 +159,7 @@ internal fun SharesScreen(
                 )
             },
             confirmButton = {
-                AccentButton(onClick = { removing = null; onRemove(share.id) }) { Text("Remove") }
+                DangerButton(onClick = { removing = null; onRemove(share.id) }) { Text("Remove") }
             },
             dismissButton = { TonalButton(onClick = { removing = null }) { Text("Cancel") } },
         )

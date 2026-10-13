@@ -70,6 +70,7 @@ import io.narl.protonstream.download.DownloadStateStore
 import io.narl.protonstream.download.RetainedDownload
 import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.DangerButton
 import io.narl.protonstream.ui.theme.AccentProgress
 import io.narl.protonstream.ui.theme.EdgedButton
 import io.narl.protonstream.ui.theme.QuietButton
@@ -106,6 +107,7 @@ internal fun TitleScreen(
     onOpenTitle: (TitleRecord) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val download = rememberDownload()
     var showMatch by remember(title.key) { mutableStateOf(false) }
     var overviewOpen by remember(title.key) { mutableStateOf(false) }
 
@@ -270,7 +272,7 @@ internal fun TitleScreen(
                             }
                         }
                         TitleAction(Icons.Default.Download, "Download", Modifier.weight(1f)) {
-                            DownloadCoordinator.enqueue(context, playlist)
+                            download(playlist, title.displayName)
                         }
                         TitleAction(Icons.Default.Edit, "Match", Modifier.weight(1f)) { showMatch = true }
                         // The provider's own page for this title: where a viewer goes
@@ -367,7 +369,7 @@ internal fun TitleScreen(
                                 contentDescription = "Mark ${it.label} ${if (seen) "unwatched" else "watched"}",
                             )
                         }
-                        IconButton(onClick = { DownloadCoordinator.enqueue(context, it.episodes) }) {
+                        IconButton(onClick = { download(it.episodes, "${title.displayName} ${it.label}") }) {
                             Icon(Icons.Default.Download, contentDescription = "Download ${it.label}")
                         }
                     }
@@ -671,7 +673,33 @@ internal fun ChangeMatchDialog(
     // Choosing fetches the entry's episodes too, which is a few requests.
     var choosing by remember { mutableStateOf(false) }
     var options by remember { mutableStateOf<List<MatchRecord>>(emptyList()) }
+    var confirmForget by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    if (confirmForget) {
+        // Asked, because a match chosen by hand is work the next look-up
+        // does not redo: it decides again on its own.
+        AlertDialog(
+            onDismissRequest = { confirmForget = false },
+            title = { Text("Forget this match?") },
+            text = {
+                Text(
+                    "Its poster, description and episode names go, and the next look-up " +
+                        "matches it again on its own. A match you chose by hand is lost.",
+                )
+            },
+            confirmButton = {
+                DangerButton(onClick = {
+                    confirmForget = false
+                    scope.launch {
+                        runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().forgetMatch(title.key) } }
+                            .onSuccess { onChanged() }.onFailure(onError)
+                    }
+                }) { Text("Forget") }
+            },
+            dismissButton = { TonalButton(onClick = { confirmForget = false }) { Text("Cancel") } },
+        )
+        return
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Change match") },
@@ -720,12 +748,7 @@ internal fun ChangeMatchDialog(
             }
         },
         confirmButton = {
-            QuietButton(onClick = {
-                scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().forgetMatch(title.key) } }
-                        .onSuccess { onChanged() }.onFailure(onError)
-                }
-            }) { Text("Forget match") }
+            QuietButton(onClick = { confirmForget = true }) { Text("Forget match") }
         },
         dismissButton = { TonalButton(onClick = onDismiss) { Text("Close") } },
     )

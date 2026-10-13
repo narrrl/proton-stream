@@ -329,6 +329,13 @@ private struct MetadataSettingsSheet: View {
             if enabled, provider == .tmdb, !current.ready, apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
                 Text("Enter a TMDB API key to save.").foregroundStyle(scheme.error)
             }
+            // Said before Save rather than after: what is forgotten includes
+            // matches chosen by hand, which no look-up redoes.
+            if current.enabled, !enabled || provider != current.provider {
+                Text("Saving forgets every poster, description and match stored now, including ones you chose by hand.")
+                    .textStyle(.bodySmall)
+                    .foregroundStyle(scheme.error)
+            }
             if let refusal {
                 Text(refusal).foregroundStyle(scheme.error)
             }

@@ -35,8 +35,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
-import io.narl.protonstream.download.DownloadCoordinator
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -126,7 +124,7 @@ internal fun LibraryScreen(
     onArrange: (LibrarySort, Boolean) -> Unit = { _, _ -> },
     onAddShare: () -> Unit = {},
 ) {
-    val context = LocalContext.current
+    val download = rememberDownload()
     // What a long press opened a menu for: a title, or a Continue watching card.
     var menuFor by remember { mutableStateOf<TitleRecord?>(null) }
     var menuResume by remember { mutableStateOf<Resumable?>(null) }
@@ -218,7 +216,7 @@ internal fun LibraryScreen(
                 onResume(title, nextUpIndex(playlist, title.continueIndex))
             }
             MenuRow(Icons.Default.Info, "Open") { onTitle(title) }
-            MenuRow(Icons.Default.Download, "Download all") { DownloadCoordinator.enqueue(context, playlist) }
+            MenuRow(Icons.Default.Download, "Download all") { download(playlist, title.displayName) }
             MenuRow(
                 if (allWatched) Icons.Outlined.CheckCircle else Icons.Default.CheckCircle,
                 if (allWatched) "Mark unwatched" else "Mark watched",

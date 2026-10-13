@@ -130,12 +130,29 @@ fn current_row(
                 )));
                 // Only worth offering when there is something to undo: with no
                 // row stored, "clear" would delete nothing.
-                if ui
+                //
+                // A match chosen by hand is asked about first: it is work the
+                // next match run does not redo.
+                let asking = ui.id().with(("forget", &matcher.title_key));
+                if ui.data(|data| data.get_temp::<bool>(asking).unwrap_or(false)) {
+                    ui.label(ui::muted("Forget the match you chose?"));
+                    if ui::danger_button(ui, "Forget").clicked() {
+                        ui.data_mut(|data| data.remove::<bool>(asking));
+                        actions.push(Action::ForgetMatch(matcher.title_key.clone()));
+                    }
+                    if ui.button("Keep").clicked() {
+                        ui.data_mut(|data| data.remove::<bool>(asking));
+                    }
+                } else if ui
                     .button("Clear")
                     .on_hover_text("Forget this match and let the next match run decide again")
                     .clicked()
                 {
-                    actions.push(Action::ForgetMatch(matcher.title_key.clone()));
+                    if *manual {
+                        ui.data_mut(|data| data.insert_temp(asking, true));
+                    } else {
+                        actions.push(Action::ForgetMatch(matcher.title_key.clone()));
+                    }
                 }
             }
             Some((None, _)) => {

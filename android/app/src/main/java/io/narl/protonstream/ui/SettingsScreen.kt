@@ -65,6 +65,7 @@ import kotlinx.coroutines.withContext
 import io.narl.protonstream.download.DownloadCoordinator
 import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.DangerButton
 import io.narl.protonstream.ui.theme.AppearanceState
 import io.narl.protonstream.ui.theme.EdgedButton
 import io.narl.protonstream.ui.theme.TonalButton
@@ -316,7 +317,7 @@ internal fun SettingsScreen(
                 )
             },
             confirmButton = {
-                AccentButton(onClick = { confirmDelete = false; onRemoveAllOffline() }) { Text("Delete") }
+                DangerButton(onClick = { confirmDelete = false; onRemoveAllOffline() }) { Text("Delete") }
             },
             dismissButton = { TonalButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
@@ -419,6 +420,7 @@ private fun MetadataSettingsDialog(
     var refusal by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val needsKey = enabled && provider == MetadataProvider.TMDB && !current.ready && apiKey.isBlank()
+    val forgets = current.enabled && (!enabled || provider != current.provider)
     AlertDialog(
         onDismissRequest = { if (!saving) onDismiss() },
         properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
@@ -450,6 +452,16 @@ private fun MetadataSettingsDialog(
                     )
                 }
                 if (needsKey) Text("Enter a TMDB API key to save.", color = MaterialTheme.colorScheme.error)
+                // Said before Save rather than after: what is forgotten
+                // includes matches chosen by hand, which no look-up redoes.
+                if (forgets) {
+                    Text(
+                        "Saving forgets every poster, description and match stored now, " +
+                            "including ones you chose by hand.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 refusal?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },

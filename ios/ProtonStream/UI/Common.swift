@@ -282,6 +282,40 @@ func nextUpIndex(_ playlist: [EpisodeRecord], continueIndex: UInt32? = nil) -> I
     return playlist.firstIndex { !$0.watched } ?? 0
 }
 
+/// Episodes asked for offline at once, waiting on a yes.
+struct DownloadRequest: Identifiable {
+    let id = UUID()
+    let episodes: [EpisodeRecord]
+    let what: String
+}
+
+/// Download episodes, or return the question to ask first when it is more
+/// than one: a season or a show is tens of gigabytes, and one tap should not
+/// fill a phone. Show the question with `confirmingDownload`.
+@MainActor func download(_ episodes: [EpisodeRecord], _ what: String) -> DownloadRequest? {
+    let wanted = episodes.filter { !$0.offline }
+    if wanted.count > 1 { return DownloadRequest(episodes: wanted, what: what) }
+    DownloadCoordinator.shared.enqueue(wanted)
+    return nil
+}
+
+extension View {
+    /// Ask about a `download` of several episodes, with how many and how big.
+    func confirmingDownload(_ request: Binding<DownloadRequest?>) -> some View {
+        alert(
+            request.wrappedValue.map { "Download \($0.episodes.count) episodes of \($0.what)?" } ?? "",
+            isPresented: Binding(get: { request.wrappedValue != nil }, set: { if !$0 { request.wrappedValue = nil } }),
+            presenting: request.wrappedValue
+        ) { asked in
+            Button("Download") { DownloadCoordinator.shared.enqueue(asked.episodes) }
+            Button("Cancel", role: .cancel) {}
+        } message: { asked in
+            let bytes = asked.episodes.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
+            Text("They are kept on this device for watching without a connection\(bytes > 0 ? " — about \(formatBytes(bytes))" : ""). Delete them from Downloads.")
+        }
+    }
+}
+
 func formatBytes(_ bytes: UInt64) -> String {
     let value = Double(bytes)
     let gib = 1024.0 * 1024 * 1024

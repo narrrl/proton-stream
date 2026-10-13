@@ -40,7 +40,7 @@ import androidx.work.WorkManager
 import io.narl.protonstream.download.DownloadCoordinator
 import io.narl.protonstream.download.DownloadStateStore
 import io.narl.protonstream.download.RetainedDownload
-import io.narl.protonstream.ui.theme.AccentButton
+import io.narl.protonstream.ui.theme.DangerButton
 import io.narl.protonstream.ui.theme.AccentProgress
 import io.narl.protonstream.ui.theme.TonalButton
 import uniffi.pstr_android.OfflineRecord
@@ -138,7 +138,7 @@ internal fun DownloadsScreen(
                 )
             },
             confirmButton = {
-                AccentButton(onClick = {
+                DangerButton(onClick = {
                     deleting = null
                     onRemove(file)
                 }) { Text("Delete") }

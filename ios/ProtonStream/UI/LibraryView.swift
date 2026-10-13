@@ -63,6 +63,9 @@ struct LibraryView: View {
     @State private var menuFor: TitleRecord?
     @State private var menuResume: Resumable?
     @State private var matching: TitleRecord?
+    @State private var downloading: DownloadRequest?
+    /// The same, for a download asked about once the menu has gone.
+    @State private var pendingDownload: DownloadRequest?
     /// "Change match" picked in the tile menu, waiting for that menu to finish
     /// leaving: a sheet presented while another is still dismissing is dropped.
     @State private var pendingMatch: TitleRecord?
@@ -109,6 +112,8 @@ struct LibraryView: View {
                 pendingMatch = nil
                 matching = title
             }
+            downloading = pendingDownload
+            pendingDownload = nil
         }) { title in
             let playlist = title.playlist
             let allWatched = title.episodeCount > 0 && title.watchedCount == title.episodeCount
@@ -117,7 +122,7 @@ struct LibraryView: View {
                     onResume(title, nextUpIndex(playlist, continueIndex: title.continueIndex))
                 }
                 MenuRow("info.circle", "Open") { onTitle(title) }
-                MenuRow("arrow.down.circle", "Download all") { DownloadCoordinator.shared.enqueue(playlist) }
+                MenuRow("arrow.down.circle", "Download all") { pendingDownload = download(playlist, title.displayName) }
                 MenuRow(allWatched ? "checkmark.circle" : "checkmark.circle.fill", allWatched ? "Mark unwatched" : "Mark watched") {
                     model.setTitleWatched(title, !allWatched)
                 }
@@ -135,6 +140,7 @@ struct LibraryView: View {
                 }
             }
         }
+        .confirmingDownload($downloading)
         .sheet(item: $matching) { title in
             ChangeMatchSheet(title: title) { matching = nil }
         }

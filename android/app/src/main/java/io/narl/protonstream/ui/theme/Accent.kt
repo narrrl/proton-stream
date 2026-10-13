@@ -143,6 +143,28 @@ internal fun QuietButton(
 )
 
 /**
+ * The yes of a confirmation that deletes or forgets something.
+ *
+ * Not [AccentButton]: the filled accent is this app's "go on", and a dialog
+ * whose most inviting button is the one that loses something reads as the
+ * safe choice. Error-toned text instead, as Material's own guidance has it.
+ */
+@Composable
+internal fun DangerButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) = TextButton(
+    onClick = onClick,
+    modifier = modifier,
+    enabled = enabled,
+    shape = MaterialTheme.shapes.small,
+    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+    content = content,
+)
+
+/**
  * How far along something is, drawn in the accent.
  *
  * Hand-drawn rather than `LinearProgressIndicator` because that one takes a

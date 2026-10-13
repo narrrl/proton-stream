@@ -15,6 +15,7 @@ struct TitleView: View {
     @Environment(\.scheme) private var scheme
     @Environment(\.openURL) private var openURL
     @State private var showMatch = false
+    @State private var downloading: DownloadRequest?
     @State private var overviewOpen = false
     @State private var seasonIndex: Int
     // Back by an edge swipe: the page shrinks towards the library as the
@@ -99,6 +100,7 @@ struct TitleView: View {
                         }
                 )
         }
+        .confirmingDownload($downloading)
         .sheet(isPresented: $showMatch) {
             ChangeMatchSheet(title: title) { showMatch = false }
         }
@@ -178,7 +180,7 @@ struct TitleView: View {
                 if upNext?.resumeAt != nil || title.watchedCount > 0 {
                     TitleAction(icon: "arrow.counterclockwise", label: "Start over") { onPlay(playlist, 0) }
                 }
-                TitleAction(icon: "arrow.down.circle", label: "Download") { DownloadCoordinator.shared.enqueue(playlist) }
+                TitleAction(icon: "arrow.down.circle", label: "Download") { downloading = download(playlist, title.displayName) }
                 TitleAction(icon: "pencil", label: "Match") { showMatch = true }
                 // The provider's own page for this title: where a viewer goes to
                 // check that the thing the app matched is what they have.
@@ -260,7 +262,7 @@ struct TitleView: View {
                     model.markEpisodes(season.episodes, !seen, "\(title.displayName) \(season.label)")
                 }
                 IconButton("arrow.down.circle", "Download \(season.label)") {
-                    DownloadCoordinator.shared.enqueue(season.episodes)
+                    downloading = download(season.episodes, "\(title.displayName) \(season.label)")
                 }
             }
         }
@@ -478,6 +480,7 @@ struct ChangeMatchSheet: View {
     @State private var failure: String?
     @State private var searched = false
     @State private var forgetting = false
+    @State private var confirmForget = false
 
     init(title: TitleRecord, onDone: @escaping () -> Void) {
         self.title = title
@@ -520,22 +523,32 @@ struct ChangeMatchSheet: View {
                 .disabled(choosing)
             }
         } buttons: {
-            Button(forgetting ? "Forgetting…" : "Forget match") {
-                forgetting = true
-                failure = nil
-                Task {
-                    do {
-                        try await model.run { try $0.forgetMatch(titleKey: title.key) }
-                        changed()
-                    } catch {
-                        failure = errorMessage(error)
-                    }
-                    forgetting = false
-                }
-            }
-            .buttonStyle(.quiet)
-            .disabled(forgetting || choosing)
+            Button(forgetting ? "Forgetting…" : "Forget match") { confirmForget = true }
+                .buttonStyle(.quiet)
+                .disabled(forgetting || choosing)
             Button("Close", action: onDone).buttonStyle(.tonal)
+        }
+        // Asked, because a match chosen by hand is work the next look-up does
+        // not redo: it decides again on its own.
+        .alert("Forget this match?", isPresented: $confirmForget) {
+            Button("Forget", role: .destructive, action: forget)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Its poster, description and episode names go, and the next look-up matches it again on its own. A match you chose by hand is lost.")
+        }
+    }
+
+    private func forget() {
+        forgetting = true
+        failure = nil
+        Task {
+            do {
+                try await model.run { try $0.forgetMatch(titleKey: title.key) }
+                changed()
+            } catch {
+                failure = errorMessage(error)
+            }
+            forgetting = false
         }
     }
 

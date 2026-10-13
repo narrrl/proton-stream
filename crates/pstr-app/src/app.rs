@@ -662,6 +662,12 @@ pub struct App {
     /// Finished offline copies the viewer asked to delete, and what they are
     /// of, waiting on their say-so: gigabytes are one misclick away otherwise.
     pub confirm_offline_delete: Option<(Vec<DownloadKey>, String)>,
+    /// Metadata settings that would forget every stored answer, waiting on a
+    /// yes.
+    pub confirm_metadata: Option<MetadataConfig>,
+    /// Several episodes asked for offline at once, waiting on a yes, with how
+    /// many are not offline yet and their size.
+    pub confirm_download: Option<(Vec<PlaybackTarget>, usize, i64)>,
     /// A share the viewer asked to remove, waiting on their say-so.
     pub confirm_remove_share: Option<String>,
     /// Messages in the corner. See [`ui::toast`].
@@ -748,6 +754,8 @@ impl App {
             offline_files: std::collections::HashSet::new(),
             confirm_partial_delete: None,
             confirm_offline_delete: None,
+            confirm_metadata: None,
+            confirm_download: None,
             confirm_remove_share: None,
             toasts: ui::toast::Toasts::default(),
             pacer: Pacer::new(),
@@ -1500,8 +1508,34 @@ impl App {
                 self.engine.play(target);
             }
             Action::MakeOffline(targets) => {
-                self.note(ctx, "downloading for offline use…", false);
-                self.engine.make_offline(targets);
+                // A season or a show is asked about, with its size: forty
+                // episodes is tens of gigabytes, and one click should not
+                // fill a disk.
+                let missing: Vec<_> = targets
+                    .iter()
+                    .filter(|target| !self.offline_files.contains(&DownloadKey::from(*target)))
+                    .collect();
+                if missing.len() > 1 {
+                    let bytes = missing
+                        .iter()
+                        .filter_map(|target| {
+                            self.library
+                                .get(&target.title_key)?
+                                .episodes()
+                                .find(|episode| {
+                                    episode.node.share_id == target.share_id
+                                        && episode.node.link_id == target.link_id
+                                })?
+                                .node
+                                .size
+                        })
+                        .sum();
+                    let count = missing.len();
+                    self.confirm_download = Some((targets, count, bytes));
+                } else {
+                    self.note(ctx, "downloading for offline use…", false);
+                    self.engine.make_offline(targets);
+                }
             }
             Action::PauseDownload(key) => self.engine.pause_download(&key),
             Action::ResumeDownload(key) => self.engine.resume_download(&key),
@@ -1519,8 +1553,18 @@ impl App {
                 }
             }
             Action::SetMetadataConfig(config) => {
-                self.settings = config.clone();
-                self.engine.set_metadata_config(config);
+                // Turning it off or changing provider forgets every answer,
+                // hand-picked matches included: asked, when there are some.
+                let previous = self.engine.metadata_config();
+                let forgets =
+                    previous.enabled && (!config.enabled || config.provider != previous.provider);
+                if forgets && !self.metadata.is_empty() {
+                    self.settings = previous;
+                    self.confirm_metadata = Some(config);
+                } else {
+                    self.settings = config.clone();
+                    self.engine.set_metadata_config(config);
+                }
             }
             Action::SetApiKey { provider, key } => self.engine.set_api_key(provider, key),
             Action::MatchTitles { force } => {
@@ -2174,6 +2218,8 @@ impl eframe::App for App {
         let dialog = self.matcher.is_some()
             || self.confirm_partial_delete.is_some()
             || self.confirm_offline_delete.is_some()
+            || self.confirm_metadata.is_some()
+            || self.confirm_download.is_some()
             || self.confirm_remove_share.is_some()
             || self.shortcuts_open;
         if !dialog {
@@ -2266,6 +2312,8 @@ impl eframe::App for App {
                 offline_files,
                 confirm_partial_delete,
                 confirm_offline_delete,
+                confirm_metadata,
+                confirm_download,
                 confirm_remove_share,
                 shown_page,
                 ..
@@ -2436,6 +2484,70 @@ impl eframe::App for App {
                         *confirm_offline_delete = None;
                     }
                     ui::Answer::Declined => *confirm_offline_delete = None,
+                    ui::Answer::Pending => {}
+                }
+            }
+
+            if let Some((targets, count, bytes)) = confirm_download.clone() {
+                let what = targets
+                    .first()
+                    .map_or("these episodes", |target| target.title_name.as_str());
+                let size = if bytes > 0 {
+                    format!(" — about {}", ui::format_size(bytes))
+                } else {
+                    String::new()
+                };
+                match ui::confirm_with(
+                    ctx,
+                    "download",
+                    &format!("Download {count} episodes of {what}?"),
+                    &format!(
+                        "They are kept on this computer for watching without a connection{size}. \
+                         Delete them from the Downloads page."
+                    ),
+                    "Download",
+                    false,
+                ) {
+                    ui::Answer::Confirmed => {
+                        engine.make_offline(targets);
+                        *confirm_download = None;
+                    }
+                    ui::Answer::Declined => *confirm_download = None,
+                    ui::Answer::Pending => {}
+                }
+            }
+
+            if let Some(config) = confirm_metadata.clone() {
+                let picked = metadata.values().filter(|record| record.manual).count();
+                let (heading, verb) = if config.enabled {
+                    (format!("Switch to {}?", config.provider.label()), "Switch")
+                } else {
+                    ("Turn off posters and descriptions?".to_owned(), "Turn off")
+                };
+                let mut body = "Every poster, description and episode name stored now is \
+                                forgotten"
+                    .to_owned();
+                if picked > 0 {
+                    body.push_str(&format!(
+                        ", and so {} you chose by hand",
+                        match picked {
+                            1 => "is the 1 match".to_owned(),
+                            count => format!("are the {count} matches"),
+                        }
+                    ));
+                }
+                body.push_str(if config.enabled {
+                    ". The library is looked up again with the new provider."
+                } else {
+                    ". Nothing more is sent anywhere."
+                });
+                match ui::confirm(ctx, "metadata", &heading, &body, verb) {
+                    ui::Answer::Confirmed => {
+                        *settings = config.clone();
+                        engine.set_metadata_config(config);
+                        *confirm_metadata = None;
+                    }
+                    ui::Answer::Declined => *confirm_metadata = None,
                     ui::Answer::Pending => {}
                 }
             }
