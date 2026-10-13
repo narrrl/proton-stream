@@ -27,11 +27,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use proton_drive_rs::{
     Node, ProtonDriveClient, ProtonDrivePublicLinkClient, RevisionReader, ThumbnailType,
 };
 use proton_sdk::config::ProtonClientConfiguration;
+use proton_sdk::error::ProtonError;
 use proton_sdk::ids::{LinkId, NodeUid, VolumeId};
 use serde::{Deserialize, Serialize};
 
@@ -973,7 +975,10 @@ impl SharedLibrary {
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
 
-        let root = client.root_node().await?;
+        let root = retrying(&CRAWL_RETRY_DELAYS, ProtonError::is_retriable, || {
+            client.root_node()
+        })
+        .await?;
         let mut level = vec![root.uid.clone()];
         let mut found = vec![root];
 
@@ -981,14 +986,10 @@ impl SharedLibrary {
             let listings = level.into_iter().map(|folder| {
                 let client = client.clone();
                 async move {
-                    let child_uids: Vec<NodeUid> =
-                        client.enumerate_folder_children_node_uids(&folder).await?;
-                    if child_uids.is_empty() {
-                        return Ok(Vec::new());
-                    }
-                    // Chunked and fanned out inside the SDK too, so this is a
-                    // multiplier on that concurrency rather than the only one.
-                    client.enumerate_nodes(&child_uids).await
+                    retrying(&CRAWL_RETRY_DELAYS, ProtonError::is_retriable, || {
+                        list_folder(&client, &folder)
+                    })
+                    .await
                 }
             });
 
@@ -1009,6 +1010,59 @@ impl SharedLibrary {
         Ok(found)
     }
 }
+
+/// One folder's children, with their details.
+async fn list_folder(
+    client: &ShareClient,
+    folder: &NodeUid,
+) -> proton_sdk::error::Result<Vec<Node>> {
+    let child_uids: Vec<NodeUid> = client.enumerate_folder_children_node_uids(folder).await?;
+    if child_uids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Chunked and fanned out inside the SDK too, so this is a multiplier on
+    // that concurrency rather than the only one.
+    client.enumerate_nodes(&child_uids).await
+}
+
+/// Run `operation`, and again after each delay while it fails in a way
+/// `retriable` says another attempt could fix.
+///
+/// A crawl is hundreds of listings, and one that fails ends the crawl. The SDK
+/// replays a timeout or a refused connection itself, but not a connection that
+/// dropped mid-request — the request may have been applied, which matters for
+/// a write and not at all for a listing. A phone sees exactly that: a pooled
+/// connection the OS tore down while the app was off screen, or a hand-over
+/// from Wi-Fi to mobile data.
+async fn retrying<T, E, O, OF>(
+    delays: &[Duration],
+    retriable: impl Fn(&E) -> bool,
+    operation: O,
+) -> std::result::Result<T, E>
+where
+    O: Fn() -> OF,
+    OF: std::future::Future<Output = std::result::Result<T, E>>,
+{
+    let mut delays = delays.iter();
+    loop {
+        match operation().await {
+            Err(error) if retriable(&error) => match delays.next() {
+                Some(delay) => tokio::time::sleep(*delay).await,
+                None => return Err(error),
+            },
+            done => return done,
+        }
+    }
+}
+
+/// How long a crawl waits before listing a folder again. About a quarter of a
+/// minute in all: long enough for a network to come back, short enough that a
+/// share that is really gone still says so.
+const CRAWL_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+    Duration::from_secs(9),
+];
 
 /// How many folders of one level to list at once.
 ///
@@ -1085,6 +1139,30 @@ mod tests {
             let call = calls.fetch_add(1, Ordering::SeqCst);
             std::future::ready(if call < failures { Err(()) } else { Ok(()) })
         }
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_drops_is_tried_again_until_it_comes_back() {
+        let calls = AtomicUsize::new(0);
+        let result = retrying(&[Duration::ZERO; 3], |_| true, flaky(2, &calls)).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_keeps_failing_reports_its_failure_once_the_delays_run_out() {
+        let calls = AtomicUsize::new(0);
+        let result = retrying(&[Duration::ZERO; 3], |_| true, flaky(9, &calls)).await;
+        assert_eq!(result, Err(()));
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn a_failure_another_attempt_cannot_fix_is_reported_at_once() {
+        let calls = AtomicUsize::new(0);
+        let result = retrying(&[Duration::ZERO; 3], |_| false, flaky(1, &calls)).await;
+        assert_eq!(result, Err(()));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
