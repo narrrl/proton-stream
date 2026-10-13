@@ -78,6 +78,16 @@ impl Drop for FrameTimer {
 /// sitting through it is not a decision.
 const UP_NEXT_SECONDS: f64 = 10.0;
 
+/// A file asked for whose player does not exist yet.
+pub struct Opening {
+    /// What the bar and the player page call it while it opens.
+    pub name: String,
+    pub title_key: String,
+    /// The page the viewer asked from, to go back to if it never opens. The
+    /// player page itself when one episode follows another.
+    pub from: Page,
+}
+
 /// Which page is showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Page {
@@ -627,7 +637,7 @@ pub struct App {
     /// ever entering. egui has no way to ask the platform.
     pub fullscreen: bool,
     /// The file being opened, if a click is still waiting on the network.
-    pub opening: Option<String>,
+    pub opening: Option<Opening>,
     pub connecting: bool,
     pub crawling: bool,
     /// Which share the crawl is on, and how far it has got.
@@ -957,7 +967,7 @@ impl App {
                     }
                 }
                 Event::PlaybackReady { target, stream } => {
-                    self.opening = None;
+                    let opening = self.opening.take();
                     // Dropped before the new one is built: two mpv cores would
                     // fight over the ring and the bandwidth, and the old one's
                     // render context has to be freed on this thread anyway.
@@ -971,6 +981,7 @@ impl App {
                     self.playback = None;
                     let torn_down = swap.elapsed();
                     let gl = frame.gl().cloned();
+                    let target_key = target.title_key.clone();
                     let started = Playback::start(&self.engine, *target, stream, gl.as_ref());
                     if swap.elapsed() >= STALL {
                         tracing::warn!(
@@ -986,7 +997,15 @@ impl App {
                             self.page = Page::Player;
                             self.playback = Some(playback);
                         }
-                        Err(error) => self.note(ctx, error, true),
+                        Err(error) => {
+                            if self.page == Page::Player {
+                                self.page = match opening.map(|opening| opening.from) {
+                                    Some(Page::Player) | None => Page::Title(target_key),
+                                    Some(from) => from,
+                                };
+                            }
+                            self.note(ctx, error, true);
+                        }
                     }
                 }
                 // Only from the player currently on the bar: one being replaced
@@ -1052,7 +1071,17 @@ impl App {
                     }
                 }
                 Event::Error(text) => {
-                    self.opening = None;
+                    // The open failed: back to where it was asked from, with
+                    // the reason, rather than a player page with nothing on it.
+                    if let Some(opening) = self.opening.take()
+                        && self.page == Page::Player
+                        && self.playback.is_none()
+                    {
+                        self.page = match opening.from {
+                            Page::Player => Page::Title(opening.title_key),
+                            from => from,
+                        };
+                    }
                     self.note(ctx, text, true);
                 }
                 Event::Status(text) => self.note(ctx, text, false),
@@ -1444,7 +1473,15 @@ impl App {
                     .engine
                     .title_track_prefs(&target.title_key)
                     .map(Box::new);
-                self.opening = Some(target.name.clone());
+                // To the player page now, not when the file has opened: over a
+                // public link that can take seconds, and a click that seems to
+                // do nothing gets clicked again.
+                self.opening = Some(Opening {
+                    name: target.name.clone(),
+                    title_key: target.title_key.clone(),
+                    from: self.page.clone(),
+                });
+                self.page = Page::Player;
                 self.engine.play(target);
             }
             Action::MakeOffline(targets) => {
@@ -1549,9 +1586,10 @@ impl App {
                     self.fullscreen = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                 }
-                self.page = match &self.playback {
-                    Some(playback) => Page::Title(playback.target.title_key.clone()),
-                    None => Page::Library,
+                self.page = match (&self.playback, &self.opening) {
+                    (Some(playback), _) => Page::Title(playback.target.title_key.clone()),
+                    (None, Some(opening)) => Page::Title(opening.title_key.clone()),
+                    (None, None) => Page::Library,
                 };
             }
             Action::Crawl(share) => {
@@ -2040,6 +2078,27 @@ impl eframe::App for App {
                 episode_drawer,
                 ..
             } = self;
+            // Before the list borrows the art caches for the rest of the frame.
+            let waiting = opening
+                .as_ref()
+                .filter(|_| playback.is_none())
+                .map(|opening| {
+                    let title = library.get(&opening.title_key);
+                    let mut art = ui::Art {
+                        engine,
+                        thumbs,
+                        posters,
+                        metadata,
+                        episodes,
+                        names: engine.appearance().names,
+                    };
+                    ui::player::Waiting {
+                        name: &opening.name,
+                        title: title.map(|title| art.name(title).to_owned()),
+                        art: title.and_then(|title| art.wide(title)).map(|(art, _)| art),
+                        next: opening.from == Page::Player,
+                    }
+                });
             let list = playback
                 .as_ref()
                 .and_then(|playback| library.get(&playback.target.title_key))
@@ -2065,7 +2124,7 @@ impl eframe::App for App {
                         ui,
                         frame,
                         playback.as_mut(),
-                        opening.as_deref(),
+                        waiting,
                         ui::player::Chrome {
                             overlay,
                             up_next,
@@ -2221,7 +2280,7 @@ impl eframe::App for App {
                             ui,
                             frame,
                             playback.as_mut(),
-                            opening.as_deref(),
+                            opening.as_ref().map(|opening| opening.name.as_str()),
                             neighbours,
                             &mut actions,
                         );

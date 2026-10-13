@@ -188,16 +188,28 @@ impl Overlay {
     }
 }
 
+/// What the player page shows while a file opens and there is no picture yet.
+pub struct Waiting<'a> {
+    /// The episode being opened.
+    pub name: &'a str,
+    /// The title it belongs to, as the library names it.
+    pub title: Option<String>,
+    /// The title's widest art, dimmed behind the words.
+    pub art: Option<egui::TextureHandle>,
+    /// Whether one episode is following another, rather than a first click.
+    pub next: bool,
+}
+
 /// Draw the picture and its controls.
 ///
-/// `playback` is `None` in the gap between one episode ending and the next
-/// having opened — the page stays, because that is where the viewer means to
-/// be, and `opening` is what it says while they wait.
+/// `playback` is `None` until the file has opened — on a first click, and in
+/// the gap between one episode ending and the next — and `opening` is what the
+/// page says meanwhile.
 pub fn show(
     ui: &mut egui::Ui,
     frame: &mut eframe::Frame,
     playback: Option<&mut Playback>,
-    opening: Option<&str>,
+    opening: Option<Waiting<'_>>,
     chrome_state: Chrome<'_>,
     actions: &mut Vec<Action>,
 ) {
@@ -375,25 +387,59 @@ fn stalled(ui: &mut egui::Ui, rect: Rect) {
     );
 }
 
-/// The screen between two episodes: one has ended and the next is opening.
+/// The screen while a file opens: after a click, or between one episode and
+/// the next.
 ///
 /// It keeps a way out, because opening a file over a public link can take
 /// seconds and a black screen with no controls is indistinguishable from a
 /// hang.
-fn between(ui: &mut egui::Ui, opening: Option<&str>, rect: Rect, actions: &mut Vec<Action>) {
+fn between(ui: &mut egui::Ui, waiting: Option<Waiting<'_>>, rect: Rect, actions: &mut Vec<Action>) {
+    let Waiting {
+        name,
+        title,
+        art,
+        next,
+    } = waiting.unwrap_or(Waiting {
+        name: "opening…",
+        title: None,
+        art: None,
+        next: true,
+    });
+    if let Some(art) = &art {
+        // Cover rather than fit: bars around a dimmed backdrop look like a
+        // mistake, and its edges are not what anyone is looking at.
+        let size = art.size_vec2();
+        let scale = (rect.width() / size.x).max(rect.height() / size.y);
+        let shown = size * scale;
+        let uv = Rect::from_center_size(
+            egui::pos2(0.5, 0.5),
+            Vec2::new(rect.width() / shown.x, rect.height() / shown.y),
+        );
+        ui.painter()
+            .image(art.id(), rect, uv, Color32::from_white_alpha(70));
+    }
     ui.painter().text(
         rect.center() - Vec2::new(0.0, 16.0),
         Align2::CENTER_CENTER,
-        "Up next",
+        match (&title, next) {
+            (_, true) => "Up next",
+            (Some(title), false) => title.as_str(),
+            (None, false) => "Opening",
+        },
         theme::Role::Body.font(),
         theme::muted(),
     );
     ui.painter().text(
         rect.center() + Vec2::new(0.0, 12.0),
         Align2::CENTER_CENTER,
-        opening.unwrap_or("opening…"),
+        name,
         theme::Role::Title.font(),
         theme::text(),
+    );
+    let spinner = Rect::from_center_size(rect.center() + Vec2::new(0.0, 56.0), Vec2::splat(24.0));
+    ui.put(
+        spinner,
+        egui::Spinner::new().size(24.0).color(Color32::WHITE),
     );
 
     ui.scope_builder(
@@ -407,8 +453,6 @@ fn between(ui: &mut egui::Ui, opening: Option<&str>, rect: Rect, actions: &mut V
             if ui.button("Back").clicked() {
                 actions.push(Action::LeavePlayer);
             }
-            ui.add_space(theme::space::M);
-            ui.add(egui::Spinner::new().size(14.0));
         },
     );
 }
