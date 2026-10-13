@@ -38,6 +38,8 @@ struct WatchSnapshot: Equatable {
 final class AppModel {
     var loading = true
     var refreshing = false
+    /// A crawl is running, which the banner offers to stop.
+    private(set) var crawling = false
     private(set) var query = ""
     var titles: [TitleRecord] = []
     /// The grid: `titles` ordered, each franchise folded into one tile when
@@ -68,6 +70,10 @@ final class AppModel {
     /// Every banner line whose work is still running, oldest first.
     @ObservationIgnored private var activities: [(token: Int, line: String)] = []
     @ObservationIgnored private var nextActivity = 0
+    /// Crawls running now.
+    @ObservationIgnored private var crawlsRunning = 0
+    /// Set by `stopCrawl`, so a queue of shares stops rather than going on to the next.
+    @ObservationIgnored private var crawlStopped = false
 
     /// Five minutes, as on Android: cheap when nothing changed — one folder
     /// listing, and no upload.
@@ -137,6 +143,24 @@ final class AppModel {
         Task { await crawlNow(shareId) }
     }
 
+    /// Crawl one share, or all with nil, with the banner offering Stop meanwhile.
+    private func crawlShares(_ id: String?) async throws {
+        crawlsRunning += 1
+        crawling = true
+        defer {
+            crawlsRunning -= 1
+            crawling = crawlsRunning > 0
+        }
+        try await NativeRuntime.engine().crawl(shareId: id)
+    }
+
+    /// Stop the crawls running now. Shares already read stay in the library;
+    /// the one being read keeps what it had.
+    func stopCrawl() {
+        crawlStopped = true
+        NativeRuntime.engine().stopCrawl()
+    }
+
     /// The crawl itself, for pull to refresh, which holds its spinner until
     /// this returns.
     func crawlNow(_ shareId: String?) async {
@@ -144,7 +168,7 @@ final class AppModel {
         await busy(name.map { "Reading \($0)…" } ?? "Refreshing the library…") {
             message = nil
             do {
-                try await NativeRuntime.engine().crawl(shareId: shareId)
+                try await crawlShares(shareId)
             } catch {
                 message = errorMessage(error)
             }
@@ -235,11 +259,13 @@ final class AppModel {
         guard !ids.isEmpty else { return }
         let before = Set(titles.map(\.key))
         var failed: [String] = []
+        crawlStopped = false
         for id in ids {
+            if crawlStopped { break }
             let name = shares.first { $0.id == id }?.name ?? "the new share"
             await busy("Reading \(name)…") {
                 do {
-                    try await NativeRuntime.engine().crawl(shareId: id)
+                    try await crawlShares(id)
                 } catch {
                     failed.append("\(name): \(errorMessage(error))")
                 }
@@ -272,7 +298,7 @@ final class AppModel {
                 do {
                     let password = password.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
                     _ = try await run { try $0.repairShare(shareId: id, url: url, customPassword: password) }
-                    try await NativeRuntime.engine().crawl(shareId: id)
+                    try await crawlShares(id)
                 } catch {
                     reportError(error)
                 }

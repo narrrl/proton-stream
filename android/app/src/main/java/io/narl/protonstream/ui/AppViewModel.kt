@@ -47,6 +47,8 @@ import kotlinx.coroutines.isActive
 data class AppUiState(
     val loading: Boolean = true,
     val refreshing: Boolean = false,
+    /** A crawl is running, which the banner offers to stop. */
+    val crawling: Boolean = false,
     val query: String = "",
     val titles: List<TitleRecord> = emptyList(),
     /**
@@ -118,6 +120,12 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     private val activities = mutableListOf<Pair<Long, String>>()
     private var nextActivity = 0L
 
+    /** Crawls running now; main thread only, like [activities]. */
+    private var crawlsRunning = 0
+
+    /** Set by [stopCrawl], so a queue of shares stops rather than going on to the next. */
+    private var crawlStopped = false
+
     init {
         if (!NativeRuntime.tlsReady) {
             mutableState.update {
@@ -187,7 +195,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         viewModelScope.launch {
             busy("Refreshing the library…") {
                 mutableState.update { it.copy(message = null) }
-                runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(null) } }
+                runCatching { crawlShares(null) }
                     .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
             }
             reloadNow()
@@ -225,6 +233,27 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }
     }
 
+    /** Crawl one share, or all with null, with the banner offering Stop meanwhile. */
+    private suspend fun crawlShares(id: String?) {
+        crawlsRunning++
+        mutableState.update { it.copy(crawling = true) }
+        try {
+            withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) }
+        } finally {
+            crawlsRunning--
+            mutableState.update { it.copy(crawling = crawlsRunning > 0) }
+        }
+    }
+
+    /**
+     * Stop the crawls running now. Shares already read stay in the library;
+     * the one being read keeps what it had.
+     */
+    fun stopCrawl() {
+        crawlStopped = true
+        viewModelScope.launch(Dispatchers.IO) { NativeRuntime.engine().stopCrawl() }
+    }
+
     private fun showActivity() {
         val newest = activities.lastOrNull()?.second
         mutableState.update { it.copy(activity = newest, refreshing = newest != null) }
@@ -243,7 +272,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             val name = mutableState.value.shares.firstOrNull { it.id == id }?.name ?: "the share"
             busy("Reading $name…") {
                 mutableState.update { it.copy(message = null) }
-                runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) } }
+                runCatching { crawlShares(id) }
                     .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
             }
             reloadNow()
@@ -309,10 +338,12 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         if (ids.isEmpty()) return
         val before = mutableState.value.titles.map { it.key }.toSet()
         val failed = mutableListOf<String>()
+        crawlStopped = false
         for (id in ids) {
+            if (crawlStopped) break
             val name = mutableState.value.shares.firstOrNull { it.id == id }?.name ?: "the new share"
             busy("Reading $name…") {
-                runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().crawl(id) } }
+                runCatching { crawlShares(id) }
                     .onFailure { failed += "$name: ${it.message}" }
             }
         }

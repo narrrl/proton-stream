@@ -332,13 +332,18 @@ private struct ActivityBanner: View {
                     .foregroundStyle(scheme.onSurface)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                // A crawl of a large share can take minutes, and is the
+                // viewer's to call off; what it has read so far stays.
+                if model.crawling {
+                    Button("Stop", action: model.stopCrawl).buttonStyle(.quiet)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(scheme.surfaceContainerHighest, in: RoundedRectangle(cornerRadius: Corner.tight))
             .padding(.horizontal, 12)
             .transition(.move(edge: .bottom).combined(with: .opacity))
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: model.crawling ? .contain : .combine)
             .accessibilityAddTraits(.updatesFrequently)
         }
     }

@@ -76,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.WorkManager
+import io.narl.protonstream.ui.theme.QuietButton
 import io.narl.protonstream.ui.theme.accentNavigationColors
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.EpisodeRecord
@@ -355,7 +356,8 @@ fun ProtonStreamApp(
             }
             ActivityBanner(
                 state.activity,
-                Modifier
+                onStop = model::stopCrawl.takeIf { state.crawling },
+                modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = body.calculateBottomPadding() + 8.dp),
             )
@@ -437,7 +439,7 @@ private fun MiniTransport(
  * Not dismissible and not timed — it goes when the work does.
  */
 @Composable
-private fun ActivityBanner(activity: String?, modifier: Modifier = Modifier) {
+private fun ActivityBanner(activity: String?, onStop: (() -> Unit)?, modifier: Modifier = Modifier) {
     AnimatedVisibility(
         visible = activity != null,
         modifier = modifier,
@@ -458,7 +460,10 @@ private fun ActivityBanner(activity: String?, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            Text(shown, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+            Text(shown, style = MaterialTheme.typography.bodyMedium, maxLines = 2, modifier = Modifier.weight(1f))
+            // A crawl of a large share can take minutes, and is the viewer's
+            // to call off; what it has read so far stays.
+            onStop?.let { QuietButton(onClick = it) { Text("Stop") } }
         }
     }
 }

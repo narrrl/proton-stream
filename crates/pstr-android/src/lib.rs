@@ -963,6 +963,8 @@ pub struct AndroidEngine {
     reusable_clients: Mutex<Option<BTreeMap<String, ShareClient>>>,
     /// The whole library as bridge records, behind the catalog's write counter.
     library_cache: Mutex<Option<CachedLibrary>>,
+    /// Advanced by [`AndroidEngine::stop_crawl`]; a crawl watching it stops.
+    crawl_stop: tokio::sync::watch::Sender<u64>,
     /// Serializes offline publication with share removal cleanup.
     share_publication: Mutex<()>,
     /// Advances after every successful share-store mutation. A connection is
@@ -1039,6 +1041,7 @@ impl AndroidEngine {
             connecting: tokio::sync::Mutex::new(()),
             reusable_clients: Mutex::new(None),
             library_cache: Mutex::new(None),
+            crawl_stop: tokio::sync::watch::channel(0).0,
             share_publication: Mutex::new(()),
             share_generation: AtomicU64::new(0),
             thumbnails: tokio::sync::Semaphore::new(THUMBNAIL_CONCURRENCY),
@@ -2017,6 +2020,13 @@ impl AndroidEngine {
             .await
             .map_err(BridgeError::from_display)?
     }
+
+    /// Stop every crawl running now. Shares already listed stay stored; the
+    /// one being listed keeps what it had. The stopped `crawl` returns
+    /// without an error, since whoever stopped it knows why.
+    pub fn stop_crawl(&self) {
+        self.crawl_stop.send_modify(|generation| *generation += 1);
+    }
 }
 
 impl AndroidEngine {
@@ -2517,12 +2527,17 @@ impl AndroidEngine {
     }
 
     async fn crawl_inner(&self, share_id: Option<String>) -> Result<(), BridgeError> {
+        let mut stop = self.crawl_stop.subscribe();
+        stop.borrow_and_update();
         let connection = self.connection().await?;
         let targets: Vec<String> = match share_id {
             Some(id) => vec![id],
             None => connection.library.share_ids().map(str::to_owned).collect(),
         };
         for id in targets {
+            if stop.has_changed().unwrap_or(false) {
+                return Ok(());
+            }
             connection
                 .library
                 .refresh_session(&id)
@@ -2535,7 +2550,11 @@ impl AndroidEngine {
                 .lock()
                 .all_offline_files()
                 .map_err(BridgeError::from_display)?;
-            let nodes = match connection.library.crawl(&id).await {
+            let crawled = tokio::select! {
+                crawled = connection.library.crawl(&id) => crawled,
+                _ = stop.changed() => return Ok(()),
+            };
+            let nodes = match crawled {
                 Ok(nodes) => nodes,
                 Err(error) => {
                     // On the share's row until a crawl succeeds: a link revoked
