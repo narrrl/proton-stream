@@ -229,7 +229,10 @@ struct LibraryView: View {
                         }
                     }
                 }
-                if browsing {
+                // Only over the whole library: under a filter, a shelf of
+                // titles the grid below is hiding reads as the filter not
+                // working.
+                if browsing && model.filter == .all {
                     ForEach(shelves) { shelf in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(shelf.label).textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
@@ -246,6 +249,20 @@ struct LibraryView: View {
                     }
                     if !resumable.isEmpty || !shelves.isEmpty {
                         Text("All titles").textStyle(.titleMedium).foregroundStyle(scheme.onSurface).padding(.top, 8)
+                    }
+                }
+                if browsing {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(SettingsStore.filters, id: \.self) { filter in
+                                FilterChip(label: filter.label, selected: filter == model.filter) { model.setFilter(filter) }
+                            }
+                        }
+                    }
+                    if tiles.isEmpty && model.filter != .all {
+                        Text("Nothing in the library fits that filter.")
+                            .textStyle(.bodyMedium)
+                            .foregroundStyle(scheme.onSurfaceVariant)
                     }
                 }
                 // Posters, three across on a phone.
@@ -418,6 +435,20 @@ private struct LibrarySkeleton: View {
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 24, trailing: 16))
         }
         .scrollDisabled(true)
+    }
+}
+
+extension LibraryFilter {
+    /// The desktop's names for the filters, from `browse::Filter::label`.
+    var label: String {
+        switch self {
+        case .all: "All"
+        case .series: "Series"
+        case .films: "Films"
+        case .watching: "Watching"
+        case .unwatched: "Not started"
+        case .downloaded: "Downloaded"
+        }
     }
 }
 

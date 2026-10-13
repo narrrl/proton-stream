@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -84,6 +85,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import uniffi.pstr_android.EpisodeRecord
+import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.TitleRecord
@@ -108,6 +110,16 @@ private data class Resumable(
 
 /** One tile of the grid: the title drawn, and how many more of its franchise it stands for. */
 private data class Tile(val title: TitleRecord, val folded: Int)
+
+/** The desktop's names for the filters, from `browse::Filter::label`. */
+internal fun LibraryFilter.label(): String = when (this) {
+    LibraryFilter.ALL -> "All"
+    LibraryFilter.SERIES -> "Series"
+    LibraryFilter.FILMS -> "Films"
+    LibraryFilter.WATCHING -> "Watching"
+    LibraryFilter.UNWATCHED -> "Not started"
+    LibraryFilter.DOWNLOADED -> "Downloaded"
+}
 
 /** The offer of posters and synopses, and its two answers. */
 internal class MetadataOffer(val onOpenSettings: () -> Unit, val onDismiss: () -> Unit)
@@ -151,6 +163,7 @@ internal fun LibraryScreen(
     onArrange: (LibrarySort, Boolean) -> Unit = { _, _ -> },
     onAddShare: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onFilter: (LibraryFilter) -> Unit = {},
 ) {
     val download = rememberDownload()
     val context = LocalContext.current
@@ -236,6 +249,7 @@ internal fun LibraryScreen(
                     onTitle,
                     onTitleMenu = { menuFor = it },
                     onResumeMenu = { menuResume = it },
+                    onFilter = onFilter,
                     metadataOffer = if (state.metadataSettings.enabled || offerDismissed) {
                         null
                     } else {
@@ -438,6 +452,7 @@ private fun LibraryGrid(
     onTitle: (TitleRecord) -> Unit,
     onTitleMenu: (TitleRecord) -> Unit,
     onResumeMenu: (Resumable) -> Unit,
+    onFilter: (LibraryFilter) -> Unit = {},
     metadataOffer: MetadataOffer? = null,
 ) {
     // The arrangement names titles by key; before it has arrived, the titles
@@ -499,7 +514,10 @@ private fun LibraryGrid(
             }
         }
         if (state.query.isBlank()) {
-            shelves.forEach { shelf ->
+            // Only over the whole library: under a filter, a shelf of titles
+            // the grid below is hiding reads as the filter not working. The
+            // bridge leaves them out too; this covers the frame before it.
+            shelves.takeIf { state.filter == LibraryFilter.ALL }.orEmpty().forEach { shelf ->
                 item(key = "shelf-${shelf.label}", span = { GridItemSpan(maxLineSpan) }) {
                     Column {
                         Text(shelf.label, style = MaterialTheme.typography.titleMedium)
@@ -520,9 +538,29 @@ private fun LibraryGrid(
                     }
                 }
             }
-            if (resumable.isNotEmpty() || shelves.isNotEmpty()) {
-                item(key = "library-heading", span = { GridItemSpan(maxLineSpan) }) {
-                    Text("All titles", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+            item(key = "library-heading", span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                    if (resumable.isNotEmpty() || shelves.isNotEmpty()) {
+                        Text("All titles", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(LibraryFilter.entries, key = { it.name }) { filter ->
+                            FilterChip(
+                                selected = filter == state.filter,
+                                onClick = { onFilter(filter) },
+                                label = { Text(filter.label()) },
+                            )
+                        }
+                    }
+                }
+            }
+            if (tiles.isEmpty() && state.filter != LibraryFilter.ALL) {
+                item(key = "filtered-out", span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        "Nothing in the library fits that filter.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

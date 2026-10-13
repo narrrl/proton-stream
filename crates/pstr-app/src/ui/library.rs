@@ -327,17 +327,8 @@ fn shelf_controls(ui: &mut egui::Ui, view: &LibraryView, actions: &mut Vec<Actio
         actions.push(Action::SetGrouped(grouped));
     }
     ui.add_space(theme::space::L);
-    if let Some(filter) = ui::widgets::segmented(
-        ui,
-        view.filter,
-        &[
-            (Filter::All, "All"),
-            (Filter::Series, "Series"),
-            (Filter::Films, "Films"),
-            (Filter::Watching, "Watching"),
-            (Filter::Unwatched, "Not started"),
-        ],
-    ) {
+    let filters = Filter::ALL.map(|filter| (filter, filter.label()));
+    if let Some(filter) = ui::widgets::segmented(ui, view.filter, &filters) {
         actions.push(Action::SetShelf(filter, view.sort));
     }
 }

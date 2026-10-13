@@ -28,6 +28,7 @@ import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.AppearanceState
 import uniffi.pstr_android.ArrangementRecord
+import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.TitleRecord
@@ -57,6 +58,7 @@ data class AppUiState(
      * when the grid falls back to [titles] as they are.
      */
     val arrangement: ArrangementRecord? = null,
+    val filter: LibraryFilter = LibraryFilter.ALL,
     val sort: LibrarySort = LibrarySort.NAME,
     val grouped: Boolean = true,
     val shares: List<ShareRecord> = emptyList(),
@@ -135,12 +137,16 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         // The arrangement first, so the first grid is drawn the way the viewer
         // left it rather than A–Z and then re-sorted under them.
         viewModelScope.launch {
-            val (sort, grouped) = withContext(Dispatchers.IO) {
+            val (filter, sort, grouped) = withContext(Dispatchers.IO) {
                 SettingsStore(appContext).run {
-                    librarySort?.let { name -> LibrarySort.entries.firstOrNull { it.name == name } } to libraryGrouped
+                    Triple(
+                        libraryFilter?.let { name -> LibraryFilter.entries.firstOrNull { it.name == name } },
+                        librarySort?.let { name -> LibrarySort.entries.firstOrNull { it.name == name } },
+                        libraryGrouped,
+                    )
                 }
             }
-            mutableState.update { it.copy(sort = sort ?: it.sort, grouped = grouped) }
+            mutableState.update { it.copy(filter = filter ?: it.filter, sort = sort ?: it.sort, grouped = grouped) }
             reload()
         }
         catchUp()
@@ -171,7 +177,6 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         }
     }
 
-    /** Reorder the grid, or fold or unfold its franchises. */
     /** Sort and fold the library, and keep both for the next launch. */
     fun arrange(sort: LibrarySort, grouped: Boolean) {
         mutableState.update { it.copy(sort = sort, grouped = grouped) }
@@ -182,6 +187,15 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                     libraryGrouped = grouped
                 }
             }
+            reloadLibrary(mutableState.value.query)
+        }
+    }
+
+    /** Narrow the grid to some titles, and keep the choice for the next launch. */
+    fun filter(filter: LibraryFilter) {
+        mutableState.update { it.copy(filter = filter) }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { SettingsStore(appContext).libraryFilter = filter.name }
             reloadLibrary(mutableState.value.query)
         }
     }
@@ -858,7 +872,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 Reloaded(
                     engine.shares(),
                     engine.library(query),
-                    engine.arrangement(query, current.sort, current.grouped),
+                    engine.arrangement(query, current.filter, current.sort, current.grouped),
                     engine.offlineFiles(),
                     engine.metadataSettings(),
                     engine.storageUsage(),
@@ -886,7 +900,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             withContext(Dispatchers.IO) {
                 val engine = NativeRuntime.engine()
                 val search = query.takeIf(String::isNotBlank)
-                engine.library(search) to engine.arrangement(search, current.sort, current.grouped)
+                engine.library(search) to engine.arrangement(search, current.filter, current.sort, current.grouped)
             }
         }.onSuccess { (titles, arrangement) ->
             mutableState.update { it.copy(titles = titles, arrangement = arrangement) }

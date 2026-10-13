@@ -47,6 +47,7 @@ final class AppModel {
     /// when the grid falls back to `titles` as they are.
     var arrangement: ArrangementRecord?
     /// As the viewer last left them.
+    var filter: LibraryFilter = SettingsStore().libraryFilter
     var sort: LibrarySort = SettingsStore().librarySort
     var grouped = SettingsStore().libraryGrouped
     var shares: [ShareRecord] = []
@@ -115,6 +116,13 @@ final class AppModel {
         let settings = SettingsStore()
         settings.librarySort = sort
         settings.libraryGrouped = grouped
+        Task { await reloadLibrary(query) }
+    }
+
+    /// Narrow the grid to some titles, and keep the choice for the next launch.
+    func setFilter(_ filter: LibraryFilter) {
+        self.filter = filter
+        SettingsStore().libraryFilter = filter
         Task { await reloadLibrary(query) }
     }
 
@@ -787,6 +795,7 @@ final class AppModel {
     /// `reload`, for a caller that goes on to read what it loaded.
     func reloadNow() async {
         let query = query.trimmingCharacters(in: .whitespaces).isEmpty ? nil : self.query
+        let filter = filter
         let sort = sort
         let grouped = grouped
         do {
@@ -798,7 +807,7 @@ final class AppModel {
                 return Reloaded(
                     shares: try engine.shares(),
                     titles: try engine.library(search: query),
-                    arrangement: try engine.arrangement(search: query, sort: sort, grouped: grouped),
+                    arrangement: try engine.arrangement(search: query, filter: filter, sort: sort, grouped: grouped),
                     offline: try engine.offlineFiles(),
                     metadataSettings: try engine.metadataSettings(),
                     storage: try engine.storageUsage()
@@ -819,11 +828,12 @@ final class AppModel {
 
     private func reloadLibrary(_ query: String) async {
         let search = query.trimmingCharacters(in: .whitespaces).isEmpty ? nil : query
+        let filter = filter
         let sort = sort
         let grouped = grouped
         do {
             let (titles, arrangement) = try await run { engine in
-                (try engine.library(search: search), try engine.arrangement(search: search, sort: sort, grouped: grouped))
+                (try engine.library(search: search), try engine.arrangement(search: search, filter: filter, sort: sort, grouped: grouped))
             }
             self.titles = titles
             self.arrangement = arrangement

@@ -46,6 +46,11 @@ class SettingsStore(context: Context) {
         get() = preferences.getBoolean(KEY_METADATA_OFFER_DISMISSED, false)
         set(value) { preferences.edit { putBoolean(KEY_METADATA_OFFER_DISMISSED, value) } }
 
+    /** Which titles the library last showed, as a `LibraryFilter` name; null for all. */
+    var libraryFilter: String?
+        get() = preferences.getString(KEY_LIBRARY_FILTER, null)
+        set(value) { preferences.edit { putString(KEY_LIBRARY_FILTER, value) } }
+
     /** Whether the library folds each franchise into one tile. */
     var libraryGrouped: Boolean
         get() = preferences.getBoolean(KEY_LIBRARY_GROUPED, true)
@@ -67,6 +72,7 @@ class SettingsStore(context: Context) {
         private const val KEY_CACHE_BUDGET_GIB = "cache_budget_gib"
         private const val KEY_LIBRARY_SORT = "library_sort"
         private const val KEY_LIBRARY_GROUPED = "library_grouped"
+        private const val KEY_LIBRARY_FILTER = "library_filter"
         private const val KEY_METADATA_OFFER_DISMISSED = "metadata_offer_dismissed"
     }
 }

@@ -51,6 +51,15 @@ struct SettingsStore {
         nonmutating set { defaults.set(String(describing: newValue), forKey: Key.librarySort) }
     }
 
+    /// Which titles the library last showed.
+    var libraryFilter: LibraryFilter {
+        get {
+            let stored = defaults.string(forKey: Key.libraryFilter)
+            return Self.filters.first { String(describing: $0) == stored } ?? .all
+        }
+        nonmutating set { defaults.set(String(describing: newValue), forKey: Key.libraryFilter) }
+    }
+
     /// The library's offer of posters and synopses was turned down.
     var metadataOfferDismissed: Bool {
         get { bool(Key.metadataOfferDismissed, default: false) }
@@ -63,6 +72,7 @@ struct SettingsStore {
         nonmutating set { defaults.set(newValue, forKey: Key.libraryGrouped) }
     }
 
+    static let filters: [LibraryFilter] = [.all, .series, .films, .watching, .unwatched, .downloaded]
     private static let sorts: [LibrarySort] = [.name, .recent, .added, .release, .rating, .popularity]
 
     private func bool(_ key: String, default value: Bool) -> Bool {
@@ -75,6 +85,7 @@ struct SettingsStore {
         static let hardwareDecoding = "hardware_decoding"
         static let cacheBudgetGib = "cache_budget_gib"
         static let librarySort = "library_sort"
+        static let libraryFilter = "library_filter"
         static let libraryGrouped = "library_grouped"
         static let metadataOfferDismissed = "metadata_offer_dismissed"
     }

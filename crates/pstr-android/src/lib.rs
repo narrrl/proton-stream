@@ -4,7 +4,7 @@
 //! than the catalog's internal Rust types. Kotlin owns lifecycle and drawing;
 //! Rust remains the sole owner of Proton sessions, SQLite and decrypted bytes.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 use pstr_core::account::{DriveEntry, PendingSignIn, PlaceKind, SignIn};
 use pstr_core::appearance::{Accent, Appearance, Flavor, Palette};
-use pstr_core::browse::Sort;
+use pstr_core::browse::{Filter, Sort};
 use pstr_core::catalog::{Catalog, OfflineFile, TitleTrackPrefs, WatchState, build_rows};
 use pstr_core::chapters::{Chapter, ChapterRole};
 use pstr_core::config::AppDirs;
@@ -315,6 +315,17 @@ pub enum TitleNamesChoice {
     Library,
     English,
     Romaji,
+}
+
+/// The shared `pstr_core::browse::Filter`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum LibraryFilter {
+    All,
+    Series,
+    Films,
+    Watching,
+    Unwatched,
+    Downloaded,
 }
 
 /// The shared `pstr_core::browse::Sort`.
@@ -1460,19 +1471,31 @@ impl AndroidEngine {
         })
     }
 
-    /// The library grid for `search`, in `sort` order, each franchise folded
-    /// into one tile when `grouped` — and the shelves above it. Keys into
-    /// [`AndroidEngine::library`]'s titles, so the records cross the bridge
-    /// once.
+    /// The library grid for `search`, narrowed by `filter`, in `sort` order,
+    /// each franchise folded into one tile when `grouped` — and the shelves
+    /// above it. Keys into [`AndroidEngine::library`]'s titles, so the records
+    /// cross the bridge once.
     pub fn arrangement(
         &self,
         search: Option<String>,
+        filter: LibraryFilter,
         sort: LibrarySort,
         grouped: bool,
     ) -> Result<ArrangementRecord, BridgeError> {
         let query = search.unwrap_or_default();
+        let filter = filter_choice(filter);
         self.with_library(|cached| {
-            let titles = pstr_core::browse::search(&cached.library, &cached.metadata, &query);
+            let titles: Vec<&Title> =
+                pstr_core::browse::search(&cached.library, &cached.metadata, &query)
+                    .into_iter()
+                    .filter(|title| {
+                        filter.admits(title, |node| {
+                            cached
+                                .offline
+                                .contains(&(node.share_id.clone(), node.link_id.clone()))
+                        })
+                    })
+                    .collect();
             let tiles = pstr_core::browse::arrange(
                 &titles,
                 pstr_core::browse::Order {
@@ -1483,7 +1506,9 @@ impl AndroidEngine {
                     added: &cached.added,
                 },
             );
-            let shelves = if query.trim().is_empty() {
+            // Shelves are the whole library's, and only when it is shown
+            // whole.
+            let shelves = if query.trim().is_empty() && filter == Filter::All {
                 pstr_core::shelves::pick(&cached.library.titles, &cached.metadata, SHELVES)
                     .into_iter()
                     .map(|shelf| ShelfRecord {
@@ -2246,6 +2271,7 @@ impl AndroidEngine {
             metadata,
             added,
             titles,
+            offline: offline.into_keys().collect(),
         };
         let answer = read(&cached);
         *self.library_cache.lock() = Some(cached);
@@ -3092,6 +3118,8 @@ struct CachedLibrary {
     /// When each title last gained a file.
     added: HashMap<String, i64>,
     titles: Vec<TitleRecord>,
+    /// The files kept on this device, by share and link id.
+    offline: HashSet<(String, String)>,
 }
 
 /// How many provider lookups may be in flight at once.
@@ -3150,6 +3178,17 @@ fn appearance_record(appearance: Appearance) -> AppearanceRecord {
             TitleNames::English => TitleNamesChoice::English,
             TitleNames::Romaji => TitleNamesChoice::Romaji,
         },
+    }
+}
+
+fn filter_choice(filter: LibraryFilter) -> Filter {
+    match filter {
+        LibraryFilter::All => Filter::All,
+        LibraryFilter::Series => Filter::Series,
+        LibraryFilter::Films => Filter::Films,
+        LibraryFilter::Watching => Filter::Watching,
+        LibraryFilter::Unwatched => Filter::Unwatched,
+        LibraryFilter::Downloaded => Filter::Downloaded,
     }
 }
 
@@ -3904,7 +3943,12 @@ mod tests {
         }
 
         let arranged = engine
-            .arrangement(None, super::LibrarySort::Name, true)
+            .arrangement(
+                None,
+                super::LibraryFilter::All,
+                super::LibrarySort::Name,
+                true,
+            )
             .expect("arrange");
         assert_eq!(arranged.tiles.len(), 1);
         assert_eq!(arranged.tiles[0].key, "sousou no frieren");

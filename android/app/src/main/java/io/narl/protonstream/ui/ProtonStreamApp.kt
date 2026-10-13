@@ -233,6 +233,7 @@ fun ProtonStreamApp(
                                     addingShare = true
                                 },
                                 onOpenSettings = { destination = Destination.Settings },
+                                onFilter = model::filter,
                                 )
                         }
                         val titlePane = @Composable { selected: TitleRecord ->

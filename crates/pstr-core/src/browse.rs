@@ -7,7 +7,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::library::{Library, Title, sort_name};
+use crate::catalog::CatalogNode;
+use crate::library::{Library, Title, TitleKind, sort_name};
 use crate::metadata::{MetadataRecord, TitleNames};
 
 /// What order a grid is in.
@@ -47,6 +48,60 @@ impl Sort {
             Self::Release => "Newest",
             Self::Rating => "Highest rated",
             Self::Popularity => "Most popular",
+        }
+    }
+}
+
+/// Which titles a grid shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Filter {
+    #[default]
+    All,
+    Series,
+    Films,
+    /// Started and not finished.
+    Watching,
+    /// Not started.
+    Unwatched,
+    /// With at least one episode kept on this device.
+    Downloaded,
+}
+
+impl Filter {
+    pub const ALL: [Self; 6] = [
+        Self::All,
+        Self::Series,
+        Self::Films,
+        Self::Watching,
+        Self::Unwatched,
+        Self::Downloaded,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Series => "Series",
+            Self::Films => "Films",
+            Self::Watching => "Watching",
+            Self::Unwatched => "Not started",
+            Self::Downloaded => "Downloaded",
+        }
+    }
+
+    /// Whether the grid shows `title`. `offline` says whether a file is kept
+    /// on this device, which only the front end knows.
+    pub fn admits(self, title: &Title, offline: impl Fn(&CatalogNode) -> bool) -> bool {
+        let watched = title.watched_count();
+        match self {
+            Self::All => true,
+            Self::Series => title.kind == TitleKind::Series,
+            Self::Films => title.kind == TitleKind::Film,
+            Self::Watching => {
+                title.resume().is_some() || (watched > 0 && watched < title.episode_count())
+            }
+            Self::Unwatched => watched == 0 && title.resume().is_none(),
+            Self::Downloaded => title.episodes().any(|episode| offline(&episode.node)),
         }
     }
 }
@@ -392,5 +447,45 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].key, "sousou no frieren");
         assert_eq!(search(&library, &metadata, "").len(), 3);
+    }
+
+    #[test]
+    fn the_filters_split_the_library_by_kind_and_progress() {
+        let film = title("f", "Film", TitleKind::Film);
+        let series = title("s", "Series", TitleKind::Series);
+        let none = |_: &CatalogNode| false;
+        assert!(Filter::All.admits(&film, none) && Filter::All.admits(&series, none));
+        assert!(Filter::Films.admits(&film, none) && !Filter::Films.admits(&series, none));
+        assert!(Filter::Series.admits(&series, none) && !Filter::Series.admits(&film, none));
+        // Nothing watched of either: not started, and not being watched.
+        assert!(Filter::Unwatched.admits(&film, none));
+        assert!(!Filter::Watching.admits(&film, none));
+    }
+
+    #[test]
+    fn the_downloaded_filter_admits_a_title_with_any_episode_kept_offline() {
+        let node = |link: &str, episode| CatalogNode {
+            share_id: "s".into(),
+            link_id: link.into(),
+            volume_id: "v".into(),
+            parent_link_id: None,
+            name: format!("Show - S01E0{episode}.mkv"),
+            is_folder: false,
+            media_type: Some("video/x-matroska".into()),
+            size: Some(1),
+            active_revision_id: Some("r".into()),
+            parsed: crate::naming::ParsedName {
+                title: "Show".into(),
+                season: Some(1),
+                episode: Some(episode),
+                year: None,
+                episode_title: None,
+            },
+        };
+        let library = Library::build(vec![node("a", 1), node("b", 2)], &HashMap::new());
+        let show = &library.titles[0];
+
+        assert!(Filter::Downloaded.admits(show, |node| node.link_id == "b"));
+        assert!(!Filter::Downloaded.admits(show, |_| false));
     }
 }

@@ -427,37 +427,7 @@ impl Default for LibraryView {
     }
 }
 
-/// Which titles the grid shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Filter {
-    #[default]
-    All,
-    Series,
-    Films,
-    /// Started and not finished.
-    Watching,
-    /// Not started.
-    Unwatched,
-}
-
-impl Filter {
-    fn admits(self, title: &pstr_core::library::Title) -> bool {
-        use pstr_core::library::TitleKind;
-        let watched = title.watched_count();
-        match self {
-            Self::All => true,
-            Self::Series => title.kind == TitleKind::Series,
-            Self::Films => title.kind == TitleKind::Film,
-            Self::Watching => {
-                title.resume().is_some() || (watched > 0 && watched < title.episode_count())
-            }
-            Self::Unwatched => watched == 0 && title.resume().is_none(),
-        }
-    }
-}
-
-pub use pstr_core::browse::Sort;
+pub use pstr_core::browse::{Filter, Sort};
 
 /// What the library view is built from, besides the library itself.
 pub struct ViewInputs<'a> {
@@ -466,6 +436,8 @@ pub struct ViewInputs<'a> {
     pub names: TitleNames,
     /// When each title last gained a file, by key.
     pub added: &'a HashMap<String, i64>,
+    /// The files kept on this computer, for the Downloaded filter.
+    pub offline: &'a std::collections::HashSet<DownloadKey>,
 }
 
 /// How many shelves the library shows above the grid.
@@ -515,7 +487,14 @@ impl LibraryView {
 
         let titles: Vec<&Title> = pstr_core::browse::search(library, metadata, inputs.query)
             .into_iter()
-            .filter(|title| self.filter.admits(title))
+            .filter(|title| {
+                self.filter.admits(title, |node| {
+                    inputs.offline.contains(&DownloadKey {
+                        share_id: node.share_id.clone(),
+                        link_id: node.link_id.clone(),
+                    })
+                })
+            })
             .collect();
         let tiles = pstr_core::browse::arrange(
             &titles,
@@ -1114,7 +1093,11 @@ impl App {
                         *row = *item;
                     }
                 }
-                Event::OfflineFiles(files) => self.offline_files = files,
+                Event::OfflineFiles(files) => {
+                    // The Downloaded filter is drawn from these.
+                    self.view.stale |= self.view.filter == Filter::Downloaded;
+                    self.offline_files = files;
+                }
                 Event::Account(status) => {
                     if let AccountStatus::SignedIn(username) = &status
                         && self.account.busy
@@ -2284,6 +2267,7 @@ impl eframe::App for App {
                     metadata: &self.metadata,
                     names: self.engine.appearance().names,
                     added: &self.added,
+                    offline: &self.offline_files,
                 },
             );
 
@@ -2977,27 +2961,6 @@ mod tests {
                 manual: false,
             },
         )
-    }
-
-    #[test]
-    fn the_filters_split_the_library_by_kind() {
-        use pstr_core::library::{Title, TitleKind};
-        let title = |kind| Title {
-            key: "k".into(),
-            name: "n".into(),
-            year: None,
-            kind,
-            seasons: Vec::new(),
-            share_ids: Vec::new(),
-        };
-        let film = title(TitleKind::Film);
-        let series = title(TitleKind::Series);
-        assert!(Filter::All.admits(&film) && Filter::All.admits(&series));
-        assert!(Filter::Films.admits(&film) && !Filter::Films.admits(&series));
-        assert!(Filter::Series.admits(&series) && !Filter::Series.admits(&film));
-        // Nothing watched of either: not started, and not being watched.
-        assert!(Filter::Unwatched.admits(&film));
-        assert!(!Filter::Watching.admits(&film));
     }
 
     #[test]
