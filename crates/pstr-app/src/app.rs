@@ -404,6 +404,9 @@ pub struct LibraryView {
     pub resumable: Vec<usize>,
     /// The library or what is known about it changed under the lists.
     stale: bool,
+    /// Only watch state changed: the shelves and franchises still stand,
+    /// and the grid does unless it is filtered or sorted by watching.
+    progressed: bool,
 }
 
 impl LibraryView {
@@ -435,6 +438,7 @@ impl Default for LibraryView {
             history: Vec::new(),
             resumable: Vec::new(),
             stale: false,
+            progressed: false,
         }
     }
 }
@@ -460,7 +464,19 @@ impl LibraryView {
         use pstr_core::library::Title;
 
         let built_with = (self.filter, self.sort, self.grouped, inputs.names);
-        if !self.stale && self.query == inputs.query && self.built_with == Some(built_with) {
+        let unchanged = self.query == inputs.query && self.built_with == Some(built_with);
+        // A playing episode saves its position every few seconds. Rebuilding
+        // franchises, shelves and the arranged grid for each save is most of
+        // a frame on a big library, for lists that did not move.
+        let watch_shapes_grid = matches!(self.filter, Filter::Watching | Filter::Unwatched)
+            || self.sort == Sort::Recent;
+        if !self.stale && self.progressed && unchanged && !watch_shapes_grid {
+            self.history = ui::history::entries(library);
+            self.resumable = Self::resumable(library);
+            self.progressed = false;
+            return;
+        }
+        if !self.stale && !self.progressed && unchanged {
             return;
         }
         let metadata = inputs.metadata;
@@ -537,16 +553,27 @@ impl LibraryView {
             .collect();
         self.matches = entries.into_iter().map(|(lead, _)| lead).collect();
         self.built_with = Some(built_with);
-        if self.stale {
+        if self.stale || self.progressed {
             self.history = ui::history::entries(library);
-            self.resumable = library
-                .continue_watching()
-                .into_iter()
-                .filter_map(index_of)
-                .collect();
+            self.resumable = Self::resumable(library);
         }
         self.query = inputs.query.to_owned();
         self.stale = false;
+        self.progressed = false;
+    }
+
+    /// The "Continue watching" shelf, as indices into the library.
+    fn resumable(library: &Library) -> Vec<usize> {
+        library
+            .continue_watching()
+            .into_iter()
+            .filter_map(|title| {
+                library
+                    .titles
+                    .iter()
+                    .position(|candidate| std::ptr::eq(candidate, title))
+            })
+            .collect()
     }
 }
 
@@ -1084,7 +1111,7 @@ impl App {
                     state,
                 } => {
                     if self.library.set_watch(&share_id, &link_id, state) {
-                        self.view.stale = true;
+                        self.view.progressed = true;
                     }
                 }
                 Event::Error(text) => {
