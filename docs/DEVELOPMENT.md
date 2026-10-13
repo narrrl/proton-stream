@@ -15,10 +15,7 @@
 
 ## Build order from here
 
-1. **Sidecar subtitle files** — see the "not done" note at the end of this
-   section. The work is in `pstr-core`: crawl them, and pair them to a video by
-   name.
-2. Packaging is in place (`packaging/README.md`); what is left there is running
+1. Packaging is in place (`packaging/README.md`); what is left there is running
    the macOS half on a real host, and a release workflow that drives every
    platform.
 
@@ -151,12 +148,20 @@ Note the glyph trap: egui's bundled fonts cover the transport icons
 (`⏮ ⏭ ⏸ ▶ 🔊 🔇 ⛶`) and *not* `← 💬 ▣`, which draw as an empty box. Anything new
 on a button wants checking on screen before it ships.
 
-Not done: **sidecar subtitle files**. A `.srt`/`.ass` sitting beside the video in
-the share is invisible to all of this — the crawl stores video files only, so
-there is nothing to offer in the menu. The player side is nearly free once the
-catalog has them (`sub-add pstr://<token>` through the same registry, since mpv
-reads an external subtitle through the same protocol); the work is in
-`pstr-core`: crawl them, and pair them to a video by name.
+**Sidecar subtitle files.** A `.srt`, `.ass`, `.ssa` or `.vtt` beside a video
+is paired with it by name at crawl time (`catalog::build_sidecars`): the video's
+name followed by a dot or nothing (`S01E01.en.forced.ass`), the same inside a
+`Subs` folder beside the videos, the RARBG layout `Subs/<video>/2_English.srt`,
+and failing those the only video in the folder. The words past the video's
+name give the language and the picker's title. They are stored in `sidecars`
+(schema v12), rebuilt by every crawl like `nodes`.
+
+Each client opens them while mpv opens the video and adds them with `sub-add
+pstr://<token>` through the same registry once mpv reports the file loaded. One
+is turned on only when subtitles are on and the file has none of its own
+playing, and only in the preferred language (`catalog::preferred_sidecar`); the
+rest wait in the subtitle menu. A downloaded episode played without a session
+goes without them, and they are not downloaded with it.
 
 ## Design decisions already taken
 

@@ -24,9 +24,9 @@ layer and the player are done and verified against a real share, and the app has
 a library wall, a page per title with seasons and episodes,
 resume-where-you-left-off, an overlay with a chapter-marked seek bar, a skip
 button for openings and endings, next/previous episode with an "up next"
-countdown, optional metadata, themes and share management. What is left is mostly sidecar subtitle files
-(`.srt`/`.ass` beside the video are invisible to the crawl today) and running the
-macOS packaging on a real Mac. See `docs/DEVELOPMENT.md`.
+countdown, subtitle files beside the video, optional metadata, themes and share
+management. What is left is mostly running the macOS packaging on a real Mac. See
+`docs/DEVELOPMENT.md`.
 
 A native Android 12+ client is under `android/`, sharing the Rust catalog and
 streaming implementation through UniFFI. It features a modern Material 3 interface,
