@@ -20,8 +20,7 @@ and B41 states which of its items are done.
 
 Individually small, grouped so they are not lost. The items marked **Landed**
 came with Phases 4 and 5; the rest are still open, which is why this entry is.
-What remains is one item — the asynchronous track-list read-back — plus the
-`SettingsStore` construction on the main thread.
+What remains is one item: the asynchronous track-list read-back.
 
 - `NativeMpvHost.kt:131-135` reads the track list back immediately after an
   asynchronous property set, so the selection tick lags by up to a second;
@@ -39,8 +38,10 @@ What remains is one item — the asynchronous track-list read-back — plus the
   unreachable. The constructor is private behind `NativeMpvHost.createOrNull()`,
   the service holds a nullable host, and the binder hands back a nullable one —
   which is what `PlayerScreen` was already written for.
-- `PlaybackService.kt:43` constructs `SettingsStore` on the main thread inside a
-  hot callback; the first SharedPreferences access is disk I/O.
+- **Landed.** `PlaybackService.kt:43` constructs `SettingsStore` on the main
+  thread inside a hot callback; the first SharedPreferences access is disk I/O.
+  `ProtonStreamApplication` now loads the file on a background thread at
+  startup, so every later read is from memory.
 - **Landed.** `MainActivity` set `bound` only in `onServiceConnected`, so an
   activity destroyed with a bind still pending never unbound. It is now set from
   the `bindService` return value.
