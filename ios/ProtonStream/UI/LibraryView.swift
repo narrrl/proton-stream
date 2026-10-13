@@ -145,6 +145,10 @@ struct LibraryView: View {
             LibrarySkeleton()
         } else if model.titles.isEmpty && !model.query.trimmingCharacters(in: .whitespaces).isEmpty {
             EmptyState("Nothing matches", "No title in the library is called “\(model.query.trimmingCharacters(in: .whitespaces))”.")
+        } else if model.titles.isEmpty, let activity = model.activity {
+            // A share just added: say it is being looked through, rather than
+            // offer to add the one that is already filling the page.
+            EmptyState("Looking through the share", "\(activity) Its titles appear here once it has been listed.")
         } else if model.titles.isEmpty {
             ScrollView {
                 EmptyState(

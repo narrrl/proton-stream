@@ -144,6 +144,8 @@ pub enum Action {
     PasteShare(String),
     /// Go to the add form, caret in the link field.
     OpenShareForm,
+    /// Stop offering posters and synopses on the library page.
+    DismissMetadataOffer,
     /// Store a new link, and password, for a share already in the library.
     RepairShare {
         id: String,
@@ -813,12 +815,25 @@ impl App {
                 Event::ShareAdded(name) => {
                     self.form = ShareForm::default();
                     self.note(ctx, format!("added {name}"), false);
+                    // The first share is the library: watch it fill rather than
+                    // stay on a form that has done its job. A second one is
+                    // more likely one of several being added in a row.
+                    if self.library.is_empty() && self.page == Page::Shares {
+                        self.page = Page::Library;
+                    }
                 }
-                Event::ShareRejected(error) => {
+                Event::ShareRejected {
+                    error,
+                    needs_password,
+                } => {
                     // Nothing was crawled, so nothing will say it finished.
                     self.crawling = false;
                     self.form.sending = false;
                     self.form.error = Some(error);
+                    // The field the refusal asks for, opened and ready.
+                    if needs_password {
+                        self.form.has_password = true;
+                    }
                 }
                 Event::Connected { failures } => {
                     self.connecting = false;
@@ -1645,6 +1660,11 @@ impl App {
                 self.page = Page::Shares;
                 self.form.focus = true;
             }
+            Action::DismissMetadataOffer => {
+                let mut prefs = self.engine.desktop_prefs();
+                prefs.metadata_offer_dismissed = true;
+                self.engine.set_desktop_prefs(prefs);
+            }
             Action::AddShare {
                 name,
                 url,
@@ -2221,6 +2241,7 @@ impl eframe::App for App {
                 },
             );
 
+            let crawl = self.crawling.then(|| crawl_label(&self.crawl_progress));
             let App {
                 engine,
                 page,
@@ -2320,6 +2341,9 @@ impl eframe::App for App {
                                 loaded: *loaded,
                                 search,
                                 tiles: engine.appearance().tiles,
+                                crawl: crawl.as_deref(),
+                                offer_metadata: !settings.enabled
+                                    && !engine.desktop_prefs().metadata_offer_dismissed,
                             },
                             &mut actions,
                         ),

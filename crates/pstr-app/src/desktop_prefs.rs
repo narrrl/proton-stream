@@ -25,6 +25,8 @@ pub struct DesktopPrefs {
     pub filter: crate::app::Filter,
     pub sort: pstr_core::browse::Sort,
     pub grouped: bool,
+    /// The library's offer of posters and synopses was turned down.
+    pub metadata_offer_dismissed: bool,
 }
 
 impl Default for DesktopPrefs {
@@ -37,6 +39,7 @@ impl Default for DesktopPrefs {
             // On: a share holding a series and its three films is four tiles
             // of the same picture otherwise.
             grouped: true,
+            metadata_offer_dismissed: false,
         }
     }
 }

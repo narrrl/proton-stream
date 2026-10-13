@@ -279,7 +279,14 @@ fun ProtonStreamApp(
                     }
                     Destination.Shares -> SharesScreen(
                         state.shares,
-                        model::addShare,
+                        { name, url, password ->
+                            // The first share is the library: watch it fill
+                            // rather than stay on a form that has done its job.
+                            val first = state.titles.isEmpty()
+                            model.addShare(name, url, password).also { refusal ->
+                                if (refusal == null && first) destination = Destination.Library
+                            }
+                        },
                         model::repairShare,
                         model::refreshShare,
                         model::removeShare,

@@ -443,7 +443,22 @@ impl ShareStore {
             ));
         }
         let custom_password = custom_password.filter(|password| !password.is_empty());
-        let client = open_link(url, custom_password).await?;
+        let client = match open_link(url, custom_password).await {
+            Ok(client) => client,
+            // Asked only after a refusal: the link's public flags cost a round
+            // trip, and most links open without one.
+            Err(error) if custom_password.is_none() => {
+                let protected = ProtonDrivePublicLinkClient::info(client_configuration(), url)
+                    .await
+                    .is_ok_and(|info| info.is_custom_password_protected);
+                return Err(if protected {
+                    Error::PasswordNeeded
+                } else {
+                    error
+                });
+            }
+            Err(error) => return Err(error),
+        };
         // A name is the viewer's to give, not theirs to invent before they
         // can see anything: without one, the shared folder's own name.
         let name = match name.trim() {

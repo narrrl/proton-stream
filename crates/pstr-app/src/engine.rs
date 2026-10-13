@@ -177,7 +177,11 @@ pub enum Event {
     /// The share the form asked for is stored; its crawl is starting.
     ShareAdded(String),
     /// The share the form asked for was refused, with why. Nothing was crawled.
-    ShareRejected(String),
+    ShareRejected {
+        error: String,
+        /// The link has a password of its own and none was given.
+        needs_password: bool,
+    },
     /// Shares opened; playback is possible from here.
     Connected {
         /// Shares that did not open, with why.
@@ -303,6 +307,16 @@ pub enum Event {
     },
     /// The Drive browser's last request failed.
     BrowseFailed(String),
+}
+
+impl Event {
+    /// The add form's refusal of `error`.
+    fn rejected(error: &pstr_core::Error) -> Self {
+        Self::ShareRejected {
+            error: error.to_string(),
+            needs_password: matches!(error, pstr_core::Error::PasswordNeeded),
+        }
+    }
 }
 
 /// Where the Proton account stands.
@@ -671,7 +685,7 @@ impl Engine {
                 .await
             {
                 Ok((share, _)) => share,
-                Err(error) => return engine.emit(Event::ShareRejected(error.to_string())),
+                Err(error) => return engine.emit(Event::rejected(&error)),
             };
             engine.emit(Event::ShareAdded(share.name.clone()));
             engine.load_shares();
@@ -720,7 +734,7 @@ impl Engine {
             };
             let share = match engine.store.add_folder(&name, folder) {
                 Ok(share) => share,
-                Err(error) => return engine.emit(Event::ShareRejected(error.to_string())),
+                Err(error) => return engine.emit(Event::rejected(&error)),
             };
             engine.emit(Event::ShareAdded(share.name.clone()));
             engine.load_shares();

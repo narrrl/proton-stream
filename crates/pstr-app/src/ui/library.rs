@@ -19,6 +19,11 @@ pub struct Shelves<'a> {
     pub search: &'a str,
     /// The grid's shape.
     pub tiles: Tiles,
+    /// What a crawl in progress has found, if one is.
+    pub crawl: Option<&'a str>,
+    /// Whether to offer posters and synopses: they are off, and the offer has
+    /// not been turned down.
+    pub offer_metadata: bool,
 }
 
 pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions: &mut Vec<Action>) {
@@ -28,12 +33,14 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
         loaded,
         search,
         tiles,
+        crawl,
+        offer_metadata,
     } = shelves;
     if !loaded {
         return placeholder(ui);
     }
     if library.is_empty() {
-        return empty_state(ui, actions);
+        return empty_state(ui, crawl, actions);
     }
 
     let pick = |indices: &[usize]| -> Vec<&Title> {
@@ -48,6 +55,10 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            if !searching && offer_metadata {
+                metadata_offer(ui, actions);
+                ui.add_space(theme::space::XL);
+            }
             if !searching {
                 if let Some(title) = featured(library, view, art.metadata, today()) {
                     hero(ui, art, title, actions);
@@ -635,9 +646,54 @@ fn placeholder(ui: &mut egui::Ui) {
     }
 }
 
-fn empty_state(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+/// Posters and synopses, offered once there is a library to put them on and
+/// never turned on unasked: switching them on sends title names out.
+fn metadata_offer(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    egui::Frame::new()
+        .fill(theme::card())
+        .corner_radius(egui::CornerRadius::same(theme::radius::MD))
+        .inner_margin(egui::Margin::symmetric(14, 12))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("Add posters and synopses?").strong());
+                    ui.label(ui::muted(
+                        "Turning it on in Settings sends the titles in your library — not your \
+                         files, and nothing about what you have watched — to AniList or TMDB.",
+                    ));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Not now").clicked() {
+                        actions.push(Action::DismissMetadataOffer);
+                    }
+                    if ui::accent_button(ui, "Open settings").clicked() {
+                        actions.push(Action::Goto(Page::Settings));
+                    }
+                });
+            });
+        });
+}
+
+fn empty_state(ui: &mut egui::Ui, crawl: Option<&str>, actions: &mut Vec<Action>) {
     ui.vertical_centered(|ui| {
         ui.add_space(120.0);
+        // A share just added: say it is being looked through, rather than
+        // offer to add the one that is already filling the page.
+        if let Some(crawl) = crawl {
+            ui.add(egui::Spinner::new().size(28.0));
+            ui.add_space(theme::space::L);
+            ui.label(
+                theme::Role::Title
+                    .rich("Looking through the share")
+                    .strong(),
+            );
+            ui.add_space(theme::space::S);
+            ui.label(ui::muted(format!(
+                "Its titles appear here once it has been listed ({crawl})."
+            )));
+            return;
+        }
         ui.label(
             theme::Role::Title
                 .rich("Nothing in the library yet")

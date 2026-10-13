@@ -188,6 +188,12 @@ internal fun LibraryScreen(
                     "Nothing matches",
                     "No title in the library is called “${state.query.trim()}”.",
                 )
+                // A share just added: say it is being looked through, rather
+                // than offer to add the one that is already filling the page.
+                state.titles.isEmpty() && state.activity != null -> EmptyState(
+                    "Looking through the share",
+                    "${state.activity} Its titles appear here once it has been listed.",
+                )
                 state.titles.isEmpty() -> EmptyState(
                     "Your library is empty",
                     "Add a Proton Drive share link, and everything playable behind it shows up here.",

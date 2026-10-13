@@ -46,6 +46,11 @@ pub enum Error {
     /// mailbox password.
     #[error("{0}")]
     SignIn(String),
+
+    /// A public link with a password of its own was opened without one. The
+    /// handshake refusal says nothing a viewer can act on; this does.
+    #[error("This link has a password of its own. Enter it to add the link.")]
+    PasswordNeeded,
 }
 
 impl Error {

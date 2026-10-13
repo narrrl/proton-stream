@@ -6,6 +6,7 @@ struct SharesView: View {
     @Environment(\.scheme) private var scheme
     /// A link opened in this app: the Add form opens with it filled in.
     @Binding var incomingLink: String?
+    var onFirstShareAdded: () -> Void = {}
 
     @State private var showAdd = false
     @State private var signingIn = false
@@ -57,7 +58,10 @@ struct SharesView: View {
         }
         .sheet(isPresented: Binding(get: { showAdd || incomingLink != nil }, set: { if !$0 { showAdd = false; incomingLink = nil } })) {
             AddShareSheet(initialUrl: incomingLink ?? "") { name, url, password in
-                await model.addShare(name: name, url: url, password: password)
+                let first = model.titles.isEmpty
+                let refusal = await model.addShare(name: name, url: url, password: password)
+                if refusal == nil && first { onFirstShareAdded() }
+                return refusal
             }
         }
         .sheet(isPresented: Binding(

@@ -181,7 +181,9 @@ struct RootView: View {
                 selectedTitleKey = title.key
             })
         case .shares:
-            SharesView(incomingLink: $incomingLink)
+            // The first share is the library: watch it fill rather than stay
+            // on a form that has done its job.
+            SharesView(incomingLink: $incomingLink, onFirstShareAdded: { select(.library) })
         case .downloads:
             DownloadsView()
         case .settings:
