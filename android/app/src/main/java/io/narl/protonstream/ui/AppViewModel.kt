@@ -811,24 +811,8 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
      * at its duration where one is known, so the progress bar agrees with the
      * tick.
      */
-    fun setWatched(episode: EpisodeRecord, watched: Boolean) {
-        viewModelScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val engine = NativeRuntime.engine()
-                    val duration = engine.watchState(episode.shareId, episode.linkId)?.durationSecs
-                    engine.saveWatchState(
-                        episode.shareId,
-                        episode.linkId,
-                        if (watched) duration ?: 0.0 else 0.0,
-                        duration,
-                        watched,
-                    )
-                }
-            }.onFailure(::reportError)
-            reload()
-        }
-    }
+    /** One episode's tick, with the same Undo a season's has. */
+    fun setWatched(episode: EpisodeRecord, watched: Boolean) = markEpisodes(listOf(episode), watched, episode.label)
 
     fun removeAllOffline() {
         viewModelScope.launch {

@@ -737,25 +737,9 @@ final class AppModel {
     /// Unwatching rewinds, matching the desktop client. Marking one seen puts
     /// the position at its duration where one is known, so the progress bar
     /// agrees with the tick.
+    /// One episode's tick, with the same Undo a season's has.
     func setWatched(_ episode: EpisodeRecord, _ watched: Bool) {
-        showWatched([episode], watched)
-        Task {
-            do {
-                try await run { engine in
-                    let duration = try engine.watchState(shareId: episode.shareId, linkId: episode.linkId)?.durationSecs
-                    try engine.saveWatchState(
-                        shareId: episode.shareId,
-                        linkId: episode.linkId,
-                        positionSecs: watched ? duration ?? 0 : 0,
-                        durationSecs: duration,
-                        watched: watched
-                    )
-                }
-            } catch {
-                reportError(error)
-            }
-            reload()
-        }
+        markEpisodes([episode], watched, episode.label)
     }
 
     /// Draw a watched mark the moment it is tapped, before the bridge has

@@ -72,7 +72,11 @@ struct TitleView: View {
                                 position: position,
                                 download: downloads.first { $0.shareId == episode.shareId && $0.linkId == episode.linkId },
                                 onPlay: { onPlay(playlist, playlist.firstIndex { $0.linkId == episode.linkId } ?? 0) },
-                                onSetWatched: { model.setWatched(episode, $0) }
+                                onSetWatched: { model.setWatched(episode, $0) },
+                                onWatchedUpTo: {
+                                    let upTo = playlist.firstIndex { $0.linkId == episode.linkId } ?? 0
+                                    model.markEpisodes(Array(playlist.prefix(upTo + 1)), true, "\(title.displayName) up to \(episode.label)")
+                                }
                             )
                             .padding(.horizontal, side)
                         }
@@ -393,7 +397,11 @@ private struct EpisodeRow: View {
     let download: RetainedDownload?
     let onPlay: () -> Void
     let onSetWatched: (Bool) -> Void
+    /// Everything up to and including this one, for someone joining a show
+    /// partway.
+    let onWatchedUpTo: () -> Void
     @Environment(\.scheme) private var scheme
+    @State private var holding = false
 
     private var subline: String {
         let size: String? = episode.size.map { formatBytes($0) }
@@ -460,7 +468,11 @@ private struct EpisodeRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
-        .tapAndHold(onPlay)
+        .tapAndHold(onPlay) { holding = true }
+        .confirmationDialog(episode.heading(position), isPresented: $holding) {
+            Button("Mark watched up to here", action: onWatchedUpTo)
+        }
+        .accessibilityAction(named: "Mark watched up to here", onWatchedUpTo)
     }
 }
 

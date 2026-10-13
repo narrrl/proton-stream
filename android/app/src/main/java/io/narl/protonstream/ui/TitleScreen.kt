@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlin.coroutines.cancellation.CancellationException
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +31,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -391,6 +394,14 @@ internal fun TitleScreen(
                             onPause = { DownloadCoordinator.pause(context, it) },
                             onResume = { DownloadCoordinator.resume(context, it) },
                             onSetWatched = { onSetWatched(episode, it) },
+                            onWatchedUpTo = {
+                                val upTo = playlist.indexOfFirst { it.linkId == episode.linkId }
+                                onMarkEpisodes(
+                                    playlist.take(upTo + 1),
+                                    true,
+                                    "${title.displayName} up to ${episode.label}",
+                                )
+                            },
                         )
                     }
                 }
@@ -538,16 +549,35 @@ private fun EpisodeRow(
     onPause: (RetainedDownload) -> Unit,
     onResume: (RetainedDownload) -> Unit,
     onSetWatched: (Boolean) -> Unit,
+    onWatchedUpTo: () -> Unit = {},
 ) {
+    // A long press, for someone joining a show partway: everything before
+    // this one ticked at once rather than one by one.
+    var menu by remember { mutableStateOf(false) }
     val running = download?.status == RetainedDownload.STATUS_RUNNING ||
         download?.status == RetainedDownload.STATUS_QUEUED
     val heading = episode.heading(position)
     Column(
         Modifier
             .fillMaxWidth()
-            .clickable(enabled = playerReady, onClick = onPlay)
+            .combinedClickable(
+                enabled = playerReady,
+                onClick = onPlay,
+                onLongClick = { menu = true },
+                onLongClickLabel = "More for this episode",
+            )
             .padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text("Mark watched up to here") },
+                leadingIcon = { Icon(Icons.Default.DoneAll, contentDescription = null) },
+                onClick = {
+                    menu = false
+                    onWatchedUpTo()
+                },
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             // With metadata off the provider has no still, and Proton's own
             // thumbnail is a frame of this very episode. Where it was left sits
