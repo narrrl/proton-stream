@@ -104,6 +104,17 @@ final class MpvPlayer {
     /// Subtitle files handed over before their file loaded, and whether each
     /// is the one to turn on.
     @ObservationIgnored private var pendingSubtitles: [(SubtitleFileRecord, Bool)] = []
+    /// The drawable size mpv last built its output for; see `outputResized`.
+    @ObservationIgnored private var outputSize: CGSize = .zero
+    /// Off while the app is in the background, where a refit must not bring
+    /// the picture back.
+    @ObservationIgnored private var videoEnabled = true
+    @ObservationIgnored private var refitTask: Task<Void, Never>?
+    /// Every `vid` write, in the order they were made. Each one tears down or
+    /// builds mpv's video output and waits on its render thread, which the
+    /// main thread must not; and a refit's "auto" must never land after the
+    /// background's "no".
+    @ObservationIgnored private let videoQueue = DispatchQueue(label: "mpv-video")
 
     /// A core, or nil when libmpv would not start.
     static func create() -> MpvPlayer? {
@@ -291,7 +302,42 @@ final class MpvPlayer {
 
     /// Showing no picture while backgrounded keeps the audio playing: iOS
     /// refuses GPU work from a background app, and would end the process for it.
-    func setVideoEnabled(_ enabled: Bool) { setString("vid", enabled ? "auto" : "no") }
+    func setVideoEnabled(_ enabled: Bool) {
+        videoEnabled = enabled
+        setVideo([enabled ? "auto" : "no"])
+    }
+
+    /// The layer's drawable changed size: a rotation, a Split View resize.
+    ///
+    /// MPVKit's MoltenVK context reads `drawableSize` only when mpv builds its
+    /// output and never hears of a resize after that (mpvkit/MPVKit#3), so mpv
+    /// went on drawing a frame of the old size into the corner of the new
+    /// drawable. Turning the picture off and on builds the output again at the
+    /// new size — the same round trip the background makes, at the cost of a
+    /// refresh seek. Once the size has settled, so a Split View drag rebuilds
+    /// it once rather than per step.
+    func outputResized() {
+        refitTask?.cancel()
+        refitTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            let size = layer.drawableSize
+            // Only an output that exists and is the wrong size: nothing to fit
+            // while a file loads, and the background's "no" stays.
+            guard videoEnabled, videoWidth > 0, outputSize != .zero, size != outputSize,
+                  size.width > 1, size.height > 1 else { return }
+            outputSize = size
+            setVideo(["no", "auto"])
+        }
+    }
+
+    private func setVideo(_ values: [String]) {
+        guard let mpv else { return }
+        let core = UncheckedCore(mpv)
+        videoQueue.async {
+            for value in values { mpv_set_property_string(core.pointer, "vid", value) }
+        }
+    }
 
     /// Stop the open file. The stream behind it is released by mpv closing it,
     /// which this causes; releasing it from here would race that close.
@@ -314,6 +360,7 @@ final class MpvPlayer {
         case loaded
         case ended(Int64)
         case restarted
+        case reconfigured
         case log(prefix: String, text: String)
     }
 
@@ -345,6 +392,8 @@ final class MpvPlayer {
                 decoded = .loaded
             case MPV_EVENT_PLAYBACK_RESTART:
                 decoded = .restarted
+            case MPV_EVENT_VIDEO_RECONFIG:
+                decoded = .reconfigured
             case MPV_EVENT_END_FILE:
                 if let end = event.data?.assumingMemoryBound(to: mpv_event_end_file.self).pointee {
                     decoded = .ended(Int64(end.reason.rawValue))
@@ -427,6 +476,9 @@ final class MpvPlayer {
             }
         case .restarted:
             seeking = false
+        case .reconfigured:
+            // mpv has just read the drawable to size its output by.
+            outputSize = layer.drawableSize
         case let .ended(reason):
             // The outgoing file's END_FILE arrives after the next load began.
             if loading { return }

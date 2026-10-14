@@ -724,16 +724,18 @@ struct MpvView: UIViewRepresentable {
     let player: MpvPlayer
 
     func makeUIView(context _: Context) -> LayerView {
-        LayerView(layer: player.layer)
+        LayerView(player: player)
     }
 
     func updateUIView(_: LayerView, context _: Context) {}
 
     final class LayerView: UIView {
+        private let player: MpvPlayer
         private let video: CAMetalLayer
 
-        init(layer video: CAMetalLayer) {
-            self.video = video
+        init(player: MpvPlayer) {
+            self.player = player
+            video = player.layer
             super.init(frame: .zero)
             backgroundColor = .black
             video.removeFromSuperlayer()
@@ -759,6 +761,8 @@ struct MpvView: UIViewRepresentable {
             video.contentsScale = scale
             video.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
             CATransaction.commit()
+            // A new drawable is not enough on its own: mpv has to be told.
+            player.outputResized()
         }
 
         override func didMoveToWindow() {
