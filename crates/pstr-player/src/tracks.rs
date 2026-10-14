@@ -12,6 +12,7 @@
 //! an empty string.
 
 use libmpv2::Mpv;
+use pstr_core::subtitles::{SubtitleTrack, full_instead};
 
 /// What a track carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,6 +70,9 @@ pub struct Track {
     pub selected: bool,
     /// Whether the container marks it as the default choice.
     pub default: bool,
+    /// Whether the container marks it as forced: a subtitle track of the
+    /// on-screen text alone.
+    pub forced: bool,
     /// True for a track added from outside the file — a sidecar subtitle. None
     /// of ours are, yet.
     pub external: bool,
@@ -152,6 +156,24 @@ pub fn pick_track(
     )
 }
 
+/// The dialogue track to play in place of the subtitle track mpv chose, when
+/// mpv chose signs and songs; see [`pstr_core::subtitles::full_instead`].
+pub fn full_subtitles_instead(tracks: &[Track]) -> Option<i64> {
+    let subtitles: Vec<_> = tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Subtitle)
+        .map(|track| SubtitleTrack {
+            id: track.id,
+            language: track.language.clone(),
+            title: track.title.clone(),
+            default: track.default,
+            forced: track.forced,
+            selected: track.selected,
+        })
+        .collect();
+    full_instead(&subtitles)
+}
+
 fn read_one(mpv: &Mpv, index: i64) -> Option<Track> {
     let kind = TrackKind::from_mpv(&text(mpv, index, "type")?)?;
     let id: i64 = mpv
@@ -167,6 +189,7 @@ fn read_one(mpv: &Mpv, index: i64) -> Option<Track> {
         codec: text(mpv, index, "codec"),
         selected: flag(mpv, index, "selected"),
         default: flag(mpv, index, "default"),
+        forced: flag(mpv, index, "forced"),
         external: flag(mpv, index, "external"),
     })
 }
@@ -200,6 +223,7 @@ mod tests {
             codec: None,
             selected: false,
             default: false,
+            forced: false,
             external: false,
         }
     }

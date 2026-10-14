@@ -211,6 +211,9 @@ struct PlaybackState {
     /// episode one — which is the difference between resuming an episode where
     /// the viewer left it and resuming it where the *previous* one ended.
     int64_t generation = 0;
+    /// mpv has loaded this generation's file and made its own track pick,
+    /// which is the first moment the pick can be second-guessed.
+    bool loaded = false;
 };
 
 /// A subtitle file published for mpv, and what to call it.
@@ -428,6 +431,8 @@ class Player {
             char *lang_raw = nullptr;
             char *title_raw = nullptr;
             int selected = 0;
+            int is_default = 0;
+            int forced = 0;
             mpv_get_property(mpv_, (base + "id").c_str(), MPV_FORMAT_INT64, &id);
             mpv_get_property(mpv_, (base + "type").c_str(), MPV_FORMAT_STRING, &type_raw);
             MpvString type(type_raw);
@@ -436,10 +441,14 @@ class Player {
             mpv_get_property(mpv_, (base + "title").c_str(), MPV_FORMAT_STRING, &title_raw);
             MpvString title(title_raw);
             mpv_get_property(mpv_, (base + "selected").c_str(), MPV_FORMAT_FLAG, &selected);
+            mpv_get_property(mpv_, (base + "default").c_str(), MPV_FORMAT_FLAG, &is_default);
+            mpv_get_property(mpv_, (base + "forced").c_str(), MPV_FORMAT_FLAG, &forced);
             if (i) json += ',';
             json += "{\"id\":" + std::to_string(id) + ",\"type\":\"" + escape(type.get()) +
                     "\",\"language\":\"" + escape(lang.get()) + "\",\"title\":\"" +
-                    escape(title.get()) + "\",\"selected\":" + (selected ? "true" : "false") + "}";
+                    escape(title.get()) + "\",\"selected\":" + (selected ? "true" : "false") +
+                    ",\"default\":" + (is_default ? "true" : "false") +
+                    ",\"forced\":" + (forced ? "true" : "false") + "}";
         }
         return json + ']';
     }
@@ -602,6 +611,7 @@ class Player {
                     // Mid-load, this is the outgoing file finishing its load.
                     if (!state_.loading) {
                         loaded_generation_ = state_.generation;
+                        state_.loaded = true;
                         ready.swap(pending_subtitles_);
                     }
                 }
@@ -970,8 +980,9 @@ extern "C" JNIEXPORT jdoubleArray JNICALL Java_io_narl_protonstream_playback_Nat
                                   state.video_width, state.video_height,
                                   static_cast<jdouble>(state.end_reason),
                                   state.buffering ? 1.0 : 0.0, state.cache_percent,
-                                  state.seeking ? 1.0 : 0.0, state.cached_until};
-        constexpr jsize kFields = 14;
+                                  state.seeking ? 1.0 : 0.0, state.cached_until,
+                                  state.loaded ? 1.0 : 0.0};
+        constexpr jsize kFields = 15;
         jdoubleArray result = env->NewDoubleArray(kFields);
         if (!result) return static_cast<jdoubleArray>(nullptr);
         env->SetDoubleArrayRegion(result, 0, kFields, values);

@@ -33,6 +33,10 @@ struct MpvTrack: Identifiable, Hashable {
     let language: String
     let title: String
     let selected: Bool
+    /// The container marks it as the default choice.
+    var isDefault = false
+    /// The container marks it as forced: on-screen text only, by convention.
+    var forced = false
 
     var label: String {
         let parts = [language, title].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -91,6 +95,8 @@ final class MpvPlayer {
     /// Called when the duration or the pause state changes: what the lock
     /// screen shows, and whether the screen may sleep.
     @ObservationIgnored var onStateChanged: (() -> Void)?
+    /// Called once per file, when mpv has loaded it and picked its tracks.
+    @ObservationIgnored var onLoaded: (() -> Void)?
 
     @ObservationIgnored let layer = MpvMetalLayer()
     @ObservationIgnored private var mpv: OpaquePointer?
@@ -473,6 +479,7 @@ final class MpvPlayer {
                 let ready = pendingSubtitles
                 pendingSubtitles = []
                 attach(ready)
+                onLoaded?()
             }
         case .restarted:
             seeking = false
@@ -511,7 +518,9 @@ final class MpvPlayer {
                 type: getString(base + "type") ?? "",
                 language: getString(base + "lang") ?? "",
                 title: getString(base + "title") ?? "",
-                selected: getString(base + "selected") == "yes"
+                selected: getString(base + "selected") == "yes",
+                isDefault: getString(base + "default") == "yes",
+                forced: getString(base + "forced") == "yes"
             )
         }
     }

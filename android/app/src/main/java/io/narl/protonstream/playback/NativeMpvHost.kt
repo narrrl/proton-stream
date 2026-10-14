@@ -20,7 +20,9 @@ import kotlin.concurrent.withLock
 import uniffi.pstr_android.ChapterPlan
 import uniffi.pstr_android.ChapterRecord
 import uniffi.pstr_android.SubtitleFilesRecord
+import uniffi.pstr_android.SubtitleTrackRecord
 import uniffi.pstr_android.chapterPlan
+import uniffi.pstr_android.fullSubtitlesInstead
 
 /**
  * Why the open file ended, mirroring `pstr_player::EndReason` so both clients
@@ -108,6 +110,10 @@ data class MpvTrack(
     val language: String,
     val title: String,
     val selected: Boolean,
+    /** The container marks it as the default choice. */
+    val isDefault: Boolean = false,
+    /** The container marks it as forced: on-screen text only, by convention. */
+    val forced: Boolean = false,
 ) {
     val label: String get() = listOf(language, title).filter(String::isNotBlank)
         .joinToString(" — ").ifBlank { "${type.replaceFirstChar(Char::uppercase)} $id" }
@@ -129,6 +135,8 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
     @Volatile private var currentMedia: String? = null
     @Volatile private var currentGeneration: Double = -1.0
     @Volatile private var plannedFor: Pair<Double, Long>? = null
+    /** The load generation whose subtitle pick has been looked at. */
+    @Volatile private var subtitlesCheckedFor: Double = -1.0
     var onPlaybackStarted: (() -> Unit)? = null
     var onStateChanged: ((MpvPlaybackState) -> Unit)? = null
     var onExplicitStop: (() -> Unit)? = null
@@ -347,6 +355,12 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
                     // both of which are the main thread's.
                     withContext(Dispatchers.Main) { onStateChanged?.invoke(next) }
                     refreshChapters(next)
+                    if (values[LOADED] != 0.0 && values.generation() == currentGeneration &&
+                        subtitlesCheckedFor != currentGeneration
+                    ) {
+                        subtitlesCheckedFor = currentGeneration
+                        preferFullSubtitles()
+                    }
                 }
                 withOpenHandle(::nativeTakeError)?.let { mutableProblem.value = it }
                 if (tick++ % 4 == 0) refreshTracks()
@@ -384,13 +398,32 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         }
     }
 
+    /**
+     * Play the dialogue rather than the signs and songs mpv picked by language
+     * (`pstr_core::subtitles`). Not remembered: it is the choice mpv should
+     * have made, not the viewer's.
+     */
+    private fun preferFullSubtitles() {
+        refreshTracks()
+        val subtitles = mutableTracks.value.filter { it.type == "sub" }
+        val id = fullSubtitlesInstead(
+            subtitles.map {
+                SubtitleTrackRecord(it.id, it.language, it.title, it.isDefault, it.forced, it.selected)
+            },
+        ) ?: return
+        subtitles.firstOrNull { it.id == id }?.let(::selectTrack)
+    }
+
     private fun refreshTracks() {
         runCatching {
             val encoded = withOpenHandle(::nativeTracks) ?: return
             val values = JSONArray(encoded)
             List(values.length()) { index ->
                 values.getJSONObject(index).run {
-                    MpvTrack(getLong("id"), getString("type"), getString("language"), getString("title"), getBoolean("selected"))
+                    MpvTrack(
+                        getLong("id"), getString("type"), getString("language"), getString("title"),
+                        getBoolean("selected"), optBoolean("default"), optBoolean("forced"),
+                    )
                 }
             }
         }.onSuccess { mutableTracks.value = it }
@@ -467,7 +500,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
 
     companion object {
         /** Fields `nativeState` fills, in the order `pstr_mpv.cpp` writes them. */
-        private const val FIELDS = 14
+        private const val FIELDS = 15
         private const val GENERATION = 6
         private const val WIDTH = 7
         private const val HEIGHT = 8
@@ -476,6 +509,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         private const val CACHE_PERCENT = 11
         private const val SEEKING = 12
         private const val CACHED_UNTIL = 13
+        private const val LOADED = 14
 
         init {
             System.loadLibrary("pstr_android")

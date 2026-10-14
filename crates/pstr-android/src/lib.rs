@@ -27,6 +27,7 @@ use pstr_core::proton_drive_rs::ThumbnailType;
 use pstr_core::proton_sdk::api::HumanVerificationCredential;
 use pstr_core::proton_sdk::ids::{LinkId, VolumeId};
 use pstr_core::shares::AccountFolder;
+use pstr_core::subtitles::SubtitleTrack;
 use pstr_core::sync::WatchSync;
 use pstr_core::{
     Account, AccountStore, SecretStore, Share, ShareClient, ShareStore, SharedLibrary,
@@ -737,6 +738,38 @@ fn chapter_kind(role: ChapterRole) -> ChapterKind {
         ChapterRole::Preview => ChapterKind::Preview,
         ChapterRole::Content => ChapterKind::Content,
     }
+}
+
+/// One subtitle track as the player read it out of mpv's `track-list`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SubtitleTrackRecord {
+    pub id: i64,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    pub default: bool,
+    pub forced: bool,
+    pub selected: bool,
+}
+
+/// The dialogue track to play in place of the subtitle track mpv chose, when
+/// mpv chose the signs and songs (`pstr_core::subtitles`). Asked once per file,
+/// as soon as mpv has loaded it and made its own pick.
+#[uniffi::export]
+pub fn full_subtitles_instead(tracks: Vec<SubtitleTrackRecord>) -> Option<i64> {
+    let tracks: Vec<SubtitleTrack> = tracks
+        .into_iter()
+        .map(|track| SubtitleTrack {
+            id: track.id,
+            language: track
+                .language
+                .filter(|language| !language.trim().is_empty()),
+            title: track.title.filter(|title| !title.trim().is_empty()),
+            default: track.default,
+            forced: track.forced,
+            selected: track.selected,
+        })
+        .collect();
+    pstr_core::subtitles::full_instead(&tracks)
 }
 
 /// What the app is holding on disk. Offline episodes are the viewer's, the

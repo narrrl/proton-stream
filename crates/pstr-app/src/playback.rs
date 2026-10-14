@@ -578,6 +578,15 @@ fn run(
                 if let Some(show) = target.track_prefs.as_deref() {
                     restore_tracks(&player, show);
                 }
+                // A subtitle track picked by name stays; one mpv picked by
+                // language may be the signs and songs, not the dialogue.
+                let picked = target
+                    .track_prefs
+                    .as_deref()
+                    .is_some_and(|show| show.subtitle_title.is_some());
+                if !picked {
+                    prefer_full_subtitles(&player);
+                }
                 emit_tracks(&engine, id, &player);
             }
             PlayerEvent::Duration(value) => duration = Some(*value),
@@ -732,6 +741,16 @@ fn restore_tracks(player: &Player, show: &pstr_core::catalog::TitleTrackPrefs) {
         if !playing && let Err(error) = player.select_track(kind, Some(track)) {
             tracing::warn!("restore {} track {track}: {error}", kind.label());
         }
+    }
+}
+
+/// Play the dialogue rather than the signs and songs mpv picked by language.
+/// Not remembered: it is the choice mpv should have made, not the viewer's.
+fn prefer_full_subtitles(player: &Player) {
+    if let Some(track) = pstr_player::full_subtitles_instead(&player.tracks())
+        && let Err(error) = player.select_track(TrackKind::Subtitle, Some(track))
+    {
+        tracing::warn!("select dialogue subtitle {track}: {error}");
     }
 }
 

@@ -256,6 +256,7 @@ final class PlayerHost {
             player?.onEnded = { [weak self] reason, media in self?.ended(reason, media) }
             player?.onTick = { [weak self] in self?.tick() }
             player?.onStateChanged = { [weak self] in self?.publishNowPlaying() }
+            player?.onLoaded = { [weak self] in self?.preferFullSubtitles() }
         }
         guard let player else {
             playbackError = "Playback is unavailable: libmpv did not start."
@@ -431,6 +432,18 @@ final class PlayerHost {
         if let plannedFor, plannedFor == wanted, !(chapters.entries.isEmpty && !player.chapters.isEmpty) { return }
         plannedFor = wanted
         chapters = chapterPlan(chapters: player.chapters, duration: player.duration > 0 ? player.duration : nil)
+    }
+
+    /// Play the dialogue rather than the signs and songs mpv picked by
+    /// language (`pstr_core::subtitles`). Not remembered: it is the choice mpv
+    /// should have made, not the viewer's.
+    private func preferFullSubtitles() {
+        guard let player, playingOpenEpisode else { return }
+        let subtitles = player.tracks.filter { $0.type == "sub" }.map {
+            SubtitleTrackRecord(id: $0.id, language: $0.language, title: $0.title, default: $0.isDefault, forced: $0.forced, selected: $0.selected)
+        }
+        guard let id = fullSubtitlesInstead(tracks: subtitles), let track = player.tracks.first(where: { $0.type == "sub" && $0.id == id }) else { return }
+        player.select(type: "sub", track: track)
     }
 
     /// The skip button's offer at the current position, if any.

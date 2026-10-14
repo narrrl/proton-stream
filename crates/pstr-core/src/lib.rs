@@ -21,6 +21,7 @@ pub mod prefs;
 pub mod profile;
 pub mod shares;
 pub mod shelves;
+pub mod subtitles;
 pub mod sync;
 
 pub use account::{Account, AccountStore};
