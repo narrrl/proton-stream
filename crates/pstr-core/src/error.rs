@@ -85,11 +85,14 @@ impl Error {
     }
 
     /// Whether this is the account's session having ended: the refresh token
-    /// was revoked or expired, or the token lacks a scope only a password
-    /// sign-in grants. Nothing but signing in again fixes it.
+    /// was revoked or expired, the token lacks a scope only a password
+    /// sign-in grants, or the stored key passphrases no longer unlock the
+    /// account because its mailbox password changed. Nothing but signing in
+    /// again fixes it.
     pub fn is_signed_out(&self) -> bool {
         match self {
             Self::SignedOut(_) => true,
+            Self::Drive(proton_sdk::error::ProtonError::KeysLocked) => true,
             Self::Drive(proton_sdk::error::ProtonError::Api(api)) => {
                 api.is_invalid_refresh_token() || api.is_insufficient_scope()
             }
@@ -126,5 +129,11 @@ mod tests {
             error.describe(),
             "io: client error (SendRequest): connection closed before message completed"
         );
+    }
+
+    #[test]
+    fn stored_passphrases_that_no_longer_unlock_mean_signed_out() {
+        let error = Error::Drive(proton_sdk::error::ProtonError::KeysLocked);
+        assert!(error.is_signed_out());
     }
 }

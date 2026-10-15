@@ -4844,9 +4844,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pgp"
-version = "0.20.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cfa4743b28656065ff4c0ba09e46b357a65e8c00fc2341e89084b82f87cbdf1"
+checksum = "ae70f4d9325a391db30d115d6191a7bb67cec856aa0bba131290f0c4e09a532a"
 dependencies = [
  "aead 0.5.2",
  "aes 0.8.4",
@@ -5218,9 +5218,9 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "proton-drive-rs"
-version = "0.7.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1868294071187f6198aad10e01bd1ccaa02e70cd6b92f729f9cf7215671aa20f"
+checksum = "eb9638bbcc807188ce43e6012361d0f5ce4ab70011f6160240df05e474eb3b54"
 dependencies = [
  "async-trait",
  "base64 0.23.0",
@@ -5245,9 +5245,9 @@ dependencies = [
 
 [[package]]
 name = "proton-sdk"
-version = "0.7.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "118e33440fcf26a05bd6cc19d544d1270ab183ece0fe535904b4767b16d5b3e0"
+checksum = "79557071826330cebd39cf4081d6b75a42721134e5b442682d8e82e709584875"
 dependencies = [
  "aes-gcm 0.11.0",
  "async-trait",
@@ -5274,6 +5274,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

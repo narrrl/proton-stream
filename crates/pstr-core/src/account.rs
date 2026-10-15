@@ -33,7 +33,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use proton_drive_rs::{NodeKind, ProtonDriveClient};
-use proton_sdk::api::HumanVerificationCredential;
+use proton_sdk::account::KeyPassphrases;
+use proton_sdk::api::{HumanVerificationCredential, ResponseCode};
 use proton_sdk::error::ProtonError;
 use proton_sdk::ids::NodeUid;
 use proton_sdk::session::{PasswordMode, ProtonApiSession, ResumeParameters};
@@ -50,6 +51,12 @@ const SESSION_KEY: &str = "proton-account";
 const SECURITY_KEY_ONLY: &str = "This account's only second factor is a security key, which this \
      app cannot use yet. Add an authenticator app in your Proton account settings, then sign in \
      with its code.";
+
+/// Why a sign-in Proton answered with [`ResponseCode::Blocked`] failed. The
+/// server's own text says the app version is no longer supported, which is
+/// not true and sends the viewer looking for an update that does not exist.
+const SIGN_IN_BLOCKED: &str = "Proton has blocked sign-ins from this app for now. Wait a while \
+     and try again, or sign in once on proton.me first.";
 
 /// Blocks in flight for streaming from the account, as for a public link —
 /// see `ShareStore::open`.
@@ -91,10 +98,10 @@ impl StoredSession {
         }
     }
 
-    fn unlock(&self) -> HashMap<String, Vec<u8>> {
+    fn unlock(&self) -> KeyPassphrases {
         self.key_passphrases
             .iter()
-            .map(|(id, passphrase)| (id.clone(), passphrase.as_bytes().to_vec()))
+            .map(|(id, passphrase)| (id.as_str(), passphrase.as_bytes()))
             .collect()
     }
 
@@ -424,9 +431,9 @@ impl AccountStore {
 /// back the account.
 ///
 /// The key passphrases are derived here, while the token still has the scope
-/// the key salts need. Loading the addresses is what proves the mailbox
-/// password: it unlocks the user keys, and a wrong password unlocks none of
-/// them. Only the passphrases are stored; the password goes no further.
+/// the key salts need. Unlocking the user keys is what proves the mailbox
+/// password: a wrong one unlocks none of them. Only the passphrases are
+/// stored; the password goes no further.
 async fn finish(
     secrets: Arc<dyn SecretStore>,
     session: ProtonApiSession,
@@ -435,10 +442,10 @@ async fn finish(
     let probe = ProtonDriveClient::new(&session, mailbox_password.as_bytes().to_vec());
     probe
         .account()
-        .addresses()
+        .unlock()
         .await
         .map_err(|error| match error {
-            ProtonError::InvalidOperation(_) => {
+            ProtonError::KeysLocked => {
                 Error::SignIn("that mailbox password did not unlock the account".to_owned())
             }
             other => other.into(),
@@ -447,10 +454,10 @@ async fn finish(
         .account()
         .key_passphrases()
         .await?
-        .into_iter()
+        .iter()
         .map(|(id, passphrase)| {
-            String::from_utf8(passphrase)
-                .map(|passphrase| (id, passphrase))
+            std::str::from_utf8(passphrase)
+                .map(|passphrase| (id.to_owned(), passphrase.to_owned()))
                 .map_err(|_| Error::Config("a derived key passphrase is not text".to_owned()))
         })
         .collect::<Result<HashMap<_, _>>>()?;
@@ -500,7 +507,8 @@ fn persist_refreshed_tokens(
     });
 }
 
-/// Lift a CAPTCHA gate and a wrong password out of the generic API error.
+/// Lift a CAPTCHA gate, a blocked sign-in and a wrong password out of the
+/// generic API error.
 ///
 /// Only a gate that can be solved in an app becomes
 /// [`Error::HumanVerification`]; one that wants an e-mail or SMS code is a plain
@@ -511,6 +519,9 @@ fn classify_sign_in_failure(error: ProtonError) -> Error {
             && challenge.supports_captcha()
         {
             return Error::HumanVerification(Box::new(challenge));
+        }
+        if api.code == ResponseCode::Blocked {
+            return Error::SignIn(SIGN_IN_BLOCKED.to_owned());
         }
         if api.http_status == 422 && !api.is_human_verification_required() {
             return Error::SignIn(if api.message.is_empty() {
@@ -640,6 +651,27 @@ mod tests {
         let store = AccountStore::new(secrets);
         assert_eq!(store.username().expect("read"), None);
         assert!(store.resume().expect("resume").is_none());
+    }
+
+    #[test]
+    fn a_stored_session_unlocks_with_its_passphrases() {
+        let unlock = stored().unlock();
+        assert_eq!(unlock.len(), 1);
+        assert_eq!(unlock.get("key-1"), Some(b"derived".as_slice()));
+    }
+
+    #[test]
+    fn a_blocked_sign_in_does_not_claim_the_app_is_outdated() {
+        let error = classify_sign_in_failure(ProtonError::Api(proton_sdk::error::ProtonApiError {
+            code: ResponseCode::Blocked,
+            http_status: 422,
+            message: "This version of the app is no longer supported".to_owned(),
+            details: None,
+        }));
+        assert!(
+            matches!(&error, Error::SignIn(text) if text == SIGN_IN_BLOCKED),
+            "{error}"
+        );
     }
 
     #[test]
