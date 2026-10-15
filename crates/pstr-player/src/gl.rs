@@ -42,7 +42,7 @@ use libloading::Library;
 ///
 /// EGL leads on a Wayland session and GLX on an X11 one, matching what glutin
 /// will have picked — though with `libglvnd` in the way, either order works.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn candidates() -> Vec<&'static str> {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     if wayland {
@@ -50,6 +50,15 @@ fn candidates() -> Vec<&'static str> {
     } else {
         vec!["libGL.so.1", "libEGL.so.1"]
     }
+}
+
+/// eframe's context on macOS is CGL, and the framework exports every GL
+/// function it implements as a plain symbol — there is no `GetProcAddress` to
+/// go through, so the direct lookup in [`GlLoader::resolve`] answers for all of
+/// them.
+#[cfg(target_os = "macos")]
+fn candidates() -> Vec<&'static str> {
+    vec!["/System/Library/Frameworks/OpenGL.framework/OpenGL"]
 }
 
 #[cfg(windows)]
