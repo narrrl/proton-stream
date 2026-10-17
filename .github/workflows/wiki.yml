@@ -1,0 +1,68 @@
+name: Wiki
+
+# docs/ is the source of the GitHub wiki. Every change to the documentation
+# checks its links; a push to main publishes the result, so the wiki follows
+# main. Pull requests only check: nothing unmerged reaches the wiki. Run it from
+# the Actions tab to publish another ref, such as a release tag.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'images/**'
+      - 'README.md'
+      - 'scripts/publish-wiki.sh'
+      - '.github/workflows/wiki.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'images/**'
+      - 'README.md'
+      - 'scripts/publish-wiki.sh'
+      - '.github/workflows/wiki.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or branch to publish'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check documentation links
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Check links
+        run: scripts/publish-wiki.sh --check "$RUNNER_TEMP"
+
+  publish:
+    name: Publish to the wiki
+    needs: check
+    # Pull requests never publish.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: wiki-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Publish
+        env:
+          WIKI_REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          scripts/publish-wiki.sh --push "$RUNNER_TEMP"
