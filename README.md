@@ -1,83 +1,145 @@
+<div align="center">
+
+<img src="images/logo.svg" alt="" width="112" height="112">
+
 # proton-stream
 
-A Netflix-style cross-platform client for **Proton Drive public links**.
+**Your Proton Drive, streaming.** A Netflix-style library for the videos in your Proton Drive and
+the share links people send you, on Linux, Windows, Android, Android TV and iOS.
 
-Paste a share URL and its password; get a browsable, streamable library. No
-Proton account, no server to host, no download step — episodes start playing in
-seconds and the seek bar works.
+**[proton-stream.narl.io](https://proton-stream.narl.io)**
 
-Built on [`proton-sdk-rs`](https://github.com/narrrl/proton-sdk-rs), a pure-Rust
-Proton Drive SDK.
+[![CI](https://github.com/narrrl/proton-stream/actions/workflows/ci.yml/badge.svg)](https://github.com/narrrl/proton-stream/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/narrrl/proton-stream?sort=semver)](https://github.com/narrrl/proton-stream/releases/latest)
+[![License: MIT / GPL-3.0](https://img.shields.io/badge/license-MIT%20%2F%20GPL--3.0-blue.svg)](#license)
+[![Rust 1.96+](https://img.shields.io/badge/rust-1.96%2B-orange.svg)](https://www.rust-lang.org)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/narl)
+
+<img src="images/desktop-home.png" alt="The library in the desktop app" width="820">
+
+</div>
+
+> [!IMPORTANT]
+> This is an **unofficial**, community-built client. It is not affiliated with, endorsed by, or
+> supported by Proton AG. "Proton" and "Proton Drive" are trademarks of Proton AG, used here only
+> to describe what the software talks to. It provides no content: it plays what you keep in
+> Proton Drive or what is shared with you.
+
+## Features
+
+**Library**
+
+- **Public share links or your own Drive.** Paste a share link, with its password if it has one,
+  or sign in and pick folders of your Drive. Any number of them merge into one library.
+- **Seasons and episodes from your folders.** The folder names the show, the file name gives the
+  season and episode, and a file without numbers is a film.
+- **Posters, synopses and shelves**, from AniList or TMDB, **off by default**: shelves such as
+  *Directed by* and *From MADHOUSE*, a franchise folded into one tile, and a hand-picked match
+  that is never overwritten.
+- **Filters and sorting:** series, films, watching, not started, downloaded; by name, last watched,
+  last added, air date, rating or popularity.
+
+**Player**
+
+- **Streams, never downloads first.** Episodes start in seconds, and a seek fetches only what it
+  lands on.
+- **libmpv inside the app's own window:** HEVC 10-bit, HDR and ASS subtitles with hardware
+  decoding, and no transcoding.
+- **Skip the opening and the ending** by chapter, an **Up next** countdown, and next and previous
+  episode.
+- **Subtitle files beside the video** (`.srt`, `.ass`, `.ssa`, `.vtt`), and **the dialogue track
+  over *Signs & Songs***. Audio and subtitle choices are remembered for each show.
+
+**Everywhere**
+
+- **Resume on any device.** Sign in, and your place in every episode, your shares and your
+  settings sync through your own Drive.
+- **Downloads** of an episode, a season or a show, to play offline.
+- **Android 12+ and Android TV** with Material 3, background audio and new-episode
+  notifications; **iOS 17+** as a SwiftUI port for SideStore and AltStore.
+- **Themes:** a near-black default, four Catppuccin flavours and Persona 5, each with nine accents.
+- **Full keyboard control** on the desktop, and the `pstr` command line.
+
+<table>
+  <tr>
+    <td width="50%"><img src="images/desktop-library.png" alt="The whole library, filtered and sorted"></td>
+    <td width="50%">
+      <img src="images/android-home.png" alt="Android: home" width="24%">
+      <img src="images/android-library.png" alt="Android: all titles" width="24%">
+      <img src="images/android-title.png" alt="Android: a title page" width="24%">
+      <img src="images/android-episodes.png" alt="Android: episodes and downloads" width="24%">
+    </td>
+  </tr>
+</table>
+
+## Install
+
+Every [release](https://github.com/narrrl/proton-stream/releases/latest) has:
+
+| Platform | Download |
+|---|---|
+| Debian, Ubuntu | `proton-stream_<version>-1_amd64.deb` |
+| Fedora | `proton-stream-<version>-1.x86_64.rpm` |
+| Other Linux | `proton-stream-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows | `proton-stream-<version>-x64.msi`, or the portable `…-x86_64-windows.zip` |
+| Android, Android TV | `proton-stream-<version>-android.apk` |
+| iOS, iPadOS | `proton-stream-<version>-ios.ipa`, for SideStore or AltStore |
+
+```bash
+sudo apt install ./proton-stream_*_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./proton-stream-*.x86_64.rpm    # Fedora
+cd packaging && makepkg -si                      # Arch, from a checkout
+```
+
+Then open **Proton Stream**, paste a share link on the **Shares** page (or press **Ctrl+V**), and
+the library fills in. [Getting started](docs/GETTING_STARTED.md) walks through it, and
+[Installation](docs/INSTALL.md) covers every platform, updating and uninstalling.
+
+## Documentation
+
+The [wiki](https://github.com/narrrl/proton-stream/wiki) is generated from [`docs/`](docs/) on
+every push to `main`:
+
+- [Getting started](docs/GETTING_STARTED.md), [Installation](docs/INSTALL.md) and the
+  [FAQ](docs/FAQ.md)
+- [User guide](docs/USER_GUIDE.md), [Account and sync](docs/ACCOUNT_AND_SYNC.md) and
+  [Android and iOS](docs/MOBILE.md)
+- [Command-line reference](docs/CLI.md), [Privacy](docs/PRIVACY.md) and
+  [Troubleshooting](docs/TROUBLESHOOTING.md)
+- For contributors: [Development](docs/DEVELOPMENT.md), [Architecture](docs/ARCHITECTURE.md),
+  [Testing](docs/TESTING.md), [Android](docs/ANDROID.md) and [iOS](docs/IOS.md)
 
 ## Why it works
 
-A Proton Drive file's content blocks are each a self-contained PGP packet
-decrypted under one shared session key. There is no sequential streaming session
-to resume, so seeking costs exactly the blocks the seek lands on — a 2 GB episode
-is playable without downloading 2 GB of it.
+A Proton Drive file's content blocks are each a self-contained PGP packet decrypted under one
+shared session key. There is no sequential streaming session to resume, so seeking costs exactly
+the blocks the seek lands on: a 2 GB episode plays without downloading 2 GB of it.
 
-## Status
+On a 761 MiB, 26-minute 1080p HEVC episode over a real password-protected link: **2.3 s to first
+frame, about 1.5 s to resume after dragging to an arbitrary point, and 61 MiB fetched for the
+first 38 seconds of playback.** Watch it again and the disk cache serves it with **no network at
+all**: 0.3 s to first frame.
 
-Early, but it is an app now: the picture lands **inside the window**, not in an
-mpv window of its own. The SDK streaming surface, the catalog, the streaming
-layer and the player are done and verified against a real share, and the app has
-a library wall, a page per title with seasons and episodes,
-resume-where-you-left-off, an overlay with a chapter-marked seek bar, a skip
-button for openings and endings, next/previous episode with an "up next"
-countdown, subtitle files beside the video, optional metadata, themes and share
-management. What is left is mostly running the macOS packaging on a real Mac. See
-`docs/DEVELOPMENT.md`.
+The player is fed through an in-process mpv stream callback, not a local HTTP server, so there is
+no port another process could ask for the plaintext. [Architecture](docs/ARCHITECTURE.md) has the
+whole data flow.
 
-A native Android 12+ client is under `android/`, sharing the Rust catalog and
-streaming implementation through UniFFI. It features a modern Material 3 interface,
-an immersive fullscreen player with auto-hiding controls, and offline downloads.
-Its toolchain, emulator, signing, and release instructions are in [`docs/ANDROID.md`](docs/ANDROID.md).
+Built on [`proton-sdk-rs`](https://github.com/narrrl/proton-sdk-rs), a pure-Rust Proton Drive
+SDK.
 
-An iOS 17+ client under `ios/` is a SwiftUI port of the Android one over the same
-Rust engine, built as an unsigned `.ipa` for SideStore or AltStore; see
-[`docs/IOS.md`](docs/IOS.md).
+## Privacy
 
-```bash
-cargo run --release -p pstr-app          # the app
-proton-stream 'https://drive.proton.me/urls/TOKEN#fragment'   # open the Add form with a link
-```
+- **No server, no telemetry.** Each app talks to Proton and to nothing else, unless you turn on
+  posters and descriptions, which sends your title names to AniList or TMDB.
+- **The part of a share link after `#` is its decryption key.** It, any link password and your
+  Proton session live in the system credential store (Secret Service, Credential Manager, the
+  Android Keystore, the iOS Keychain), never in a config file.
+- **Sync is end-to-end encrypted.** Watch history, shares and settings travel through your own
+  Drive, one file per device.
+- **The block cache and downloads hold decrypted video** in your cache and data folders. Size or
+  empty the cache in **Settings → Storage**.
 
-One window at a time: a second launch brings the open window forward and
-hands it any share link it was given, then exits.
-
-The `pstr` CLI does the same work headlessly, and is what tells you which layer
-is broken:
-
-```bash
-cargo run -p pstr-cli -- add --name anime 'https://drive.proton.me/urls/TOKEN#fragment'
-cargo run -p pstr-cli -- crawl
-cargo run -p pstr-cli -- list
-cargo run -p pstr-cli -- metadata                      # opt-in; off unless configured
-cargo run --release -p pstr-cli -- play --file Frieren --disk-cache
-cargo run --release -p pstr-cli -- bench --file Frieren --verify
-```
-
-On a 761 MiB, 26-minute 1080p HEVC episode over a real password-protected link:
-**2.3 s to first frame, ~1.5 s to resume after dragging to an arbitrary point,
-61 MiB fetched for the first 38 seconds of playback.** Watch it again and the
-disk cache serves it with **no network at all** — 0.3 s to first frame.
-
-`bench` measures the same file without a player, reporting cold seek latency,
-sustained throughput and peak memory, and `--verify` cross-checks a mid-file read
-against the SDK's own range download.
-
-## Design
-
-| | |
-|---|---|
-| Topology | Fat client. No server; each viewer's app talks to Proton directly. |
-| Auth | Public links only — but several, merged into one library. |
-| Player | Embedded libmpv, drawing into the app's own GL surface: HEVC 10-bit, HDR and ASS subtitles with hardware decode. Volume, audio-track, subtitle and chapter pickers; skip-the-opening; next/previous episode and autoplay. The language picked is preferred for the next file too. |
-| Transcoding | None. mpv demuxes and decodes natively. |
-| UI | egui/eframe on glow; mpv renders into the same GL context. |
-| Themes | The shipped near-black palette, Catppuccin Latte, Frappé, Macchiato and Mocha, and a Persona 5 one — black, white and one loud red, which is what the Red accent is there for — each with a choice of nine accents, drawn as a gradient unless you turn that off. Picked on the Settings page, applied without a restart. |
-| Metadata | Filename parsing, with optional AniList/TMDB enrichment — **off by default**, because enabling it sends your library's titles to a third party. It brings posters, synopses, fanart and per-episode titles and synopses (for AniList, from ani.zip, which is sent the matched ids); a title the scorer refuses to guess about can be pinned by hand, and a pinned match is never overwritten. The library sorts by name, watch, add or air date, rating and popularity, folds a franchise into one tile, and shelves titles by director, studio and genre. See [docs/METADATA.md](docs/METADATA.md). |
-| Platforms | Linux and Windows; macOS packaging is written but has not been run on a Mac. A native Android 12+ client is available featuring a Material 3 UI and immersive fullscreen playback, and an iOS 17+ port of it for sideloading. |
+[Privacy](docs/PRIVACY.md) lists every connection and every file.
 
 ## Building
 
@@ -85,53 +147,26 @@ Rust 2024, MSRV 1.96.
 
 ```bash
 cargo build --release
+cargo run --release -p pstr-app                    # the app
+cargo run -p pstr-cli -- add --name anime 'URL'    # the same work, headless
 ```
 
-`pstr-player` needs libmpv development headers (`mpv` ≥ 2.0), and on Linux
-`pstr-app` needs WebKitGTK 4.1's, for the window Proton's CAPTCHA is shown in.
-On Windows the libmpv ones
-come from the separate **mpv-dev** archive rather than mpv's player build, and
-`libmpv-2.dll` ships next to the executable. The Proton SDK crates come from
-crates.io; nothing here builds against a sibling checkout.
+`pstr-player` needs libmpv development headers (`mpv` ≥ 2.0), and on Linux `pstr-app` needs
+WebKitGTK 4.1's, for the CAPTCHA window. The Proton SDK crates come from crates.io.
 
-Installable artifacts — tarball, `.deb`, `.rpm`, Arch package, `.app`/`.dmg`,
-and a portable `.zip` plus an `.msi` on Windows — are produced by
-`scripts/build.sh` and `scripts\build.ps1`; `packaging/README.md` has the
-per-platform detail.
-
-Android builds use JDK 17, Android SDK 36/NDK 28, Gradle 8.13, `cargo-ndk`, and
-UniFFI. Run `bash scripts/build-android.sh debug` after installing that toolchain;
-see [`docs/ANDROID.md`](docs/ANDROID.md) for exact setup and release signing.
-
-iOS builds need macOS with Xcode, XcodeGen and the `aarch64-apple-ios` Rust
-target: `scripts/build-ios.sh all` writes `dist/proton-stream-<version>-ios.ipa`.
-
-## Privacy
-
-- The share URL fragment **is** the decryption password. It and any custom
-  password live in the OS credential store — Secret Service on Linux, Credential
-  Manager on Windows — never in a config file.
-- Nothing leaves your machine except requests to Proton, unless you turn metadata
-  enrichment on. The player is fed through an in-process mpv stream callback, not
-  a local HTTP server: there is no port for another process on the machine to ask
-  for the plaintext, and mpv is handed an opaque token rather than a URL that
-  would put a share secret in its log and window title.
-- The block cache holds decrypted content. It lives in your cache directory,
-  can be deleted at any time the app is not running, and can be sized or
-  emptied from Settings → Storage.
-- A share link given as a command-line argument is visible to other users of
-  the machine in the process list while that launch runs, and may land in
-  shell history. Pasting it into the window (Ctrl+V) does neither.
-- The desktop's media widget is handed the title, the episode and a `file://`
-  path to artwork already on disk — never a provider URL, so the shell never
-  contacts a metadata provider on its own.
+- **Release artifacts:** `scripts/build.sh` (tarball, `.deb`, `.rpm`, Arch, macOS) and
+  `scripts/build-windows.sh` or `scripts\build.ps1` (`.zip`, `.msi`). See
+  [`packaging/README.md`](packaging/README.md).
+- **Android:** JDK 17, Android SDK 36, NDK 28, `cargo-ndk`, then
+  `scripts/build-android.sh debug`. See [`docs/ANDROID.md`](docs/ANDROID.md).
+- **iOS:** macOS with Xcode and XcodeGen, then `scripts/build-ios.sh all`. See
+  [`docs/IOS.md`](docs/IOS.md).
 
 ## License
 
-The shared Rust crates and desktop application are MIT licensed. The Android and
-iOS applications and their combined native distributions are GPL-3.0-or-later; see
-[`android/LICENSE.md`](android/LICENSE.md), [`ios/LICENSE.md`](ios/LICENSE.md) and
-the bundled-component notices.
-The desktop application embeds the Inter typeface, under the SIL Open Font
+The shared Rust crates and desktop application are MIT licensed. The Android and iOS applications
+and their combined native distributions are GPL-3.0-or-later; see
+[`android/LICENSE.md`](android/LICENSE.md), [`ios/LICENSE.md`](ios/LICENSE.md) and the bundled
+component notices. The desktop application embeds the Inter typeface, under the SIL Open Font
 License 1.1 ([`crates/pstr-app/assets/fonts/Inter-OFL.txt`](crates/pstr-app/assets/fonts/Inter-OFL.txt)),
 and the Phosphor icon font, under MIT.

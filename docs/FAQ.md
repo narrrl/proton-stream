@@ -50,8 +50,8 @@ connects devices that sign in to the same Proton account.
 
 ## Is there a macOS version?
 
-The packaging scripts exist, but no build has been run on a Mac yet, so there is no release for
-it.
+Not as a release. The app builds and runs on macOS from source, and `scripts/build.sh` can make a
+`.app` and a `.dmg` on a Mac, but no release ships one yet.
 
 ## Can I cast to a TV?
 
