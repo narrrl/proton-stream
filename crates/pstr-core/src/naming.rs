@@ -539,6 +539,9 @@ fn find_dash_numbering(text: &str) -> Option<NumberingMatch> {
         if is_token_char(tail) && tail != Some(b'v') {
             continue;
         }
+        if is_decimal_tail(text, after) {
+            continue;
+        }
         found = Some(NumberingMatch {
             numbering: Numbering {
                 season: None,
@@ -549,6 +552,24 @@ fn find_dash_numbering(text: &str) -> Option<NumberingMatch> {
         });
     }
     found
+}
+
+/// Whether the number that ended at `at` goes on as a decimal: `.11` in
+/// `Evangelion - 1.11 You Are (Not) Alone`, `.0` in `3.0+1.01`.
+///
+/// That is a version of a film, not episode 1 of anything, and reading it as
+/// one turns a folder of four films into a series of episodes 1, 2, 3 and 3.
+/// One or two digits only: `- 05.1080p` is episode 5 and a resolution.
+fn is_decimal_tail(text: &str, at: usize) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.get(at) != Some(&b'.') {
+        return false;
+    }
+    let digits = bytes[at + 1..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    (1..=2).contains(&digits) && !is_token_char(bytes.get(at + 1 + digits).copied())
 }
 
 /// Step over an `E` / `EP` episode marker and any separator after it.
@@ -630,9 +651,18 @@ fn is_token_start(text: &str, at: usize) -> bool {
 /// Normalize the title span: separators to spaces, then trim the debris that
 /// sits between the title and whatever followed it.
 fn clean_title(raw: &str, year: Option<u32>) -> String {
+    // A dot between two digits is a decimal point, not a separator: `1.11`
+    // is the film's name, `1 11` is two numbers.
+    let bytes = raw.as_bytes();
     let mut text: String = raw
-        .chars()
-        .map(|c| match c {
+        .char_indices()
+        .map(|(at, c)| match c {
+            '.' if at > 0
+                && bytes[at - 1].is_ascii_digit()
+                && bytes.get(at + 1).is_some_and(u8::is_ascii_digit) =>
+            {
+                '.'
+            }
             '.' | '_' => ' ',
             other => other,
         })
@@ -853,6 +883,46 @@ mod tests {
                 Some(6),
                 None
             )
+        );
+    }
+
+    /// **What the four Rebuild of Evangelion films parsed as.** ` - 1.11` read
+    /// as episode 1, so the folder became a series of episodes 1, 2, 3 and 3.
+    /// A decimal is a version of the film, and the name keeps it.
+    #[test]
+    fn a_decimal_after_the_dash_is_part_of_a_films_name_not_an_episode() {
+        assert_eq!(
+            parsed("Evangelion - 1.11 You Are (Not) Alone.mkv"),
+            ("Evangelion - 1.11 You Are Alone".into(), None, None, None)
+        );
+        assert_eq!(
+            parsed("Evangelion - 3.0+1.01 Thrice Upon a Time.mkv"),
+            (
+                "Evangelion - 3.0+1.01 Thrice Upon a Time".into(),
+                None,
+                None,
+                None
+            )
+        );
+    }
+
+    /// A recap numbered between two episodes is not a second copy of the one
+    /// before it.
+    #[test]
+    fn a_half_episode_is_not_the_episode_before_it() {
+        assert_eq!(
+            parsed("[Group] Show Name - 12.5 [1080p].mkv"),
+            ("Show Name - 12.5".into(), None, None, None)
+        );
+    }
+
+    /// The decimal rule stops at two digits, so a resolution glued on with a
+    /// dot leaves the episode number alone.
+    #[test]
+    fn a_resolution_after_a_dot_does_not_hide_the_episode() {
+        assert_eq!(
+            parsed("Show Name - 05.1080p.mkv"),
+            ("Show Name".into(), None, Some(5), None)
         );
     }
 

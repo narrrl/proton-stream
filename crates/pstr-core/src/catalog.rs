@@ -1549,7 +1549,9 @@ pub fn from_node(share_id: &str, node: &proton_drive_rs::Node) -> CatalogNode {
 /// - grouping folders (`Movies`, `OVA`, `Specials`) are stepped over, so their
 ///   contents group under the series above them;
 /// - whatever the filename claimed as a title, when it differs, is kept as the
-///   episode's own name — with the redundant series prefix stripped.
+///   episode's own name — with the redundant series prefix stripped;
+/// - **a folder of films is one title per film**, not one title: see
+///   [`split_films`].
 ///
 /// Folders and non-video files are dropped: a share holds `.nfo` and `.jpg`
 /// alongside the video, and a catalog that offers those as episodes is worse
@@ -1562,12 +1564,18 @@ pub fn build_rows(share_id: &str, nodes: &[proton_drive_rs::Node]) -> Vec<Catalo
         .map(|node| (node.uid.link_id.as_str(), node))
         .collect();
 
-    nodes
+    let mut origins = Vec::new();
+    let mut rows: Vec<CatalogNode> = nodes
         .iter()
         .filter(|node| !node.is_folder() && naming::is_video_file(&node.name))
         .map(|node| {
             let mut row = from_node(share_id, node);
             let context = ancestry(node, &by_link);
+            origins.push(Origin {
+                own: row.parsed.clone(),
+                folder: context.title_folder.clone(),
+                through_container: context.through_container,
+            });
 
             if let Some(title) = context.title {
                 // The filename's own title, if it had one and it differs, is the
@@ -1601,7 +1609,75 @@ pub fn build_rows(share_id: &str, nodes: &[proton_drive_rs::Node]) -> Vec<Catalo
             }
             row
         })
-        .collect()
+        .collect();
+    split_films(&mut rows, &origins);
+    rows
+}
+
+/// Where a row's title came from, kept for [`split_films`].
+struct Origin {
+    /// What the filename alone parsed as, before the folder overrode it.
+    own: ParsedName,
+    /// The link id of the folder that named the row.
+    folder: Option<String>,
+    through_container: bool,
+}
+
+/// Give each film in a folder of films its own title.
+///
+/// `Rebuild of Evangelion/` holding `Evangelion - 1.11 You Are (Not)
+/// Alone.mkv` and three more is four films, each its own entry at every
+/// provider. Titled by the folder they are one series of four unnumbered
+/// files, matched as whichever single film the folder's name reads most like —
+/// and no single film is right.
+///
+/// Only when every file in the folder says so, because the same shape with one
+/// file out of place is a series:
+///
+/// - none is numbered, by its name or by a season folder;
+/// - none is under a grouping folder, because `Neon Genesis Evangelion/Movies/`
+///   is the series' films, and they belong on its page;
+/// - each names itself, differently from the others, and not by the folder's
+///   name — `Mushishi - The Green Seat.mkv` under `Mushishi/` is an episode
+///   of that show whose number is missing, not a film.
+fn split_films(rows: &mut [CatalogNode], origins: &[Origin]) {
+    use crate::library::title_key;
+    use std::collections::HashSet;
+
+    let mut by_folder: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, origin) in origins.iter().enumerate() {
+        if let Some(folder) = &origin.folder {
+            by_folder.entry(folder.as_str()).or_default().push(index);
+        }
+    }
+
+    for members in by_folder.into_values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let mut keys = HashSet::new();
+        let films = members.iter().all(|&index| {
+            let (row, origin) = (&rows[index], &origins[index]);
+            let own = &origin.own.title;
+            !origin.through_container
+                && !origin.own.is_episode()
+                && origin.own.season.is_none()
+                && row.parsed.season.is_none()
+                && !own.is_empty()
+                && strip_prefix_title(own, &row.parsed.title) == *own
+                && !own.eq_ignore_ascii_case(&row.parsed.title)
+                && keys.insert(title_key(own))
+        });
+        if !films {
+            continue;
+        }
+        for index in members {
+            let row = &mut rows[index];
+            let own = &origins[index].own;
+            row.parsed.title = own.title.clone();
+            row.parsed.episode_title = own.episode_title.clone();
+        }
+    }
 }
 
 /// Pair each subtitle file in a crawl with the video it is for.
@@ -1784,6 +1860,10 @@ fn describe_subtitle(rest: &str) -> (Option<String>, Option<String>) {
 #[derive(Debug, Default)]
 struct Ancestry {
     title: Option<String>,
+    /// The link id of the folder [`Ancestry::title`] came from.
+    title_folder: Option<String>,
+    /// Whether a grouping folder sat between the file and that one.
+    through_container: bool,
     season: Option<u32>,
     year: Option<u32>,
 }
@@ -1822,10 +1902,13 @@ fn ancestry(
 
         match crate::naming::classify_folder(&ancestor.name) {
             FolderRole::Season(season) => found.season = found.season.or(Some(season)),
-            FolderRole::Container => {}
+            FolderRole::Container => {
+                found.through_container |= found.title.is_none();
+            }
             FolderRole::Title(parsed) => {
                 if found.title.is_none() && !parsed.title.is_empty() {
                     found.title = Some(parsed.title.clone());
+                    found.title_folder = Some(link_id.clone());
                     found.year = found.year.or(parsed.year);
                     // `Game of Thrones - Season 1` names both; the season it
                     // states belongs to the files under it.
@@ -3079,6 +3162,126 @@ mod tests {
         ];
         let film = build_rows("share", &nodes);
         assert_eq!(row(&film, "film").parsed.title, "Millennium Actress");
+    }
+
+    /// **What the Rebuild of Evangelion films were matched as.** A folder of
+    /// four films titled by the folder is one series, matched as a single film
+    /// that none of the four is. Each names itself, so each is its own title.
+    #[test]
+    fn a_folder_of_unnumbered_films_is_one_title_per_film() {
+        let nodes = vec![
+            root(),
+            folder("rebuild", Some("root"), "Rebuild of Evangelion"),
+            video(
+                "one",
+                "rebuild",
+                "Evangelion - 1.11 You Are (Not) Alone.mkv",
+            ),
+            video(
+                "two",
+                "rebuild",
+                "Evangelion - 2.22 You Can (Not) Advance..mkv",
+            ),
+            video(
+                "three",
+                "rebuild",
+                "Evangelion - 3.33 You Can (Not) Redo..mkv",
+            ),
+            video(
+                "four",
+                "rebuild",
+                "Evangelion - 3.0+1.01 Thrice Upon a Time.mkv",
+            ),
+        ];
+        let rows = build_rows("share", &nodes);
+
+        assert_eq!(
+            row(&rows, "one").parsed.title,
+            "Evangelion - 1.11 You Are Alone"
+        );
+        assert_eq!(
+            row(&rows, "four").parsed.title,
+            "Evangelion - 3.0+1.01 Thrice Upon a Time"
+        );
+        for film in &rows {
+            assert_eq!(film.parsed.episode, None);
+            assert_eq!(film.parsed.episode_title, None, "a film is not an episode");
+        }
+
+        let library = crate::library::Library::build(rows, &HashMap::new());
+        assert_eq!(library.titles.len(), 4);
+        assert!(
+            library
+                .titles
+                .iter()
+                .all(|title| title.kind == TitleKind::Film)
+        );
+    }
+
+    /// One numbered file says the folder is a show, and the unnumbered ones are
+    /// its specials.
+    #[test]
+    fn a_folder_with_a_numbered_episode_in_it_is_not_split() {
+        let nodes = vec![
+            root(),
+            folder("show", Some("root"), "Promised Neverland"),
+            video("e1", "show", "[Group] Yakusoku no Neverland - 01.mkv"),
+            video("film", "show", "Some Recap Film.mkv"),
+            video("other", "show", "Another Special.mkv"),
+        ];
+        let rows = build_rows("share", &nodes);
+        for file in &rows {
+            assert_eq!(file.parsed.title, "Promised Neverland");
+        }
+    }
+
+    /// Films under `Movies/` are the series' films, and stay on its page.
+    #[test]
+    fn films_under_a_grouping_folder_stay_with_the_series() {
+        let nodes = vec![
+            root(),
+            folder("eva", Some("root"), "Neon Genesis Evangelion"),
+            folder("movies", Some("eva"), "Movies"),
+            video("a", "movies", "Death and Rebirth.mkv"),
+            video("b", "movies", "The End of Evangelion.mkv"),
+        ];
+        let rows = build_rows("share", &nodes);
+        for file in &rows {
+            assert_eq!(file.parsed.title, "Neon Genesis Evangelion");
+        }
+    }
+
+    /// Files that repeat the folder's name are that show's episodes with their
+    /// numbers missing, not films of their own.
+    #[test]
+    fn unnumbered_files_named_after_their_folder_stay_one_title() {
+        let nodes = vec![
+            root(),
+            folder("mushi", Some("root"), "Mushishi"),
+            video("a", "mushi", "Mushishi - The Green Seat.mkv"),
+            video("b", "mushi", "Mushishi - The Light of the Eyelid.mkv"),
+        ];
+        let rows = build_rows("share", &nodes);
+        assert_eq!(row(&rows, "a").parsed.title, "Mushishi");
+        assert_eq!(
+            row(&rows, "a").parsed.episode_title.as_deref(),
+            Some("The Green Seat")
+        );
+    }
+
+    /// Two files that name themselves the same thing are not two films.
+    #[test]
+    fn files_whose_own_names_collide_are_not_split() {
+        let nodes = vec![
+            root(),
+            folder("film", Some("root"), "Akira"),
+            video("a", "film", "[GroupA] Neo Tokyo.mkv"),
+            video("b", "film", "Neo.Tokyo.mkv"),
+        ];
+        let rows = build_rows("share", &nodes);
+        for file in &rows {
+            assert_eq!(file.parsed.title, "Akira");
+        }
     }
 
     /// The share root names the *share*, not a series — using it would label

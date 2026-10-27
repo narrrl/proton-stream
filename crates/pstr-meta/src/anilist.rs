@@ -379,6 +379,12 @@ impl AniList {
 /// tokenisation: by dropping the `s` it was holding on to. It is asked for only
 /// after the name as written found nothing, which is what keeps it from
 /// broadening a search that was already working.
+///
+/// A film's version number is the same kind of miss. `Evangelion - 1.11 You
+/// Are (Not) Alone` is the file of a film AniList calls `Evangelion: 1.0 You
+/// Are (Not) Alone`, and `1.11` is not a word of that name — so the last
+/// fallback asks without it, and leaves telling the films apart to the scoring,
+/// which still sees the whole name.
 fn search_terms(name: &str) -> Vec<String> {
     let mut terms = vec![name.to_string()];
 
@@ -386,7 +392,29 @@ fn search_terms(name: &str) -> Vec<String> {
     if depossessed != name {
         terms.push(depossessed);
     }
+    let unversioned = without_version_numbers(name);
+    if !unversioned.is_empty() && !terms.contains(&unversioned) {
+        terms.push(unversioned);
+    }
     terms
+}
+
+/// `Evangelion - 1.11 You Are Alone` → `Evangelion - You Are Alone`.
+///
+/// A version is digits with a dot in them (`1.11`, `3.0+1.01`); a bare number
+/// is left alone, because in `Kaijuu 8-gou` or `86` it is the name.
+fn without_version_numbers(name: &str) -> String {
+    name.split(' ')
+        .filter(|word| {
+            let versioned = word.contains('.')
+                && word.chars().any(|c| c.is_ascii_digit())
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, '.' | '+'));
+            !versioned
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `Heavens Feel` → `Heaven Feel`.
@@ -833,6 +861,29 @@ mod tests {
             search_terms("Kids on the Bus"),
             vec!["Kids on the Bus".to_string(), "Kid on the Bus".to_string()],
             "a four-letter word is long enough; a three-letter one is not"
+        );
+    }
+
+    /// **What three of the four Rebuild films matched as: nothing.** AniList
+    /// requires every word, and a film's version number is not one of its
+    /// title's.
+    #[test]
+    fn a_films_version_number_is_searched_for_again_without_it() {
+        assert_eq!(
+            search_terms("Evangelion - 1.11 You Are Alone"),
+            vec![
+                "Evangelion - 1.11 You Are Alone".to_string(),
+                "Evangelion - You Are Alone".to_string(),
+            ]
+        );
+        assert_eq!(
+            search_terms("Evangelion - 3.0+1.01 Thrice Upon a Time")[1],
+            "Evangelion - Thrice Upon a Time"
+        );
+        assert_eq!(
+            search_terms("Kaijuu 8-gou"),
+            vec!["Kaijuu 8-gou"],
+            "a number that is part of the name stays"
         );
     }
 

@@ -46,12 +46,14 @@ The folder decides which show a file belongs to. The file name gives the season 
 | `Bocchi the Rock/[Group] Bocchi the Rock - 07 [1080p].mkv` | Bocchi the Rock, episode 7 |
 | `Spy x Family/Season 2 - 06.mkv` | Spy x Family, season 2, episode 6 |
 | `Akira (1988).mkv` | A film, from 1988 |
+| `Rebuild of Evangelion/Evangelion - 1.11 You Are (Not) Alone.mkv` and three more | Four films, one title each |
 
 - Season folders can be called `Season 01`, `Season 1`, `S01` or `3rd Season`.
 - Folders such as `Specials`, `Extras`, `OVA`, `NCOP` or `Subs` are not taken as a show's name;
   the folder above them is.
 - An episode title is read only after a dash, as in `S01E01 - Name`.
-- A file with no episode number is a film.
+- A file with no episode number is a film. A folder of such files, each with a different name, is
+  one title per film.
 
 The app plays `mkv`, `mp4`, `m4v`, `avi`, `mov`, `webm`, `ts`, `m2ts` and most other common video
 containers.

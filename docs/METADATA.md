@@ -160,6 +160,14 @@ same facts, tags and franchise row as the desktop's; *Title names* is in
 Settings → Appearance. Android's grid is always covers, so it has no
 *Library tiles* choice.
 
+**Folders of films.** `pstr_core::catalog::build_rows` gives each file in a
+folder of films its own title, so the four Rebuild films in one folder are
+four entries, matched one by one, and the franchise folds them back into one
+tile. Only when no file is numbered, none sits under `Movies`/`OVA`, and each
+names itself differently from the others and from the folder; anything less
+is a series with its specials. A film's version number (`1.11`) is not part of its name on
+AniList, so a search that finds nothing is asked again without it.
+
 Not done: TMDB fills no details.
 
 ## Phase 3 — reach
@@ -168,7 +176,5 @@ Not done: TMDB fills no details.
   machine.
 - **Routing by title**: AniList first, then TMDB (with a key) or TVmaze for
   whatever is not anime — Game of Thrones in a mostly-anime share.
-- **Folders of films** matched per file: four Rebuild films in one folder are
-  four entries, not one.
 - **Skip intro** from AniSkip for files without chapters, and filler flags from
   Jikan.
