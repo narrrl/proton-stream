@@ -196,8 +196,9 @@ How subtitles look. A sample line at the top shows the style on a bright and a d
 a video that is playing changes at once.
 
 - **Size** and **Position**: how big the line is and how far up the picture it sits.
-- **Font**, **Bold** and **Italic**: any font installed on this computer. The sample line uses the
-  app's own font; the video uses the one you chose.
+- **Font**, **Bold** and **Italic**: any font installed on this computer. On Linux the sample
+  line shows the font too; on Windows and macOS it is drawn in the app's own font, and only the
+  video uses the one you chose.
 - **Text colour**, and a **Background** of **Outline** or **Box**, each with its own colour. A
   colour's opacity sets how much of the picture shows through. Choose **Box** if text is hard to
   read on bright scenes.

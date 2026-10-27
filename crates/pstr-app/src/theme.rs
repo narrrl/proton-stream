@@ -186,9 +186,48 @@ pub fn semibold() -> egui::FontFamily {
     egui::FontFamily::Name("semibold".into())
 }
 
+/// The family the subtitle preview is drawn in: the face the chosen subtitle
+/// font resolves to, ahead of the app's own fonts, which stand in until it has
+/// loaded and for any glyph it lacks.
+pub fn subtitle_family() -> egui::FontFamily {
+    egui::FontFamily::Name("subtitle".into())
+}
+
+/// The system fonts loaded so far. Each install builds the definitions from
+/// all of them, so loading one does not drop the other.
+#[derive(Default)]
+struct SystemFonts {
+    cjk: Option<Arc<egui::FontData>>,
+    subtitle: Option<(SubtitleRequest, Arc<egui::FontData>, SubtitleFace)>,
+    /// The subtitle face last asked for, loading or loaded.
+    wanted: Option<SubtitleRequest>,
+}
+
+static SYSTEM_FONTS: parking_lot::Mutex<SystemFonts> = parking_lot::Mutex::new(SystemFonts {
+    cjk: None,
+    subtitle: None,
+    wanted: None,
+});
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubtitleRequest {
+    family: String,
+    bold: bool,
+    italic: bool,
+}
+
+/// What the loaded subtitle face draws by itself. A style it lacks is one
+/// libass makes up, and so must the preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubtitleFace {
+    pub bold: bool,
+    pub italic: bool,
+}
+
 /// Inter, the icon font, and egui's own fonts behind them for the emoji and
-/// symbols Inter does not carry. `cjk` goes last, when there is one.
-fn font_definitions(cjk: Option<egui::FontData>) -> egui::FontDefinitions {
+/// symbols Inter does not carry. The CJK fallback goes last, when there is
+/// one.
+fn font_definitions(system: &SystemFonts) -> egui::FontDefinitions {
     use egui::FontFamily::{Monospace, Proportional};
 
     let mut fonts = egui::FontDefinitions::default();
@@ -207,21 +246,29 @@ fn font_definitions(cjk: Option<egui::FontData>) -> egui::FontDefinitions {
     // Right behind Inter. The icons are in the private use area, which the
     // bundled Inter no longer maps, so neither font shadows the other.
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    if let Some(cjk) = cjk {
+    if let Some(cjk) = &system.cjk {
         let name = "system-cjk-fallback".to_owned();
-        fonts.font_data.insert(name.clone(), Arc::new(cjk));
+        fonts.font_data.insert(name.clone(), cjk.clone());
         for family in [Proportional, Monospace] {
             fonts.families.entry(family).or_default().push(name.clone());
         }
     }
-    let fallbacks = fonts.families[&Proportional]
+    let fallbacks: Vec<String> = fonts.families[&Proportional]
         .iter()
         .filter(|name| *name != "inter")
-        .cloned();
+        .cloned()
+        .collect();
     let semibold_chain = std::iter::once("inter-semibold".to_owned())
         .chain(fallbacks)
         .collect();
     fonts.families.insert(semibold(), semibold_chain);
+    let mut subtitle_chain = fonts.families[&Proportional].clone();
+    if let Some((_, face, _)) = &system.subtitle {
+        let name = "system-subtitle".to_owned();
+        fonts.font_data.insert(name.clone(), face.clone());
+        subtitle_chain.insert(0, name);
+    }
+    fonts.families.insert(subtitle_family(), subtitle_chain);
     fonts
 }
 
@@ -234,7 +281,7 @@ fn font_definitions(cjk: Option<egui::FontData>) -> egui::FontDefinitions {
 /// anyway. egui deliberately does not bundle the multi-megabyte CJK families,
 /// and native desktops already provide one.
 pub fn install_fonts(ctx: &egui::Context) {
-    ctx.set_fonts(font_definitions(None));
+    ctx.set_fonts(font_definitions(&SYSTEM_FONTS.lock()));
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new()
         .name("fonts".into())
@@ -251,20 +298,80 @@ fn install_cjk_fallback(ctx: &egui::Context) {
     let Ok(bytes) = std::fs::read(&path) else {
         return;
     };
-    let Some(data) = cjk_font_data(bytes, index) else {
+    let Some(data) = system_font_data(bytes, index) else {
         tracing::debug!("CJK fallback {}#{index} does not parse", path.display());
         return;
     };
-    ctx.set_fonts(font_definitions(Some(data)));
+    let mut system = SYSTEM_FONTS.lock();
+    system.cjk = Some(Arc::new(data));
+    ctx.set_fonts(font_definitions(&system));
     ctx.request_repaint();
 }
 
-/// The fallback font, if egui can read it.
+/// The face the subtitle preview should be drawn in for this font, bold and
+/// italic, once [`subtitle_family`] holds it.
+///
+/// `None` while it loads, and for good where the system cannot say which file
+/// a family is — everywhere but Linux. The first call for a font starts the
+/// load on a thread of its own, since `fc-match` and reading the file are too
+/// slow for a frame, and asks for a repaint when it is in.
+pub fn subtitle_face(
+    ctx: &egui::Context,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> Option<SubtitleFace> {
+    let request = SubtitleRequest {
+        family: family.to_owned(),
+        bold,
+        italic,
+    };
+    let mut system = SYSTEM_FONTS.lock();
+    if let Some((loaded, _, face)) = &system.subtitle
+        && *loaded == request
+    {
+        return Some(*face);
+    }
+    if system.wanted.as_ref() != Some(&request) {
+        system.wanted = Some(request.clone());
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("subtitle-font".into())
+            .spawn(move || install_subtitle_face(&ctx, request));
+        if let Err(error) = spawned {
+            tracing::debug!("subtitle font thread: {error}");
+        }
+    }
+    None
+}
+
+fn install_subtitle_face(ctx: &egui::Context, request: SubtitleRequest) {
+    let Some((path, index, face)) = system_subtitle_font(&request) else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let Some(data) = system_font_data(bytes, index) else {
+        tracing::debug!("subtitle font {}#{index} does not parse", path.display());
+        return;
+    };
+    let mut system = SYSTEM_FONTS.lock();
+    // Another font was picked while this one loaded.
+    if system.wanted.as_ref() != Some(&request) {
+        return;
+    }
+    system.subtitle = Some((request, Arc::new(data), face));
+    ctx.set_fonts(font_definitions(&system));
+    ctx.request_repaint();
+}
+
+/// A system font, if egui can read it.
 ///
 /// egui panics on a font it cannot parse, and this one comes from whatever the
 /// system has installed. So it is parsed here first, the same way egui does,
 /// and a font that fails is left out rather than taking the app down.
-fn cjk_font_data(bytes: Vec<u8>, index: u32) -> Option<egui::FontData> {
+fn system_font_data(bytes: Vec<u8>, index: u32) -> Option<egui::FontData> {
     skrifa::FontRef::from_index(&bytes, index).ok()?;
     let mut data = egui::FontData::from_owned(bytes);
     data.index = index;
@@ -297,6 +404,68 @@ fn system_cjk_font() -> Option<(std::path::PathBuf, u32)> {
         .map(fontconfig_face)
         .unwrap_or(0);
     path.is_file().then_some((path, index))
+}
+
+/// The file fontconfig picks for a subtitle font, as libass asks for it: the
+/// family with the weight and slant wanted, falling back as libass would to
+/// whatever fontconfig likes best when the family is not installed.
+#[cfg(target_os = "linux")]
+fn system_subtitle_font(
+    request: &SubtitleRequest,
+) -> Option<(std::path::PathBuf, u32, SubtitleFace)> {
+    let output = std::process::Command::new("fc-match")
+        .args([
+            "-f",
+            "%{file}\\n%{index}\\n%{weight}\\n%{slant}",
+            &fontconfig_pattern(request),
+        ])
+        .output()
+        .ok()?;
+    let text = std::str::from_utf8(&output.stdout).ok()?;
+    let mut lines = text.lines();
+    let path = std::path::PathBuf::from(lines.next()?);
+    let mut number = || lines.next().and_then(|value| value.parse::<u32>().ok());
+    let index = number().unwrap_or(0);
+    let (weight, slant) = (number().unwrap_or(0), number().unwrap_or(0));
+    // A variable font's named instance is drawn by egui as the default one,
+    // which is upright and regular, whatever fontconfig says it matched.
+    let instance = index != fontconfig_face(index);
+    let face = SubtitleFace {
+        bold: !instance && weight >= FC_WEIGHT_BOLD,
+        italic: !instance && slant > 0,
+    };
+    path.is_file()
+        .then_some((path, fontconfig_face(index), face))
+}
+
+#[cfg(any(target_os = "linux", test))]
+const FC_WEIGHT_BOLD: u32 = 200;
+
+/// A fontconfig pattern for the request. A family name is free text, and `-`,
+/// `:`, `,` and `\\` mean something in a pattern, so those are escaped.
+#[cfg(any(target_os = "linux", test))]
+fn fontconfig_pattern(request: &SubtitleRequest) -> String {
+    let mut pattern = String::new();
+    for character in request.family.chars() {
+        if matches!(character, '-' | ':' | ',' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    if request.bold {
+        pattern.push_str(&format!(":weight={FC_WEIGHT_BOLD}"));
+    }
+    if request.italic {
+        pattern.push_str(":slant=100");
+    }
+    pattern
+}
+
+/// Elsewhere there is no asking which file a family is, and the preview
+/// stays in the app's own font.
+#[cfg(not(target_os = "linux"))]
+fn system_subtitle_font(_: &SubtitleRequest) -> Option<(std::path::PathBuf, u32, SubtitleFace)> {
+    None
 }
 
 #[cfg(target_os = "windows")]
@@ -960,10 +1129,40 @@ mod tests {
     }
 
     #[test]
-    fn a_fallback_font_egui_cannot_read_is_left_out() {
-        assert!(cjk_font_data(INTER.to_vec(), 0).is_some());
-        assert!(cjk_font_data(INTER.to_vec(), 4).is_none());
-        assert!(cjk_font_data(b"not a font".to_vec(), 0).is_none());
+    fn a_system_font_egui_cannot_read_is_left_out() {
+        assert!(system_font_data(INTER.to_vec(), 0).is_some());
+        assert!(system_font_data(INTER.to_vec(), 4).is_none());
+        assert!(system_font_data(b"not a font".to_vec(), 0).is_none());
+    }
+
+    #[test]
+    fn a_subtitle_font_is_asked_of_fontconfig_with_its_style_and_escaped() {
+        let request = |family: &str, bold, italic| SubtitleRequest {
+            family: family.to_owned(),
+            bold,
+            italic,
+        };
+        assert_eq!(
+            fontconfig_pattern(&request("Noto Sans", false, false)),
+            "Noto Sans"
+        );
+        assert_eq!(
+            fontconfig_pattern(&request("Noto Sans", true, true)),
+            "Noto Sans:weight=200:slant=100"
+        );
+        assert_eq!(
+            fontconfig_pattern(&request("A-B:C,D\\E", false, true)),
+            "A\\-B\\:C\\,D\\\\E:slant=100"
+        );
+    }
+
+    #[test]
+    fn the_subtitle_preview_family_exists_before_any_font_has_loaded() {
+        let fonts = font_definitions(&SystemFonts::default());
+        assert_eq!(
+            fonts.families[&subtitle_family()],
+            fonts.families[&egui::FontFamily::Proportional]
+        );
     }
 
     #[test]

@@ -108,6 +108,9 @@ pub struct SubtitleStyle {
 }
 
 impl SubtitleStyle {
+    /// The family a style with no font of its own is set in: mpv's default,
+    /// which fontconfig resolves to the system's sans-serif face.
+    pub const DEFAULT_FONT: &str = "sans-serif";
     pub const MIN_SCALE: f64 = 0.5;
     pub const MAX_SCALE: f64 = 2.5;
     pub const MAX_OUTLINE: f64 = 10.0;

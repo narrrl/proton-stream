@@ -639,7 +639,7 @@ pub fn subtitle_options(style: &SubtitleStyle) -> Vec<(&'static str, String)> {
             style
                 .font
                 .clone()
-                .unwrap_or_else(|| "sans-serif".to_owned()),
+                .unwrap_or_else(|| SubtitleStyle::DEFAULT_FONT.to_owned()),
         ),
         ("sub-bold", flag(style.bold)),
         ("sub-italic", flag(style.italic)),

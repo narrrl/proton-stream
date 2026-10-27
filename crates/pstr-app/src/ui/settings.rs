@@ -463,7 +463,11 @@ fn subtitle_form(ui: &mut egui::Ui, style: &SubtitleStyle, actions: &mut Vec<Act
             ui::widgets::settings_row(
                 ui,
                 "Font",
-                Some("Any font installed here. The sample above is drawn in the app's own font."),
+                Some(if cfg!(target_os = "linux") {
+                    "Any font installed here."
+                } else {
+                    "Any font installed here. The sample above is drawn in the app's own font."
+                }),
                 |ui| {
                     ui::widgets::toggle(ui, &mut chosen.italic, "Italic");
                     ui::widgets::toggle(ui, &mut chosen.bold, "Bold");
@@ -662,9 +666,11 @@ fn font_picker(ui: &mut egui::Ui, font: &mut Option<String>) {
 /// A sample line, half on a bright sky and half on night, drawn in the
 /// chosen style — so whether it reads on both is visible before a film is.
 ///
-/// An approximation: the app's own font rather than the chosen one, egui's
-/// slant for italic, and no blur. Proportions follow mpv's, where sizes are
-/// in pixels of a 38-pixel font.
+/// An approximation. The font is the face fontconfig picks for the chosen one,
+/// as libass's is, but only on Linux; elsewhere, and while it loads, it is the
+/// app's own. A bold or italic the face lacks is made up, as libass does, and
+/// there is no blur. Proportions follow mpv's, where sizes are in pixels of a
+/// 38-pixel font.
 fn subtitle_preview(ui: &mut egui::Ui, style: &SubtitleStyle) {
     const HEIGHT: f32 = 132.0;
     /// mpv's `sub-font-size`, the unit every other size is relative to.
@@ -694,17 +700,27 @@ fn subtitle_preview(ui: &mut egui::Ui, style: &SubtitleStyle) {
 
     let font_px = 22.0 * style.scale as f32;
     let unit = font_px / MPV_FONT;
-    let family = if style.bold {
-        theme::semibold()
-    } else {
-        egui::FontFamily::Proportional
+    let face = theme::subtitle_face(
+        ui.ctx(),
+        style.font.as_deref().unwrap_or(SubtitleStyle::DEFAULT_FONT),
+        style.bold,
+        style.italic,
+    );
+    let (family, made_up_bold, made_up_italic) = match face {
+        Some(face) => (
+            theme::subtitle_family(),
+            style.bold && !face.bold,
+            style.italic && !face.italic,
+        ),
+        None if style.bold => (theme::semibold(), false, style.italic),
+        None => (egui::FontFamily::Proportional, false, style.italic),
     };
     let job = egui::text::LayoutJob::single_section(
         "Can you read this on both sides?".to_owned(),
         egui::TextFormat {
             font_id: egui::FontId::new(font_px, family),
             color: egui::Color32::PLACEHOLDER,
-            italics: style.italic,
+            italics: made_up_italic,
             ..Default::default()
         },
     );
@@ -762,6 +778,15 @@ fn subtitle_preview(ui: &mut egui::Ui, style: &SubtitleStyle) {
                 rings(egui::Vec2::ZERO, colour(style.outline_colour));
             }
         }
+    }
+    if made_up_bold {
+        // libass thickens a face with no bold by a stroke of its own colour.
+        let thicken = (font_px / 40.0).max(0.5);
+        painter.galley_with_override_text_color(
+            at + egui::vec2(thicken, 0.0),
+            galley.clone(),
+            colour(style.colour),
+        );
     }
     painter.galley_with_override_text_color(at, galley, colour(style.colour));
 }
