@@ -49,6 +49,7 @@ pub use chapters::{Chapter, ChapterRole, chapter_at, chapter_end, credits_start,
 pub use error::{Error, Result};
 pub use player::{
     EndReason, MAX_VOLUME, Player, PlayerConfig, PlayerEvent, READAHEAD_BLOCKS, VideoOutput,
+    subtitle_options,
 };
 pub use registry::{PROTOCOL, StreamHandle, StreamRegistry};
 pub use render::VideoRenderer;

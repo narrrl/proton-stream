@@ -7,7 +7,9 @@
 
 use pstr_core::appearance::{Accent, Appearance, Flavor, Tiles};
 use pstr_core::metadata::{MetadataConfig, ProviderId, TitleNames};
-use pstr_core::prefs::PlaybackPrefs;
+use pstr_core::prefs::{
+    PlaybackPrefs, SubtitleBackdrop, SubtitleColour, SubtitleSize, SubtitleStyle,
+};
 use pstr_player::LANGUAGES;
 
 use crate::app::Action;
@@ -315,6 +317,7 @@ fn playback_form(ui: &mut egui::Ui, prefs: Prefs<'_>, actions: &mut Vec<Action>)
         ),
         |ui| {
             languages(ui, prefs.playback, actions);
+            subtitle_style(ui, prefs.playback.subtitle_style, actions);
             let mut autoplay = prefs.autoplay;
             ui::widgets::settings_row(
                 ui,
@@ -426,6 +429,52 @@ fn languages(ui: &mut egui::Ui, playback: &PlaybackPrefs, actions: &mut Vec<Acti
                 });
         },
     );
+}
+
+/// How plain subtitles are drawn. A styled track keeps its own look apart
+/// from the size; see [`pstr_core::prefs::SubtitleStyle`].
+fn subtitle_style(ui: &mut egui::Ui, style: SubtitleStyle, actions: &mut Vec<Action>) {
+    let mut chosen = style;
+    ui::widgets::settings_row(
+        ui,
+        "Subtitle size",
+        Some("Styled subtitles are scaled too. From the next file."),
+        |ui| {
+            egui::ComboBox::from_id_salt("subtitle-size")
+                .selected_text(chosen.size.label())
+                .show_ui(ui, |ui| {
+                    for size in SubtitleSize::ALL {
+                        ui.selectable_value(&mut chosen.size, size, size.label());
+                    }
+                });
+        },
+    );
+    ui::widgets::settings_row(
+        ui,
+        "Subtitle background",
+        Some("A box reads on bright scenes. Plain subtitles only; styled ones keep their own."),
+        |ui| {
+            egui::ComboBox::from_id_salt("subtitle-backdrop")
+                .selected_text(chosen.backdrop.label())
+                .show_ui(ui, |ui| {
+                    for backdrop in SubtitleBackdrop::ALL {
+                        ui.selectable_value(&mut chosen.backdrop, backdrop, backdrop.label());
+                    }
+                });
+        },
+    );
+    ui::widgets::settings_row(ui, "Subtitle colour", Some("Plain subtitles only."), |ui| {
+        egui::ComboBox::from_id_salt("subtitle-colour")
+            .selected_text(chosen.colour.label())
+            .show_ui(ui, |ui| {
+                for colour in SubtitleColour::ALL {
+                    ui.selectable_value(&mut chosen.colour, colour, colour.label());
+                }
+            });
+    });
+    if chosen != style {
+        actions.push(Action::SetSubtitleStyle(chosen));
+    }
 }
 
 /// The streaming cache: how big it may get, and a way to empty it.

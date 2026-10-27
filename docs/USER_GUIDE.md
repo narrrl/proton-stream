@@ -182,6 +182,9 @@ The **Proton account** section on this page is where you sign in. See
 **Playback**
 
 - **Audio language** and **Subtitles:** the language to start in, or the file's own default.
+- **Subtitle size**, **Subtitle background** and **Subtitle colour:** how plain subtitles (SRT)
+  look. Choose **Dark box** if text is hard to read on bright scenes. Styled subtitles (ASS) keep
+  their own look and only change size. These apply from the next file.
 - **Play the next episode** (on by default) and **Skip openings and credits** (off).
 - **Hardware decoding** (on). Turn it off if the picture shows green blocks or stays black.
 

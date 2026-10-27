@@ -60,6 +60,100 @@ pub struct PlaybackPrefs {
     /// everything at 1.25, and a speed that reset every episode would be a
     /// setting nobody could use.
     pub speed: f64,
+    /// How plain subtitles look. Kept with the rest because it is the same
+    /// kind of choice: made once, for every file after.
+    pub subtitle_style: SubtitleStyle,
+}
+
+/// How plain-text subtitles are drawn.
+///
+/// Plain only, except for the size: an SRT track has no look of its own and
+/// gets mpv's, which is thin white text that a bright scene swallows. A styled
+/// (ASS) track was typeset by somebody, its signs placed and coloured by hand,
+/// and repainting it in one colour on one box undoes that work — so the
+/// backdrop and colour leave it alone, and only the scale reaches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SubtitleStyle {
+    pub size: SubtitleSize,
+    pub backdrop: SubtitleBackdrop,
+    pub colour: SubtitleColour,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubtitleSize {
+    Small,
+    #[default]
+    Normal,
+    Large,
+    Larger,
+}
+
+impl SubtitleSize {
+    pub const ALL: [Self; 4] = [Self::Small, Self::Normal, Self::Large, Self::Larger];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Normal => "Normal",
+            Self::Large => "Large",
+            Self::Larger => "Larger",
+        }
+    }
+
+    /// Relative to mpv's own size, which is itself relative to the video's
+    /// height — so one setting reads the same on a phone and a television.
+    pub fn scale(self) -> f64 {
+        match self {
+            Self::Small => 0.8,
+            Self::Normal => 1.0,
+            Self::Large => 1.25,
+            Self::Larger => 1.5,
+        }
+    }
+}
+
+/// What keeps the text readable against the picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubtitleBackdrop {
+    /// A dark outline round each letter: mpv's own, and the default.
+    #[default]
+    Outline,
+    /// A dark, part-transparent box behind each line. Uglier, and the only
+    /// thing that holds up on snow, sky and white walls.
+    Box,
+}
+
+impl SubtitleBackdrop {
+    pub const ALL: [Self; 2] = [Self::Outline, Self::Box];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Outline => "Outline",
+            Self::Box => "Dark box",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubtitleColour {
+    #[default]
+    White,
+    Yellow,
+}
+
+impl SubtitleColour {
+    pub const ALL: [Self; 2] = [Self::White, Self::Yellow];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::White => "White",
+            Self::Yellow => "Yellow",
+        }
+    }
 }
 
 impl Default for PlaybackPrefs {
@@ -73,6 +167,7 @@ impl Default for PlaybackPrefs {
             autoplay_next: true,
             auto_skip: false,
             speed: 1.0,
+            subtitle_style: SubtitleStyle::default(),
         }
     }
 }
@@ -149,11 +244,24 @@ mod tests {
             autoplay_next: false,
             auto_skip: true,
             speed: 1.5,
+            subtitle_style: SubtitleStyle {
+                size: SubtitleSize::Larger,
+                backdrop: SubtitleBackdrop::Box,
+                colour: SubtitleColour::Yellow,
+            },
         };
         save(&dirs, &prefs).unwrap();
         assert_eq!(load(&dirs).unwrap(), prefs);
 
         std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn a_file_from_before_subtitle_styles_loads_with_the_default_style() {
+        let prefs: PlaybackPrefs =
+            serde_json::from_str(r#"{"volume": 60.0, "subtitles": true, "speed": 1.0}"#).unwrap();
+        assert_eq!(prefs.subtitle_style, SubtitleStyle::default());
+        assert_eq!(prefs.volume, 60.0);
     }
 
     #[test]

@@ -21,6 +21,12 @@ the blocks around the point you are watching. A seek fetches the block it lands 
 No. The video plays as it is stored, through libmpv. HEVC 10-bit, HDR and ASS subtitles all work,
 with hardware decoding where the device has it.
 
+## Subtitles are hard to read. Can I change them?
+
+Yes, for plain subtitles (SRT). In **Settings → Playback**, set **Subtitle size**, **Subtitle
+background** and **Subtitle colour**. A **Dark box** background is easiest to read on bright
+scenes. Styled subtitles (ASS) keep the look their makers gave them and change only in size.
+
 ## Does it provide any videos?
 
 No. It plays what you keep in Proton Drive or what someone shares with you. It has no catalogue,

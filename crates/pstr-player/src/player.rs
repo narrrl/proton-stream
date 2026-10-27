@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use libmpv2::events::{Event, PropertyData};
 use libmpv2::{Format, Mpv};
+use pstr_core::prefs::{SubtitleBackdrop, SubtitleColour, SubtitleStyle};
 use pstr_stream::VideoStream;
 use tokio::runtime::Runtime;
 
@@ -181,6 +182,8 @@ pub struct PlayerConfig {
     /// Whether subtitles are shown at all. Off is a choice a viewer makes once
     /// and expects to keep, and no language preference can express it.
     pub subtitles: bool,
+    /// How plain subtitles look. See [`subtitle_options`].
+    pub subtitle_style: SubtitleStyle,
     /// Raw mpv options, applied last, so anything here wins.
     pub options: Vec<(String, String)>,
 }
@@ -206,6 +209,7 @@ impl Default for PlayerConfig {
             audio_language: None,
             subtitle_language: None,
             subtitles: true,
+            subtitle_style: SubtitleStyle::default(),
             options: Vec::new(),
         }
     }
@@ -292,6 +296,17 @@ impl Player {
             }
             if !config.subtitles {
                 init.set_property("sid", "no")?;
+            }
+            // Best effort: `sub-border-style` is mpv 0.38's, and an older
+            // libmpv refusing it must cost the box, not the whole player. The
+            // first refusal ends the run, because what follows it only makes
+            // sense on top of it: a box's colour on a plain outline is a fat
+            // grey smear.
+            for (name, value) in subtitle_options(&config.subtitle_style) {
+                if let Err(error) = init.set_property(name, value.as_str()) {
+                    tracing::warn!("subtitle style {name}={value}: {error}");
+                    break;
+                }
             }
             for (name, value) in &config.options {
                 init.set_property(name.as_str(), value.as_str())?;
@@ -593,6 +608,32 @@ impl Player {
     }
 }
 
+/// The mpv options that draw `style`.
+///
+/// Leaves `sub-ass-override` at mpv's default, `scale`: a styled track takes
+/// the size and keeps its own fonts, colours and placement. See
+/// [`SubtitleStyle`] for why.
+pub fn subtitle_options(style: &SubtitleStyle) -> Vec<(&'static str, String)> {
+    let mut options = vec![("sub-scale", format!("{:.2}", style.size.scale()))];
+    match style.colour {
+        // mpv's own default; stated so a live change back from yellow lands.
+        SubtitleColour::White => options.push(("sub-color", "#FFFFFFFF".into())),
+        SubtitleColour::Yellow => options.push(("sub-color", "#FFFFE600".into())),
+    }
+    if style.backdrop == SubtitleBackdrop::Box {
+        // `opaque-box` draws the outline as a box hugging each line, so the
+        // outline's colour and size become the box's colour and margin.
+        // Ordered so the style comes first: see the caller.
+        options.extend([
+            ("sub-border-style", "opaque-box".into()),
+            // ARGB: about seventy percent black.
+            ("sub-outline-color", "#B0000000".into()),
+            ("sub-outline-size", "6".into()),
+        ]);
+    }
+    options
+}
+
 /// mpv's borrowed event to ours.
 fn translate(event: Event<'_>) -> PlayerEvent {
     match event {
@@ -619,6 +660,47 @@ fn translate(event: Event<'_>) -> PlayerEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_subtitle_style_changes_nothing_mpv_would_not_do_anyway() {
+        let options = subtitle_options(&SubtitleStyle::default());
+        assert_eq!(
+            options,
+            vec![
+                ("sub-scale", "1.00".to_string()),
+                ("sub-color", "#FFFFFFFF".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_boxed_subtitle_style_turns_the_outline_into_a_box() {
+        let style = SubtitleStyle {
+            size: pstr_core::prefs::SubtitleSize::Larger,
+            backdrop: SubtitleBackdrop::Box,
+            colour: SubtitleColour::Yellow,
+        };
+        let options = subtitle_options(&style);
+        let value = |name: &str| {
+            options
+                .iter()
+                .find(|(option, _)| *option == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("sub-scale"), Some("1.50"));
+        assert_eq!(value("sub-color"), Some("#FFFFE600"));
+        assert_eq!(value("sub-border-style"), Some("opaque-box"));
+        assert_eq!(value("sub-outline-color"), Some("#B0000000"));
+        assert_eq!(
+            options[2].0, "sub-border-style",
+            "the style before what depends on it"
+        );
+        assert_eq!(
+            value("sub-ass-override"),
+            None,
+            "a styled track keeps its own look"
+        );
+    }
 
     #[test]
     fn every_end_reason_maps_to_something_the_ui_can_act_on() {

@@ -1909,7 +1909,11 @@ impl AndroidEngine {
     pub fn set_playback_prefs(&self, prefs: PlaybackPrefsRecord) -> Result<(), BridgeError> {
         // Sanitized rather than trusted: the volume arrives from a slider, and
         // a language from a text field that can hold spaces and nothing else.
-        let prefs = playback_prefs(prefs).sanitized();
+        // Onto what is stored, not the defaults: the record has no subtitle
+        // style yet, and saving one without it would reset the desktop's and,
+        // through sync, every other installation's.
+        let stored = pstr_core::prefs::load(&self.dirs).unwrap_or_default();
+        let prefs = playback_prefs(prefs, stored).sanitized();
         pstr_core::prefs::save(&self.dirs, &prefs).map_err(BridgeError::from_display)
     }
 
@@ -3580,7 +3584,7 @@ fn playback_prefs_record(prefs: PlaybackPrefs) -> PlaybackPrefsRecord {
     }
 }
 
-fn playback_prefs(record: PlaybackPrefsRecord) -> PlaybackPrefs {
+fn playback_prefs(record: PlaybackPrefsRecord, stored: PlaybackPrefs) -> PlaybackPrefs {
     PlaybackPrefs {
         volume: record.volume,
         muted: record.muted,
@@ -3590,6 +3594,7 @@ fn playback_prefs(record: PlaybackPrefsRecord) -> PlaybackPrefs {
         autoplay_next: record.autoplay_next,
         auto_skip: record.auto_skip,
         speed: record.speed,
+        ..stored
     }
 }
 

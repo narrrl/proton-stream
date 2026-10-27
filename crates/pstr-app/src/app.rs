@@ -235,6 +235,8 @@ pub enum Action {
         subtitles: bool,
         subtitle: Option<String>,
     },
+    /// How plain subtitles look, from the next file.
+    SetSubtitleStyle(pstr_core::prefs::SubtitleStyle),
     /// Play faster or slower, and keep doing so for the next file.
     SetSpeed(f64),
     /// Seek past openings and credits without being asked.
@@ -1936,6 +1938,11 @@ impl App {
                 prefs.audio_language = audio;
                 prefs.subtitles = subtitles;
                 prefs.subtitle_language = subtitle;
+                self.engine.set_playback_prefs(prefs, true);
+            }
+            Action::SetSubtitleStyle(style) => {
+                let mut prefs = self.engine.playback_prefs();
+                prefs.subtitle_style = style;
                 self.engine.set_playback_prefs(prefs, true);
             }
             Action::SetAppearance(appearance) => {

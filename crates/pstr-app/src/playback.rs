@@ -494,6 +494,7 @@ fn from_prefs(
             .and_then(|p| p.subtitle_language.clone())
             .or_else(|| prefs.subtitle_language.clone()),
         subtitles: show.map(|p| p.subtitles).unwrap_or(prefs.subtitles),
+        subtitle_style: prefs.subtitle_style,
         // Carried from file to file, like the volume: somebody who watches at
         // 1.25 watches the next episode at 1.25 too.
         options: vec![("speed".into(), format!("{:.2}", prefs.speed))],
