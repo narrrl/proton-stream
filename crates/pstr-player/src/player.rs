@@ -619,21 +619,19 @@ const BORDER_STYLE: &str = "sub-border-style";
 /// The mpv options that draw `style`, every one of them every time, so that
 /// changing a value back to its default while playing lands too.
 ///
-/// `sub-ass-override` is `scale` unless the viewer asked otherwise: a styled
-/// track then takes the size and keeps its own fonts, colours and placement.
-/// `force` repaints it whole. See [`SubtitleStyle`] for why that is opt-in.
+/// `sub-ass-override` is `yes` unless the viewer asked otherwise, so a styled
+/// track keeps its own size, fonts and colours. Not mpv's default, `scale`,
+/// which hands it `sub-scale` as well. `force` repaints it whole. See
+/// [`SubtitleStyle`] for why that is opt-in. `sub-pos` reaches a styled track
+/// under `yes` too, so where a styled track sits is the caller's to decide:
+/// see `pstr-app`'s `Playback::lift_subtitles`.
 /// The border options come last, led by [`BORDER_STYLE`].
 pub fn subtitle_options(style: &SubtitleStyle) -> Vec<(&'static str, String)> {
     let flag = |on: bool| if on { "yes" } else { "no" }.to_owned();
     let mut options = vec![
         (
             "sub-ass-override",
-            if style.restyle_styled {
-                "force"
-            } else {
-                "scale"
-            }
-            .to_owned(),
+            if style.restyle_styled { "force" } else { "yes" }.to_owned(),
         ),
         ("sub-scale", format!("{:.2}", style.scale)),
         (
@@ -723,9 +721,10 @@ mod tests {
     #[test]
     fn the_default_subtitle_style_is_what_mpv_would_do_anyway() {
         let options = subtitle_options(&SubtitleStyle::default());
-        // mpv 0.41's own defaults, from `mpv --list-options`.
+        // mpv 0.41's own defaults, from `mpv --list-options` — all but
+        // `sub-ass-override`, which mpv has at `scale`.
         for (name, value) in [
-            ("sub-ass-override", "scale"),
+            ("sub-ass-override", "yes"),
             ("sub-scale", "1.00"),
             ("sub-font", "sans-serif"),
             ("sub-bold", "no"),
@@ -756,9 +755,14 @@ mod tests {
     }
 
     #[test]
-    fn styled_subtitles_are_repainted_only_when_asked() {
-        let kept = subtitle_options(&SubtitleStyle::default());
-        assert_eq!(option(&kept, "sub-ass-override"), Some("scale"));
+    fn styled_subtitles_are_repainted_or_resized_only_when_asked() {
+        // `scale` would hand a styled track the size; `yes` hands it nothing
+        // but the `sub-ass-*` options, none of which this sets.
+        let kept = subtitle_options(&SubtitleStyle {
+            scale: 1.5,
+            ..SubtitleStyle::default()
+        });
+        assert_eq!(option(&kept, "sub-ass-override"), Some("yes"));
         let repainted = subtitle_options(&SubtitleStyle {
             restyle_styled: true,
             ..SubtitleStyle::default()

@@ -432,14 +432,14 @@ fn languages(ui: &mut egui::Ui, playback: &PlaybackPrefs, actions: &mut Vec<Acti
 /// How subtitles look, with a sample line to judge it by.
 ///
 /// Every change reaches a playing file as it is made, so the film itself is
-/// the other preview. A styled track takes only the size and the position
-/// unless it is asked to take the rest; see [`SubtitleStyle`].
+/// the other preview. A styled track takes none of it unless it is asked to;
+/// see [`SubtitleStyle`].
 fn subtitle_form(ui: &mut egui::Ui, style: &SubtitleStyle, actions: &mut Vec<Action>) {
     ui::widgets::settings_group(
         ui,
         "Subtitles",
         Some(
-            "Changes show on the playing video straight away. Plain subtitles (SRT) take all of this; styled ones (ASS) only the size and the position, unless you restyle them below.",
+            "Changes show on the playing video straight away. Plain subtitles (SRT) take all of this; styled ones (ASS) keep their own look unless you restyle them below.",
         ),
         |ui| {
             let mut chosen = style.clone();
@@ -532,7 +532,7 @@ fn subtitle_form(ui: &mut egui::Ui, style: &SubtitleStyle, actions: &mut Vec<Act
                 ui,
                 "Restyle styled subtitles",
                 Some(
-                    "Repaint styled (ASS) dialogue in this style too. Signs, songs and karaoke can come out wrong.",
+                    "Draw styled (ASS) dialogue in this style too, size and position included. Signs, songs and karaoke can come out wrong.",
                 ),
                 |ui| {
                     ui::widgets::toggle(ui, &mut chosen.restyle_styled, "");

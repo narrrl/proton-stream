@@ -25,8 +25,8 @@ with hardware decoding where the device has it.
 
 Yes. In **Settings → Subtitles** you can set the size, position, font, colours, outline, box,
 shadow and blur. A **Box** background is easiest to read on bright scenes. Styled subtitles (ASS)
-keep the look their makers gave them and take only the size and position, unless you turn on
-**Restyle styled subtitles**.
+keep the look, size and place their makers gave them, unless you turn on **Restyle styled
+subtitles**.
 
 ## The subtitles are early or late.
 

@@ -86,7 +86,8 @@ The picture plays inside the app's window. Move the mouse to show the controls.
   **Play now**, **Cancel** or **Watch till the end**.
 - **Subtitles and audio** are chosen from the buttons at the bottom right. The app remembers your
   choice for each show. The subtitle menu also has **Size** and **Position**, which are saved like
-  the ones in Settings, and **Delay**, which moves subtitles earlier or later for this file only.
+  the ones in Settings and change styled subtitles only when they are restyled, and **Delay**,
+  which moves subtitles earlier or later for this file only.
 - **Speed** goes from 0.5× to 3×, and stays for the next episode.
 
 ### Keyboard
@@ -202,8 +203,9 @@ a video that is playing changes at once.
   read on bright scenes.
 - **Shadow** and **Blur**.
 - **Restyle styled subtitles** (off). Plain subtitles (SRT) always take the whole style. Styled
-  subtitles (ASS) keep the look their makers gave them and take only the size and position,
-  unless this is on. Turned on, signs and songs can come out wrong.
+  subtitles (ASS) keep the look, size and place their makers gave them unless this is on; they
+  only move up while the player's controls are showing. Turned on, signs and songs can come out
+  wrong.
 - **Reset** goes back to the default look.
 
 **Storage**

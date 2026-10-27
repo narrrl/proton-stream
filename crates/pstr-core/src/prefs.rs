@@ -70,8 +70,9 @@ pub struct PlaybackPrefs {
 /// Every default is mpv's own, so a viewer who never opens the section sees
 /// what any mpv shows. Plain (SRT) tracks take all of it. A styled (ASS) track
 /// was typeset by somebody, its signs placed and coloured by hand, and painting
-/// over that undoes the work — so by default it takes only the size and the
-/// position, and the rest reaches it only with [`Self::restyle_styled`].
+/// over that undoes the work — so by default it takes none of this, and moves
+/// only to stay clear of the player's controls. All of it reaches a styled
+/// track only with [`Self::restyle_styled`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SubtitleStyle {
@@ -100,8 +101,9 @@ pub struct SubtitleStyle {
     /// Where the line sits, as a percentage of the picture's height from the
     /// top: 100 is the bottom edge, mpv's usual place.
     pub position: f64,
-    /// Whether styled (ASS) tracks are repainted in this style too. Off by
-    /// default: it turns signs and karaoke into dialogue-looking text.
+    /// Whether styled (ASS) tracks are drawn in this style too, size and
+    /// position included. Off by default: it turns signs and karaoke into
+    /// dialogue-looking text.
     pub restyle_styled: bool,
 }
 

@@ -302,6 +302,11 @@ impl Playback {
         } else {
             100.0
         };
+        self.place_subtitles();
+    }
+
+    /// Move subtitles to [`Self::subtitle_position`], when that has changed.
+    fn place_subtitles(&mut self) {
         let position = self.subtitle_position();
         if position != self.subtitle_position {
             self.subtitle_position = position;
@@ -311,8 +316,21 @@ impl Playback {
 
     /// Where subtitles go: where the style puts them, unless the controls
     /// would cover that, in which case just above the controls.
+    ///
+    /// A styled track ignores the style's position unless it is restyled:
+    /// mpv applies `sub-pos` to it either way, and its signs were placed by
+    /// hand. The lift still applies, because a line under the seek bar cannot
+    /// be read however carefully it was placed.
     fn subtitle_position(&self) -> f64 {
-        self.subtitle_style.position.min(self.lifted_position)
+        let styled = self
+            .selected_track(TrackKind::Subtitle)
+            .is_some_and(|track| is_styled(track.codec.as_deref()));
+        let position = if styled && !self.subtitle_style.restyle_styled {
+            100.0
+        } else {
+            self.subtitle_style.position
+        };
+        position.min(self.lifted_position)
     }
 
     /// Restyle the subtitles of this file, now.
@@ -409,7 +427,11 @@ impl Playback {
             PlayerEvent::FileLoaded => self.loaded = true,
             PlayerEvent::Volume(volume) => self.volume = *volume,
             PlayerEvent::Muted(muted) => self.muted = *muted,
-            PlayerEvent::Tracks(tracks) => self.tracks = tracks.clone(),
+            PlayerEvent::Tracks(tracks) => {
+                self.tracks = tracks.clone();
+                // A switch between a plain and a styled track moves the line.
+                self.place_subtitles();
+            }
             PlayerEvent::Chapters(chapters) => {
                 self.chapters = chapters.clone();
                 self.reclassify();
@@ -514,6 +536,11 @@ fn build_player(
     let player = Player::new(engine.runtime().clone(), config)
         .map_err(|error| format!("start mpv: {error}"))?;
     Ok((Arc::new(player), None))
+}
+
+/// Whether a subtitle codec carries its own styling, as mpv names them.
+fn is_styled(codec: Option<&str>) -> bool {
+    matches!(codec, Some("ass" | "ssa"))
 }
 
 /// The player defaults with the viewer's preferences folded in.
@@ -862,4 +889,18 @@ fn save(
         target.link_id.clone(),
         watch_state(position, duration, watched),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_ass_and_ssa_tracks_count_as_styled() {
+        assert!(is_styled(Some("ass")));
+        assert!(is_styled(Some("ssa")));
+        assert!(!is_styled(Some("subrip")));
+        assert!(!is_styled(Some("hdmv_pgs_subtitle")));
+        assert!(!is_styled(None));
+    }
 }
