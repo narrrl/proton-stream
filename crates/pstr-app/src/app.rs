@@ -235,8 +235,14 @@ pub enum Action {
         subtitles: bool,
         subtitle: Option<String>,
     },
-    /// How plain subtitles look, from the next file.
+    /// How subtitles look, for the file playing and every one after. Written
+    /// to the preferences once the mouse is let go; see
+    /// [`App::save_subtitle_style`].
     SetSubtitleStyle(pstr_core::prefs::SubtitleStyle),
+    /// Shift the playing file's subtitles by this many seconds more.
+    NudgeSubtitleDelay(f64),
+    /// Put the playing file's subtitles back on the file's own timing.
+    ResetSubtitleDelay,
     /// Play faster or slower, and keep doing so for the next file.
     SetSpeed(f64),
     /// Seek past openings and credits without being asked.
@@ -656,6 +662,8 @@ pub struct App {
     /// Chapters already skipped on their own in this player, so seeking back
     /// into an opening on purpose is not undone a frame later.
     auto_skipped: (u64, Vec<i64>),
+    /// The subtitle style changed and has not been written yet.
+    subtitle_style_unsaved: bool,
     /// Whether the episode list is out on the player page.
     pub episode_drawer: bool,
     /// Set while the window is fullscreen, so `F` can toggle rather than only
@@ -762,6 +770,7 @@ impl App {
             up_next: UpNext::default(),
             warmed: 0,
             auto_skipped: (0, Vec::new()),
+            subtitle_style_unsaved: false,
             fullscreen: false,
             episode_drawer: false,
             opening: None,
@@ -1439,6 +1448,21 @@ impl App {
         self.apply(ctx, Action::Play(target));
     }
 
+    /// Write the subtitle style, once whatever is changing it has let go.
+    ///
+    /// A slider or a colour wheel changes the style every frame it is dragged,
+    /// and each change is shown on the playing file straight away. Writing
+    /// each one would be a file write per frame, so it waits for the mouse —
+    /// which also covers a menu closed mid-drag, where the control that would
+    /// have said "released" is no longer drawn.
+    fn save_subtitle_style(&mut self, ctx: &egui::Context) {
+        if self.subtitle_style_unsaved && !ctx.input(|input| input.pointer.any_down()) {
+            self.subtitle_style_unsaved = false;
+            self.engine
+                .set_playback_prefs(self.engine.playback_prefs(), true);
+        }
+    }
+
     fn send_player(&self, command: crate::playback::Command) {
         if let Some(playback) = &self.playback {
             playback.send(command);
@@ -1943,7 +1967,28 @@ impl App {
             Action::SetSubtitleStyle(style) => {
                 let mut prefs = self.engine.playback_prefs();
                 prefs.subtitle_style = style;
-                self.engine.set_playback_prefs(prefs, true);
+                self.engine.set_playback_prefs(prefs, false);
+                self.subtitle_style_unsaved = true;
+                let style = self.engine.playback_prefs().subtitle_style;
+                if let Some(playback) = &mut self.playback {
+                    playback.restyle_subtitles(&style);
+                }
+            }
+            Action::NudgeSubtitleDelay(delta) => {
+                if let Some(playback) = &mut self.playback {
+                    playback.set_subtitle_delay(playback.subtitle_delay + delta);
+                    let text = format!(
+                        "Subtitle delay {}",
+                        ui::format_delay(playback.subtitle_delay)
+                    );
+                    self.flash(ctx, text);
+                }
+            }
+            Action::ResetSubtitleDelay => {
+                if let Some(playback) = &mut self.playback {
+                    playback.set_subtitle_delay(0.0);
+                    self.flash(ctx, "Subtitle delay 0 s");
+                }
             }
             Action::SetAppearance(appearance) => {
                 self.engine.set_appearance(appearance);
@@ -2136,6 +2181,7 @@ impl eframe::App for App {
         }
         self.warm_next();
         self.auto_skip(ctx);
+        self.save_subtitle_style(ctx);
         self.window.observe(ctx);
 
         let mut actions: Vec<Action> = Vec::new();
@@ -2916,6 +2962,8 @@ fn shortcuts(
             Key::OpenBracket,
             Key::CloseBracket,
             Key::E,
+            Key::Z,
+            Key::X,
             Key::Escape,
         ]
         .into_iter()
@@ -2959,6 +3007,9 @@ fn shortcuts(
             // Escape leaves fullscreen first and the page second, which is what
             // it does everywhere else and what stops one press from both
             // un-maximising the window and hiding the film.
+            // mpv's own keys for it, and the step mpv uses.
+            Key::Z => actions.push(Action::NudgeSubtitleDelay(-0.1)),
+            Key::X => actions.push(Action::NudgeSubtitleDelay(0.1)),
             Key::E => actions.push(Action::ToggleEpisodes),
             // The episode list is the innermost thing open, so it goes first.
             Key::Escape if drawer => actions.push(Action::ToggleEpisodes),

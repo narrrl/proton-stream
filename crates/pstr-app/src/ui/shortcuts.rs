@@ -36,6 +36,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("N  /  P", "Next and previous episode"),
             ("[  /  ]", "Slower and faster"),
             ("S", "Skip the opening or the credits"),
+            ("Z  /  X", "Subtitles 0.1 s earlier and later"),
             ("E", "The list of episodes"),
             ("F  or  double-click", "Fullscreen"),
             ("Esc", "Leave fullscreen, then the player"),

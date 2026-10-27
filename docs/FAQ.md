@@ -23,9 +23,15 @@ with hardware decoding where the device has it.
 
 ## Subtitles are hard to read. Can I change them?
 
-Yes, for plain subtitles (SRT). In **Settings → Playback**, set **Subtitle size**, **Subtitle
-background** and **Subtitle colour**. A **Dark box** background is easiest to read on bright
-scenes. Styled subtitles (ASS) keep the look their makers gave them and change only in size.
+Yes. In **Settings → Subtitles** you can set the size, position, font, colours, outline, box,
+shadow and blur. A **Box** background is easiest to read on bright scenes. Styled subtitles (ASS)
+keep the look their makers gave them and take only the size and position, unless you turn on
+**Restyle styled subtitles**.
+
+## The subtitles are early or late.
+
+Press **Z** to show them 0.1 s earlier and **X** to show them later, or use **Delay** in the
+player's subtitle menu. The delay holds for the file you are watching only.
 
 ## Does it provide any videos?
 

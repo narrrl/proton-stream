@@ -316,6 +316,68 @@ fn system_cjk_font() -> Option<(std::path::PathBuf, u32)> {
     None
 }
 
+/// The font families installed here, by name, for the subtitle font picker.
+///
+/// `None` until they have been read. The first call starts that on a thread
+/// of its own and asks for a repaint when it is done: `fc-list` over a large
+/// font collection takes long enough to be seen as a stalled frame.
+pub fn font_families(ctx: &egui::Context) -> Option<&'static [String]> {
+    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if let Some(families) = FAMILIES.get() {
+        return Some(families);
+    }
+    if !STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("font-families".into())
+            .spawn(move || {
+                let _ = FAMILIES.set(system_font_families());
+                ctx.request_repaint();
+            });
+        if let Err(error) = spawned {
+            tracing::debug!("font families thread: {error}");
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn system_font_families() -> Vec<String> {
+    let Ok(output) = std::process::Command::new("fc-list")
+        .args([":", "family"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    font_families_from_fc_list(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Elsewhere the picker takes a typed name only. mpv's font lookup there is
+/// the system's own, so any installed family's name works.
+#[cfg(not(target_os = "linux"))]
+fn system_font_families() -> Vec<String> {
+    Vec::new()
+}
+
+/// One family per line of `fc-list : family`, sorted and without repeats.
+///
+/// A line lists a family's names in every language it has, comma-separated,
+/// and one family appears once per style. The first name is the one libass
+/// matches on.
+#[cfg(any(target_os = "linux", test))]
+fn font_families_from_fc_list(listing: &str) -> Vec<String> {
+    let mut families: Vec<String> = listing
+        .lines()
+        .filter_map(|line| line.split(',').next())
+        .map(|family| family.trim().to_owned())
+        .filter(|family| !family.is_empty() && !family.starts_with('.'))
+        .collect();
+    families.sort_by_key(|family| family.to_lowercase());
+    families.dedup();
+    families
+}
+
 /// Every colour the app draws with, as egui wants them.
 ///
 /// The *choice* of colours is `pstr_core::appearance` — one resolution shared
@@ -880,6 +942,15 @@ const RAMP_STOPS: usize = 64;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_font_family_is_listed_once_by_its_first_name() {
+        let listing = "Noto Sans,Noto Sans Regular\nDejaVu Sans\nnoto sans mono\nNoto Sans,Noto Sans Bold\n\n.LastResort\n";
+        assert_eq!(
+            font_families_from_fc_list(listing),
+            ["DejaVu Sans", "Noto Sans", "noto sans mono"]
+        );
+    }
 
     #[test]
     fn a_variable_fonts_named_instance_is_not_taken_for_a_face() {

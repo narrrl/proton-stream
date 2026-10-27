@@ -65,51 +65,107 @@ pub struct PlaybackPrefs {
     pub subtitle_style: SubtitleStyle,
 }
 
-/// How plain-text subtitles are drawn.
+/// How subtitles are drawn.
 ///
-/// Plain only, except for the size: an SRT track has no look of its own and
-/// gets mpv's, which is thin white text that a bright scene swallows. A styled
-/// (ASS) track was typeset by somebody, its signs placed and coloured by hand,
-/// and repainting it in one colour on one box undoes that work — so the
-/// backdrop and colour leave it alone, and only the scale reaches it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+/// Every default is mpv's own, so a viewer who never opens the section sees
+/// what any mpv shows. Plain (SRT) tracks take all of it. A styled (ASS) track
+/// was typeset by somebody, its signs placed and coloured by hand, and painting
+/// over that undoes the work — so by default it takes only the size and the
+/// position, and the rest reaches it only with [`Self::restyle_styled`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SubtitleStyle {
-    pub size: SubtitleSize,
-    pub backdrop: SubtitleBackdrop,
-    pub colour: SubtitleColour,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SubtitleSize {
-    Small,
-    #[default]
-    Normal,
-    Large,
-    Larger,
-}
-
-impl SubtitleSize {
-    pub const ALL: [Self; 4] = [Self::Small, Self::Normal, Self::Large, Self::Larger];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Small => "Small",
-            Self::Normal => "Normal",
-            Self::Large => "Large",
-            Self::Larger => "Larger",
-        }
-    }
-
     /// Relative to mpv's own size, which is itself relative to the video's
     /// height — so one setting reads the same on a phone and a television.
-    pub fn scale(self) -> f64 {
-        match self {
-            Self::Small => 0.8,
-            Self::Normal => 1.0,
-            Self::Large => 1.25,
-            Self::Larger => 1.5,
+    pub scale: f64,
+    /// A font family name. `None` is mpv's `sans-serif`. A name this device
+    /// does not have falls back the same way, which is what makes it safe to
+    /// sync.
+    pub font: Option<String>,
+    pub bold: bool,
+    pub italic: bool,
+    pub colour: Colour,
+    pub backdrop: SubtitleBackdrop,
+    pub outline_colour: Colour,
+    /// In mpv's scaled pixels, as `sub-outline-size`.
+    pub outline_size: f64,
+    /// The box's colour, its alpha the box's opacity. Only with
+    /// [`SubtitleBackdrop::Box`].
+    pub box_colour: Colour,
+    pub shadow_colour: Colour,
+    /// How far the shadow falls; 0 is none, which is mpv's default.
+    pub shadow_offset: f64,
+    /// How soft the edges are, 0–20.
+    pub blur: f64,
+    /// Where the line sits, as a percentage of the picture's height from the
+    /// top: 100 is the bottom edge, mpv's usual place.
+    pub position: f64,
+    /// Whether styled (ASS) tracks are repainted in this style too. Off by
+    /// default: it turns signs and karaoke into dialogue-looking text.
+    pub restyle_styled: bool,
+}
+
+impl SubtitleStyle {
+    pub const MIN_SCALE: f64 = 0.5;
+    pub const MAX_SCALE: f64 = 2.5;
+    pub const MAX_OUTLINE: f64 = 10.0;
+    pub const MAX_SHADOW: f64 = 10.0;
+    pub const MAX_BLUR: f64 = 20.0;
+
+    /// The same style with every number brought back into range.
+    ///
+    /// A hand-edited or synced file can hold anything, and mpv refuses an
+    /// out-of-range value outright — which would cost the rest of the style.
+    pub fn sanitized(mut self) -> Self {
+        let defaults = Self::default();
+        let clamp = |value: f64, default: f64, min: f64, max: f64| {
+            if value.is_finite() {
+                value.clamp(min, max)
+            } else {
+                default
+            }
+        };
+        self.scale = clamp(self.scale, defaults.scale, Self::MIN_SCALE, Self::MAX_SCALE);
+        self.outline_size = clamp(
+            self.outline_size,
+            defaults.outline_size,
+            0.0,
+            Self::MAX_OUTLINE,
+        );
+        self.shadow_offset = clamp(
+            self.shadow_offset,
+            defaults.shadow_offset,
+            0.0,
+            Self::MAX_SHADOW,
+        );
+        self.blur = clamp(self.blur, defaults.blur, 0.0, Self::MAX_BLUR);
+        self.position = clamp(self.position, defaults.position, 0.0, 100.0);
+        self.font = self
+            .font
+            .map(|font| font.trim().to_owned())
+            .filter(|font| !font.is_empty());
+        self
+    }
+}
+
+impl Default for SubtitleStyle {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            font: None,
+            bold: false,
+            italic: false,
+            colour: Colour::rgba(0xFF, 0xFF, 0xFF, 0xFF),
+            backdrop: SubtitleBackdrop::Outline,
+            outline_colour: Colour::rgba(0, 0, 0, 0xFF),
+            outline_size: 1.65,
+            // About seventy percent black.
+            box_colour: Colour::rgba(0, 0, 0, 0xB0),
+            shadow_colour: Colour::rgba(0, 0, 0, 0xAF),
+            shadow_offset: 0.0,
+            blur: 0.0,
+            position: 100.0,
+            restyle_styled: false,
         }
     }
 }
@@ -118,11 +174,11 @@ impl SubtitleSize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SubtitleBackdrop {
-    /// A dark outline round each letter: mpv's own, and the default.
+    /// An outline round each letter: mpv's own, and the default.
     #[default]
     Outline,
-    /// A dark, part-transparent box behind each line. Uglier, and the only
-    /// thing that holds up on snow, sky and white walls.
+    /// A box behind each line. Uglier, and the only thing that holds up on
+    /// snow, sky and white walls.
     Box,
 }
 
@@ -132,27 +188,77 @@ impl SubtitleBackdrop {
     pub fn label(self) -> &'static str {
         match self {
             Self::Outline => "Outline",
-            Self::Box => "Dark box",
+            Self::Box => "Box",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SubtitleColour {
-    #[default]
-    White,
-    Yellow,
+/// A colour with opacity, written `#RRGGBBAA` the way CSS writes one.
+///
+/// Not mpv's order: mpv reads `#AARRGGBB`, which nobody hand-editing a file
+/// would guess. [`Self::to_mpv`] does the translation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Colour {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
 }
 
-impl SubtitleColour {
-    pub const ALL: [Self; 2] = [Self::White, Self::Yellow];
+impl Colour {
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::White => "White",
-            Self::Yellow => "Yellow",
+    /// `#RRGGBB` or `#RRGGBBAA`, the `#` optional. Six digits are opaque.
+    pub fn parse(text: &str) -> Option<Self> {
+        let hex = text.trim().strip_prefix('#').unwrap_or(text.trim());
+        if !(hex.len() == 6 || hex.len() == 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
         }
+        let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+        let a = if hex.len() == 8 { byte(6)? } else { 0xFF };
+        Some(Self::rgba(byte(0)?, byte(2)?, byte(4)?, a))
+    }
+
+    /// As mpv's colour options take it.
+    pub fn to_mpv(self) -> String {
+        format!("#{:02X}{:02X}{:02X}{:02X}", self.a, self.r, self.g, self.b)
+    }
+
+    pub fn to_array(self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+}
+
+impl From<[u8; 4]> for Colour {
+    fn from([r, g, b, a]: [u8; 4]) -> Self {
+        Self::rgba(r, g, b, a)
+    }
+}
+
+impl std::fmt::Display for Colour {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "#{:02X}{:02X}{:02X}{:02X}",
+            self.r, self.g, self.b, self.a
+        )
+    }
+}
+
+impl From<Colour> for String {
+    fn from(colour: Colour) -> Self {
+        colour.to_string()
+    }
+}
+
+impl TryFrom<String> for Colour {
+    type Error = String;
+
+    fn try_from(text: String) -> std::result::Result<Self, Self::Error> {
+        Self::parse(&text).ok_or_else(|| format!("not a colour: {text:?}"))
     }
 }
 
@@ -188,6 +294,7 @@ impl PlaybackPrefs {
         self.speed = self.speed.clamp(MIN_SPEED, MAX_SPEED);
         self.audio_language = self.audio_language.filter(|tag| !tag.trim().is_empty());
         self.subtitle_language = self.subtitle_language.filter(|tag| !tag.trim().is_empty());
+        self.subtitle_style = self.subtitle_style.sanitized();
         self
     }
 }
@@ -245,9 +352,14 @@ mod tests {
             auto_skip: true,
             speed: 1.5,
             subtitle_style: SubtitleStyle {
-                size: SubtitleSize::Larger,
+                scale: 1.5,
+                font: Some("Noto Sans".into()),
+                italic: true,
+                colour: Colour::rgba(0xFF, 0xE6, 0x00, 0xFF),
                 backdrop: SubtitleBackdrop::Box,
-                colour: SubtitleColour::Yellow,
+                box_colour: Colour::rgba(0x10, 0x10, 0x10, 0x80),
+                restyle_styled: true,
+                ..SubtitleStyle::default()
             },
         };
         save(&dirs, &prefs).unwrap();
@@ -262,6 +374,38 @@ mod tests {
             serde_json::from_str(r#"{"volume": 60.0, "subtitles": true, "speed": 1.0}"#).unwrap();
         assert_eq!(prefs.subtitle_style, SubtitleStyle::default());
         assert_eq!(prefs.volume, 60.0);
+    }
+
+    #[test]
+    fn a_colour_is_written_rgba_and_handed_to_mpv_as_argb() {
+        let colour = Colour::parse("#FFE60080").unwrap();
+        assert_eq!(colour, Colour::rgba(0xFF, 0xE6, 0x00, 0x80));
+        assert_eq!(colour.to_string(), "#FFE60080");
+        assert_eq!(colour.to_mpv(), "#80FFE600");
+        assert_eq!(
+            Colour::parse("ffe600"),
+            Some(Colour::rgba(0xFF, 0xE6, 0, 0xFF))
+        );
+        assert_eq!(Colour::parse("#FFE6"), None);
+        assert_eq!(Colour::parse("#GGGGGG"), None);
+    }
+
+    #[test]
+    fn a_subtitle_style_out_of_range_is_brought_back_into_it() {
+        let style = SubtitleStyle {
+            scale: 40.0,
+            outline_size: -3.0,
+            blur: f64::NAN,
+            position: 400.0,
+            font: Some("   ".into()),
+            ..SubtitleStyle::default()
+        }
+        .sanitized();
+        assert_eq!(style.scale, SubtitleStyle::MAX_SCALE);
+        assert_eq!(style.outline_size, 0.0);
+        assert_eq!(style.blur, 0.0);
+        assert_eq!(style.position, 100.0);
+        assert_eq!(style.font, None);
     }
 
     #[test]

@@ -11,6 +11,7 @@
 //! and neither mutates: this module draws.
 
 use egui::{Color32, CornerRadius, Rect, Sense, Stroke, Vec2, pos2};
+use pstr_core::prefs::SubtitleStyle;
 use pstr_player::{MAX_VOLUME, Track, TrackKind};
 
 use crate::app::{Action, Adjacent, Page};
@@ -470,6 +471,8 @@ fn track_menus(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>
             }
             ui.separator();
             track_options(ui, &subtitles, TrackKind::Subtitle, actions);
+            ui.separator();
+            subtitle_adjustments(ui, playback, actions);
         })
         .response
         .on_hover_text("Subtitle track");
@@ -486,6 +489,49 @@ fn track_menus(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>
         })
         .response
         .on_hover_text("Audio track");
+    }
+}
+
+/// What is worth changing mid-episode without a trip to Settings: the size and
+/// place of the line, and its timing for a release that is out of step.
+fn subtitle_adjustments(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
+    let mut style = playback.subtitle_style.clone();
+    egui::Grid::new("subtitle-adjustments")
+        .num_columns(2)
+        .spacing([theme::space::M, theme::space::S])
+        .show(ui, |ui| {
+            ui.label("Size");
+            ui::settings::percent_slider(
+                ui,
+                &mut style.scale,
+                SubtitleStyle::MIN_SCALE..=SubtitleStyle::MAX_SCALE,
+            );
+            ui.end_row();
+
+            ui.label("Position");
+            ui::settings::subtitle_position_slider(ui, &mut style.position);
+            ui.end_row();
+
+            ui.label("Delay");
+            ui.horizontal(|ui| {
+                if ui.button("−").on_hover_text("Earlier (Z)").clicked() {
+                    actions.push(Action::NudgeSubtitleDelay(-0.1));
+                }
+                ui.label(ui::format_delay(playback.subtitle_delay));
+                if ui.button("+").on_hover_text("Later (X)").clicked() {
+                    actions.push(Action::NudgeSubtitleDelay(0.1));
+                }
+                if ui
+                    .add_enabled(playback.subtitle_delay != 0.0, egui::Button::new("Reset"))
+                    .clicked()
+                {
+                    actions.push(Action::ResetSubtitleDelay);
+                }
+            });
+            ui.end_row();
+        });
+    if style != playback.subtitle_style {
+        actions.push(Action::SetSubtitleStyle(style.sanitized()));
     }
 }
 

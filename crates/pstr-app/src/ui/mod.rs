@@ -206,6 +206,18 @@ pub fn format_speed(speed: f64) -> String {
     format!("{}×", text.trim_end_matches('0').trim_end_matches('.'))
 }
 
+/// `+0.3 s`, `−1.2 s` or `0 s`: a subtitle delay, signed so the direction
+/// reads without knowing which way mpv counts.
+pub fn format_delay(seconds: f64) -> String {
+    if seconds.abs() < 0.05 {
+        "0 s".to_owned()
+    } else if seconds > 0.0 {
+        format!("+{seconds:.1} s")
+    } else {
+        format!("−{:.1} s", -seconds)
+    }
+}
+
 /// `1.4 GiB`, for what a file costs to watch.
 pub fn format_size(bytes: i64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
@@ -917,6 +929,13 @@ pub fn columns_of(available: f32, minimum: f32) -> Grid {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_subtitle_delay_reads_with_its_direction() {
+        assert_eq!(super::format_delay(0.3), "+0.3 s");
+        assert_eq!(super::format_delay(-1.2), "−1.2 s");
+        assert_eq!(super::format_delay(0.0000001), "0 s");
+    }
+
     use super::*;
 
     #[test]

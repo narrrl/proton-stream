@@ -7,9 +7,7 @@
 
 use pstr_core::appearance::{Accent, Appearance, Flavor, Tiles};
 use pstr_core::metadata::{MetadataConfig, ProviderId, TitleNames};
-use pstr_core::prefs::{
-    PlaybackPrefs, SubtitleBackdrop, SubtitleColour, SubtitleSize, SubtitleStyle,
-};
+use pstr_core::prefs::{Colour, PlaybackPrefs, SubtitleBackdrop, SubtitleStyle};
 use pstr_player::LANGUAGES;
 
 use crate::app::Action;
@@ -60,6 +58,7 @@ pub fn show(
                     ui.add_space(theme::space::M);
                     appearance_form(ui, prefs.appearance, prefs.desktop, actions);
                     playback_form(ui, prefs, actions);
+                    subtitle_form(ui, &prefs.playback.subtitle_style, actions);
                     storage_form(ui, prefs, actions);
                     metadata_form(ui, settings, api_key, actions);
                     about(ui);
@@ -317,7 +316,6 @@ fn playback_form(ui: &mut egui::Ui, prefs: Prefs<'_>, actions: &mut Vec<Action>)
         ),
         |ui| {
             languages(ui, prefs.playback, actions);
-            subtitle_style(ui, prefs.playback.subtitle_style, actions);
             let mut autoplay = prefs.autoplay;
             ui::widgets::settings_row(
                 ui,
@@ -431,50 +429,341 @@ fn languages(ui: &mut egui::Ui, playback: &PlaybackPrefs, actions: &mut Vec<Acti
     );
 }
 
-/// How plain subtitles are drawn. A styled track keeps its own look apart
-/// from the size; see [`pstr_core::prefs::SubtitleStyle`].
-fn subtitle_style(ui: &mut egui::Ui, style: SubtitleStyle, actions: &mut Vec<Action>) {
-    let mut chosen = style;
-    ui::widgets::settings_row(
+/// How subtitles look, with a sample line to judge it by.
+///
+/// Every change reaches a playing file as it is made, so the film itself is
+/// the other preview. A styled track takes only the size and the position
+/// unless it is asked to take the rest; see [`SubtitleStyle`].
+fn subtitle_form(ui: &mut egui::Ui, style: &SubtitleStyle, actions: &mut Vec<Action>) {
+    ui::widgets::settings_group(
         ui,
-        "Subtitle size",
-        Some("Styled subtitles are scaled too. From the next file."),
+        "Subtitles",
+        Some(
+            "Changes show on the playing video straight away. Plain subtitles (SRT) take all of this; styled ones (ASS) only the size and the position, unless you restyle them below.",
+        ),
         |ui| {
-            egui::ComboBox::from_id_salt("subtitle-size")
-                .selected_text(chosen.size.label())
-                .show_ui(ui, |ui| {
-                    for size in SubtitleSize::ALL {
-                        ui.selectable_value(&mut chosen.size, size, size.label());
+            let mut chosen = style.clone();
+            ui.add_space(theme::space::L);
+            subtitle_preview(ui, &chosen);
+            ui.add_space(theme::space::L);
+
+            ui::widgets::settings_row(ui, "Size", None, |ui| {
+                percent_slider(
+                    ui,
+                    &mut chosen.scale,
+                    SubtitleStyle::MIN_SCALE..=SubtitleStyle::MAX_SCALE,
+                );
+            });
+            ui::widgets::settings_row(
+                ui,
+                "Position",
+                Some("How far up the picture the line sits."),
+                |ui| subtitle_position_slider(ui, &mut chosen.position),
+            );
+            ui::widgets::settings_row(
+                ui,
+                "Font",
+                Some("Any font installed here. The sample above is drawn in the app's own font."),
+                |ui| {
+                    ui::widgets::toggle(ui, &mut chosen.italic, "Italic");
+                    ui::widgets::toggle(ui, &mut chosen.bold, "Bold");
+                    font_picker(ui, &mut chosen.font);
+                },
+            );
+            ui::widgets::settings_row(ui, "Text colour", None, |ui| {
+                colour_button(ui, &mut chosen.colour);
+            });
+            ui::widgets::settings_row(
+                ui,
+                "Background",
+                Some("A box reads on bright scenes; an outline hides less of the picture."),
+                |ui| {
+                    let choices =
+                        SubtitleBackdrop::ALL.map(|backdrop| (backdrop, backdrop.label()));
+                    if let Some(backdrop) = ui::widgets::segmented(ui, chosen.backdrop, &choices) {
+                        chosen.backdrop = backdrop;
                     }
-                });
-        },
-    );
-    ui::widgets::settings_row(
-        ui,
-        "Subtitle background",
-        Some("A box reads on bright scenes. Plain subtitles only; styled ones keep their own."),
-        |ui| {
-            egui::ComboBox::from_id_salt("subtitle-backdrop")
-                .selected_text(chosen.backdrop.label())
-                .show_ui(ui, |ui| {
-                    for backdrop in SubtitleBackdrop::ALL {
-                        ui.selectable_value(&mut chosen.backdrop, backdrop, backdrop.label());
-                    }
-                });
-        },
-    );
-    ui::widgets::settings_row(ui, "Subtitle colour", Some("Plain subtitles only."), |ui| {
-        egui::ComboBox::from_id_salt("subtitle-colour")
-            .selected_text(chosen.colour.label())
-            .show_ui(ui, |ui| {
-                for colour in SubtitleColour::ALL {
-                    ui.selectable_value(&mut chosen.colour, colour, colour.label());
+                },
+            );
+            match chosen.backdrop {
+                SubtitleBackdrop::Outline => {
+                    ui::widgets::settings_row(ui, "Outline", None, |ui| {
+                        colour_button(ui, &mut chosen.outline_colour);
+                        ui.add(
+                            egui::Slider::new(
+                                &mut chosen.outline_size,
+                                0.0..=SubtitleStyle::MAX_OUTLINE,
+                            )
+                            .step_by(0.05)
+                            .fixed_decimals(1),
+                        );
+                    });
+                }
+                SubtitleBackdrop::Box => {
+                    ui::widgets::settings_row(
+                        ui,
+                        "Box colour",
+                        Some("Its opacity is how much of the picture shows through."),
+                        |ui| colour_button(ui, &mut chosen.box_colour),
+                    );
+                }
+            }
+            ui::widgets::settings_row(ui, "Shadow", Some("How far it falls. 0 is none."), |ui| {
+                colour_button(ui, &mut chosen.shadow_colour);
+                ui.add(
+                    egui::Slider::new(&mut chosen.shadow_offset, 0.0..=SubtitleStyle::MAX_SHADOW)
+                        .step_by(0.1)
+                        .fixed_decimals(1),
+                );
+            });
+            ui::widgets::settings_row(
+                ui,
+                "Blur",
+                Some("Softens the edges. Not shown in the sample."),
+                |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut chosen.blur, 0.0..=SubtitleStyle::MAX_BLUR)
+                            .step_by(0.1)
+                            .fixed_decimals(1),
+                    );
+                },
+            );
+            ui::widgets::settings_row(
+                ui,
+                "Restyle styled subtitles",
+                Some(
+                    "Repaint styled (ASS) dialogue in this style too. Signs, songs and karaoke can come out wrong.",
+                ),
+                |ui| {
+                    ui::widgets::toggle(ui, &mut chosen.restyle_styled, "");
+                },
+            );
+            ui::widgets::settings_row(ui, "Reset", Some("Back to mpv's own look."), |ui| {
+                if ui
+                    .add_enabled(
+                        *style != SubtitleStyle::default(),
+                        egui::Button::new("Reset"),
+                    )
+                    .clicked()
+                {
+                    chosen = SubtitleStyle::default();
                 }
             });
-    });
-    if chosen != style {
-        actions.push(Action::SetSubtitleStyle(chosen));
+
+            if chosen != *style {
+                actions.push(Action::SetSubtitleStyle(chosen.sanitized()));
+            }
+        },
+    );
+}
+
+/// A scale as a percentage slider, 100% being mpv's own size.
+pub(crate) fn percent_slider(
+    ui: &mut egui::Ui,
+    scale: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+) -> egui::Response {
+    let mut percent = *scale * 100.0;
+    let response = ui.add(
+        egui::Slider::new(&mut percent, range.start() * 100.0..=range.end() * 100.0)
+            .step_by(5.0)
+            .suffix("%")
+            .fixed_decimals(0),
+    );
+    *scale = percent / 100.0;
+    response
+}
+
+/// Where the line sits, 0 at the top of the picture and 100 at the bottom —
+/// shown the other way up, as height above the bottom edge, which is how
+/// anyone would describe moving subtitles up.
+pub(crate) fn subtitle_position_slider(ui: &mut egui::Ui, position: &mut f64) -> egui::Response {
+    let mut height = 100.0 - *position;
+    let response = ui.add(
+        egui::Slider::new(&mut height, 0.0..=90.0)
+            .step_by(1.0)
+            .suffix("% up")
+            .fixed_decimals(0),
+    );
+    *position = 100.0 - height;
+    response
+}
+
+/// A swatch that opens a colour wheel with an opacity slider.
+fn colour_button(ui: &mut egui::Ui, colour: &mut Colour) {
+    let [r, g, b, a] = colour.to_array();
+    let mut picked = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+    // The `Color32` form rather than `Hsva`, because egui remembers the hue
+    // behind it: rebuilt from RGB each frame, black and grey have none, and
+    // the wheel would snap back to red under the mouse.
+    let response = egui::color_picker::color_edit_button_srgba(
+        ui,
+        &mut picked,
+        egui::color_picker::Alpha::OnlyBlend,
+    );
+    // Only on a change: a round trip through premultiplied alpha can nudge
+    // an untouched colour by a step.
+    if response.changed() {
+        *colour = Colour::from(picked.to_srgba_unmultiplied());
     }
+}
+
+/// The font: the installed families to pick from, and a box to type any name
+/// into — the only way on a system whose families the app cannot list.
+fn font_picker(ui: &mut egui::Ui, font: &mut Option<String>) {
+    let filter_id = egui::Id::new("subtitle-font-filter");
+    let mut filter: String = ui.data(|data| data.get_temp(filter_id)).unwrap_or_default();
+    let families = theme::font_families(ui.ctx());
+    egui::ComboBox::from_id_salt("subtitle-font")
+        .selected_text(font.as_deref().unwrap_or("Default"))
+        .width(200.0)
+        .height(320.0)
+        // Not on any click: the search box is clicked into.
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut filter)
+                    .hint_text("Search or type a font name")
+                    .desired_width(f32::INFINITY),
+            )
+            .request_focus();
+            let typed = filter.trim();
+            if ui.selectable_label(font.is_none(), "Default").clicked() {
+                *font = None;
+                ui.close();
+            }
+            let wanted = typed.to_lowercase();
+            let mut exact = false;
+            for family in families.unwrap_or_default() {
+                if !family.to_lowercase().contains(&wanted) {
+                    continue;
+                }
+                exact |= family.eq_ignore_ascii_case(typed);
+                let label = egui::RichText::new(family.as_str());
+                if ui
+                    .selectable_label(font.as_deref() == Some(family.as_str()), label)
+                    .clicked()
+                {
+                    *font = Some(family.clone());
+                    ui.close();
+                }
+            }
+            if families.is_none() {
+                ui.label(ui::muted("Reading the installed fonts…"));
+            }
+            if !typed.is_empty() && !exact && ui.button(format!("Use “{typed}”")).clicked() {
+                *font = Some(typed.to_owned());
+                ui.close();
+            }
+        });
+    ui.data_mut(|data| data.insert_temp(filter_id, filter));
+}
+
+/// A sample line, half on a bright sky and half on night, drawn in the
+/// chosen style — so whether it reads on both is visible before a film is.
+///
+/// An approximation: the app's own font rather than the chosen one, egui's
+/// slant for italic, and no blur. Proportions follow mpv's, where sizes are
+/// in pixels of a 38-pixel font.
+fn subtitle_preview(ui: &mut egui::Ui, style: &SubtitleStyle) {
+    const HEIGHT: f32 = 132.0;
+    /// mpv's `sub-font-size`, the unit every other size is relative to.
+    const MPV_FONT: f32 = 38.0;
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let radius = egui::CornerRadius::same(theme::radius::MD);
+
+    // Sky above haze on the left, a night street on the right.
+    let half = egui::Rect::from_min_max(rect.min, egui::pos2(rect.center().x, rect.max.y));
+    let mut sky = egui::Mesh::default();
+    sky.colored_vertex(half.left_top(), egui::Color32::from_rgb(0x8E, 0xC5, 0xF0));
+    sky.colored_vertex(half.right_top(), egui::Color32::from_rgb(0xB8, 0xDC, 0xF8));
+    sky.colored_vertex(
+        half.right_bottom(),
+        egui::Color32::from_rgb(0xFA, 0xF7, 0xEE),
+    );
+    sky.colored_vertex(
+        half.left_bottom(),
+        egui::Color32::from_rgb(0xF2, 0xF0, 0xE8),
+    );
+    sky.add_triangle(0, 1, 2);
+    sky.add_triangle(0, 2, 3);
+    painter.rect_filled(rect, radius, egui::Color32::from_rgb(0x14, 0x16, 0x22));
+    painter.add(sky);
+
+    let font_px = 22.0 * style.scale as f32;
+    let unit = font_px / MPV_FONT;
+    let family = if style.bold {
+        theme::semibold()
+    } else {
+        egui::FontFamily::Proportional
+    };
+    let job = egui::text::LayoutJob::single_section(
+        "Can you read this on both sides?".to_owned(),
+        egui::TextFormat {
+            font_id: egui::FontId::new(font_px, family),
+            color: egui::Color32::PLACEHOLDER,
+            italics: style.italic,
+            ..Default::default()
+        },
+    );
+    let galley = painter.layout_job(job);
+    let size = galley.size();
+    // Bottom of the line at `position` percent down, as mpv places it, kept
+    // inside the strip.
+    let margin = 8.0;
+    let bottom = rect.top() + HEIGHT * style.position as f32 / 100.0 - margin;
+    let top = bottom
+        .min(rect.bottom() - margin)
+        .max(rect.top() + margin + size.y)
+        - size.y;
+    let at = egui::pos2(rect.center().x - size.x / 2.0, top);
+    let colour = |colour: Colour| {
+        let [r, g, b, a] = colour.to_array();
+        egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+    };
+
+    let shadow = style.shadow_offset as f32 * unit;
+    match style.backdrop {
+        SubtitleBackdrop::Box => {
+            let padding = 6.0 * unit;
+            let line = egui::Rect::from_min_size(at, size).expand(padding);
+            if shadow > 0.0 {
+                painter.rect_filled(
+                    line.translate(egui::vec2(shadow, shadow)),
+                    0.0,
+                    colour(style.shadow_colour),
+                );
+            }
+            painter.rect_filled(line, 0.0, colour(style.box_colour));
+        }
+        SubtitleBackdrop::Outline => {
+            let outline = style.outline_size as f32 * unit;
+            let rings = |offset: egui::Vec2, ink: egui::Color32| {
+                if outline <= 0.0 {
+                    painter.galley_with_override_text_color(at + offset, galley.clone(), ink);
+                    return;
+                }
+                for step in 0..8 {
+                    let angle = step as f32 * std::f32::consts::TAU / 8.0;
+                    let ring = egui::vec2(angle.cos(), angle.sin()) * outline;
+                    painter.galley_with_override_text_color(
+                        at + offset + ring,
+                        galley.clone(),
+                        ink,
+                    );
+                }
+            };
+            if shadow > 0.0 {
+                rings(egui::vec2(shadow, shadow), colour(style.shadow_colour));
+            }
+            if outline > 0.0 {
+                rings(egui::Vec2::ZERO, colour(style.outline_colour));
+            }
+        }
+    }
+    painter.galley_with_override_text_color(at, galley, colour(style.colour));
 }
 
 /// The streaming cache: how big it may get, and a way to empty it.

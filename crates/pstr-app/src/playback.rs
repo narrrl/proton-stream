@@ -147,6 +147,10 @@ pub enum Command {
     /// Move subtitles, as a percentage of the window's height. See
     /// [`Playback::lift_subtitles`].
     SetSubtitlePosition(f64),
+    /// Restyle subtitles, the line already showing included.
+    SetSubtitleStyle(pstr_core::prefs::SubtitleStyle),
+    /// Shift subtitles this many seconds later; negative is earlier.
+    SetSubtitleDelay(f64),
     /// 1.0 is normal speed.
     SetSpeed(f64),
     /// Save the current frame to this file.
@@ -184,6 +188,14 @@ pub struct Playback {
     /// Where subtitles were last put, so they are only moved when that changes
     /// rather than once a frame.
     subtitle_position: f64,
+    /// How the viewer has subtitles drawn, as last handed to this player.
+    pub subtitle_style: pstr_core::prefs::SubtitleStyle,
+    /// Where the controls would lift subtitles to. The higher of this and the
+    /// style's own position wins.
+    lifted_position: f64,
+    /// How far subtitles are shifted, in seconds. Per file rather than a
+    /// preference: an offset belongs to one release, not to the viewer.
+    pub subtitle_delay: f64,
     /// What the file contains. Empty until mpv has demuxed it.
     pub tracks: Vec<Track>,
     /// The file's chapters, in order. Empty for a file muxed without them.
@@ -259,7 +271,10 @@ impl Playback {
             paused: false,
             volume: prefs.volume,
             muted: prefs.muted,
-            subtitle_position: 100.0,
+            subtitle_position: prefs.subtitle_style.position,
+            subtitle_style: prefs.subtitle_style.clone(),
+            lifted_position: 100.0,
+            subtitle_delay: 0.0,
             speed: prefs.speed,
             tracks: Vec::new(),
             chapters: Vec::new(),
@@ -282,15 +297,37 @@ impl Playback {
     /// the mouse is moving, which is exactly when someone is looking at the
     /// screen.
     pub fn lift_subtitles(&mut self, covered: f32, height: f32) {
-        let position = if covered > 0.0 && height > 0.0 {
+        self.lifted_position = if covered > 0.0 && height > 0.0 {
             (100.0 * (1.0 - f64::from(covered / height))).round()
         } else {
             100.0
         };
+        let position = self.subtitle_position();
         if position != self.subtitle_position {
             self.subtitle_position = position;
             self.send(Command::SetSubtitlePosition(position));
         }
+    }
+
+    /// Where subtitles go: where the style puts them, unless the controls
+    /// would cover that, in which case just above the controls.
+    fn subtitle_position(&self) -> f64 {
+        self.subtitle_style.position.min(self.lifted_position)
+    }
+
+    /// Restyle the subtitles of this file, now.
+    pub fn restyle_subtitles(&mut self, style: &pstr_core::prefs::SubtitleStyle) {
+        self.subtitle_style = style.clone();
+        self.subtitle_position = self.subtitle_position();
+        let mut style = style.clone();
+        style.position = self.subtitle_position;
+        self.send(Command::SetSubtitleStyle(style));
+    }
+
+    /// Shift subtitles to `seconds`, rounded to the tenth a keypress moves.
+    pub fn set_subtitle_delay(&mut self, seconds: f64) {
+        self.subtitle_delay = (seconds * 10.0).round() / 10.0;
+        self.send(Command::SetSubtitleDelay(self.subtitle_delay));
     }
 
     /// Whether the picture is drawn in this window rather than mpv's own.
@@ -494,7 +531,7 @@ fn from_prefs(
             .and_then(|p| p.subtitle_language.clone())
             .or_else(|| prefs.subtitle_language.clone()),
         subtitles: show.map(|p| p.subtitles).unwrap_or(prefs.subtitles),
-        subtitle_style: prefs.subtitle_style,
+        subtitle_style: prefs.subtitle_style.clone(),
         // Carried from file to file, like the volume: somebody who watches at
         // 1.25 watches the next episode at 1.25 too.
         options: vec![("speed".into(), format!("{:.2}", prefs.speed))],
@@ -659,6 +696,11 @@ fn apply_command(
         Command::SetVolume(volume) => player.set_volume(volume),
         Command::SetMuted(muted) => player.set_muted(muted),
         Command::SetSubtitlePosition(percent) => player.set_subtitle_position(percent),
+        Command::SetSubtitleStyle(style) => {
+            player.apply_subtitle_style(&style);
+            Ok(())
+        }
+        Command::SetSubtitleDelay(seconds) => player.set_subtitle_delay(seconds),
         Command::SetSpeed(speed) => player.set_speed(speed),
         Command::Screenshot(path) => player.screenshot(&path),
         Command::SelectTrack(kind, track) => select_track(engine, id, player, kind, track),

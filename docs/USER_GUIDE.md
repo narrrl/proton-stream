@@ -85,7 +85,8 @@ The picture plays inside the app's window. Move the mouse to show the controls.
 - **Up next** counts down 10 seconds when the credits start, then plays the next episode. Choose
   **Play now**, **Cancel** or **Watch till the end**.
 - **Subtitles and audio** are chosen from the buttons at the bottom right. The app remembers your
-  choice for each show.
+  choice for each show. The subtitle menu also has **Size** and **Position**, which are saved like
+  the ones in Settings, and **Delay**, which moves subtitles earlier or later for this file only.
 - **Speed** goes from 0.5× to 3×, and stays for the next episode.
 
 ### Keyboard
@@ -112,6 +113,7 @@ Press **?** anywhere to see this list in the app.
 | N / P | Next and previous episode |
 | [ / ] | Slower and faster |
 | S | Skip the opening or the credits |
+| Z / X | Subtitles 0.1 s earlier and later |
 | E | The list of episodes |
 | F or double-click | Fullscreen |
 | Ctrl+S | Save the frame to `Pictures/proton-stream` |
@@ -184,11 +186,25 @@ The **Proton account** section on this page is where you sign in. See
 **Playback**
 
 - **Audio language** and **Subtitles:** the language to start in, or the file's own default.
-- **Subtitle size**, **Subtitle background** and **Subtitle colour:** how plain subtitles (SRT)
-  look. Choose **Dark box** if text is hard to read on bright scenes. Styled subtitles (ASS) keep
-  their own look and only change size. These apply from the next file.
 - **Play the next episode** (on by default) and **Skip openings and credits** (off).
 - **Hardware decoding** (on). Turn it off if the picture shows green blocks or stays black.
+
+**Subtitles**
+
+How subtitles look. A sample line at the top shows the style on a bright and a dark picture, and
+a video that is playing changes at once.
+
+- **Size** and **Position**: how big the line is and how far up the picture it sits.
+- **Font**, **Bold** and **Italic**: any font installed on this computer. The sample line uses the
+  app's own font; the video uses the one you chose.
+- **Text colour**, and a **Background** of **Outline** or **Box**, each with its own colour. A
+  colour's opacity sets how much of the picture shows through. Choose **Box** if text is hard to
+  read on bright scenes.
+- **Shadow** and **Blur**.
+- **Restyle styled subtitles** (off). Plain subtitles (SRT) always take the whole style. Styled
+  subtitles (ASS) keep the look their makers gave them and take only the size and position,
+  unless this is on. Turned on, signs and songs can come out wrong.
+- **Reset** goes back to the default look.
 
 **Storage**
 
