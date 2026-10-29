@@ -316,6 +316,14 @@ extension View {
     }
 }
 
+/// `24 min`, `2 h 4 min`, `2 h`: a provider's running time in minutes.
+func formatRuntime(_ minutes: UInt32) -> String {
+    let hours = minutes / 60, rest = minutes % 60
+    if hours == 0 { return "\(rest) min" }
+    if rest == 0 { return "\(hours) h" }
+    return "\(hours) h \(rest) min"
+}
+
 func formatBytes(_ bytes: UInt64) -> String {
     let value = Double(bytes)
     let gib = 1024.0 * 1024 * 1024

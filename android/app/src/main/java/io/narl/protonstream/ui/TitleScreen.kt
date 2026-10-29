@@ -92,6 +92,7 @@ import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 
 @Composable
@@ -211,7 +212,21 @@ internal fun TitleScreen(
             }
             item(key = "heading") {
                 Column(Modifier.padding(horizontal = side + 16.dp)) {
-                    Text(title.displayName, style = MaterialTheme.typography.headlineMedium)
+                    val heading = @Composable {
+                        Text(title.displayName, style = MaterialTheme.typography.headlineMedium)
+                    }
+                    // A light page keeps the name: a clear logo is lettering
+                    // made for dark art, white as often as not.
+                    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+                        RemoteLogo(
+                            title.logoUrl,
+                            title.displayName,
+                            Modifier.fillMaxWidth(0.7f).heightIn(max = 88.dp).padding(bottom = 4.dp),
+                            heading,
+                        )
+                    } else {
+                        heading()
+                    }
                     // The other names it goes by: the share's when the shown one
                     // is the provider's, and the original-language one.
                     listOfNotNull(
@@ -224,6 +239,8 @@ internal fun TitleScreen(
                         listOfNotNull(
                             title.formatLabel,
                             title.seasonLabel ?: (title.metadataYear ?: title.year)?.toString(),
+                            // A series' running time is its episodes', which each row says.
+                            title.runtime?.takeIf { title.kind == TitleType.FILM }?.let(::formatRuntime),
                             title.rating?.let { "★ %.1f".format(it) },
                             "${title.watchedCount} of ${title.episodeCount} watched".takeIf { title.episodeCount > 1uL },
                         ).joinToString("  ·  "),
@@ -625,7 +642,9 @@ private fun EpisodeRow(
                 Text(
                     listOfNotNull(
                         numbering,
-                        episode.size?.let(::formatBytes),
+                        // How long it runs says more than how big it is; the
+                        // size is what there is when no provider said.
+                        episode.runtime?.let(::formatRuntime) ?: episode.size?.let(::formatBytes),
                         episode.airDate,
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,

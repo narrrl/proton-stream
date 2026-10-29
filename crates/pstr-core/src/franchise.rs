@@ -177,6 +177,7 @@ mod tests {
                 kind: TitleKind::Series,
                 poster_url: None,
                 backdrop_url: None,
+                logo_url: None,
                 rating: None,
                 genres: Vec::new(),
                 episodes: None,

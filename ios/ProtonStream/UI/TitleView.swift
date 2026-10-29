@@ -147,7 +147,16 @@ struct TitleView: View {
 
     @ViewBuilder private func heading(playlist: [EpisodeRecord], nextUp: Int, upNext: EpisodeRecord?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title.displayName).textStyle(.headlineMedium).foregroundStyle(scheme.onSurface)
+            // A light page keeps the name: a clear logo is lettering made for
+            // dark art, white as often as not.
+            if scheme.light {
+                Text(title.displayName).textStyle(.headlineMedium).foregroundStyle(scheme.onSurface)
+            } else {
+                RemoteLogo(title.logoUrl, title.displayName, maxWidth: 280, maxHeight: 88) {
+                    Text(title.displayName).textStyle(.headlineMedium).foregroundStyle(scheme.onSurface)
+                }
+                .padding(.bottom, 4)
+            }
             // The other names it goes by: the share's when the shown one is the
             // provider's, and the original-language one.
             let names: [String?] = [
@@ -219,7 +228,9 @@ struct TitleView: View {
         let year: String? = (title.metadataYear ?? title.year).map { String($0) }
         let rating: String? = title.rating.map { String(format: "★ %.1f", $0) }
         let watched: String? = title.episodeCount > 1 ? "\(title.watchedCount) of \(title.episodeCount) watched" : nil
-        let parts: [String?] = [title.formatLabel, title.seasonLabel ?? year, rating, watched]
+        // A series' running time is its episodes', which each row says.
+        let runtime: String? = title.kind == .film ? title.runtime.map(formatRuntime) : nil
+        let parts: [String?] = [title.formatLabel, title.seasonLabel ?? year, runtime, rating, watched]
         return parts.compactMap { $0 }.joined(separator: "  ·  ")
     }
 
@@ -404,8 +415,10 @@ private struct EpisodeRow: View {
     @State private var holding = false
 
     private var subline: String {
-        let size: String? = episode.size.map { formatBytes($0) }
-        let parts: [String?] = [numbering, size, episode.airDate]
+        // How long it runs says more than how big it is; the size is what
+        // there is when no provider said.
+        let length: String? = episode.runtime.map(formatRuntime) ?? episode.size.map { formatBytes($0) }
+        let parts: [String?] = [numbering, length, episode.airDate]
         return parts.compactMap { $0 }.joined(separator: " · ")
     }
 

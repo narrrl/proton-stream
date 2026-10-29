@@ -278,4 +278,20 @@ final class ThemeTests: XCTestCase {
             [.displayLarge, .displayMedium, .displaySmall, .headlineLarge, .headlineMedium, .headlineSmall, .titleLarge]
         )
     }
+
+    func testAPaddedLogoIsBoundedByItsLetteringAndNotItsHaze() {
+        let width = 10
+        var alpha = [UInt8](repeating: 0, count: width * 6)
+        // Lettering from (2, 1) to (6, 3), and a pixel of haze in the corner.
+        for y in 1 ... 3 { for x in 2 ... 6 { alpha[y * width + x] = 255 } }
+        alpha[5 * width + 9] = 3
+        XCTAssertEqual(opaqueBounds(alpha: alpha, width: width), PixelBounds(left: 2, top: 1, right: 6, bottom: 3))
+        XCTAssertNil(opaqueBounds(alpha: [UInt8](repeating: 0, count: 16), width: 4))
+    }
+
+    func testARunningTimeReadsInHoursAndMinutes() {
+        XCTAssertEqual(formatRuntime(24), "24 min")
+        XCTAssertEqual(formatRuntime(120), "2 h")
+        XCTAssertEqual(formatRuntime(124), "2 h 4 min")
+    }
 }

@@ -312,6 +312,7 @@ mod tests {
                     kind: TitleKind::Series,
                     poster_url: None,
                     backdrop_url: None,
+                    logo_url: None,
                     rating: Some(rating),
                     genres: Vec::new(),
                     episodes: None,

@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
@@ -640,13 +641,21 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
             ),
         )
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-            Text(
+            // Always over the dark scrim above, so a logo made for dark art
+            // reads here whatever the theme.
+            RemoteLogo(
+                title.logoUrl,
                 title.displayName,
-                style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+                Modifier.fillMaxWidth(0.6f).heightIn(max = 72.dp).padding(bottom = 6.dp),
+            ) {
+                Text(
+                    title.displayName,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Color.White,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 listOfNotNull(
                     title.rating?.let { "★ %.1f".format(it) },

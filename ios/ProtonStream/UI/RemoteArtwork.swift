@@ -81,6 +81,117 @@ struct RemoteArtwork: View {
     }
 }
 
+/// A title's logo — its name as lettering — in place of `fallback`, once it
+/// has loaded. `fallback` stands until then, and for good when there is none,
+/// so a title without a logo looks as it always did and one with a logo only
+/// gains.
+///
+/// Trimmed to what is not transparent before it is drawn: TVDB pads every
+/// clear logo to a square, and the padding would otherwise decide its size
+/// and place.
+///
+/// `maxWidth` and `maxHeight` bound the logo only; the fallback takes the room
+/// it always did.
+struct RemoteLogo<Fallback: View>: View {
+    let url: String?
+    let description: String
+    let maxWidth: CGFloat
+    let maxHeight: CGFloat
+    let fallback: () -> Fallback
+    @State private var logo: UIImage?
+
+    init(
+        _ url: String?,
+        _ description: String,
+        maxWidth: CGFloat,
+        maxHeight: CGFloat,
+        @ViewBuilder fallback: @escaping () -> Fallback
+    ) {
+        self.url = url
+        self.description = description
+        self.maxWidth = maxWidth
+        self.maxHeight = maxHeight
+        self.fallback = fallback
+        _logo = State(initialValue: ArtworkLoader.shared.cachedLogo(url))
+    }
+
+    var body: some View {
+        Group {
+            if let logo {
+                Image(uiImage: logo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .bottomLeading)
+                    .accessibilityLabel(description)
+            } else {
+                fallback()
+            }
+        }
+        .task(id: url) {
+            if logo != nil { return }
+            let loaded = await ArtworkLoader.shared.logo(url)
+            if Task.isCancelled { return }
+            logo = loaded
+        }
+    }
+}
+
+/// Inclusive pixel bounds, top-left origin.
+struct PixelBounds: Equatable {
+    let left: Int
+    let top: Int
+    let right: Int
+    let bottom: Int
+}
+
+/// The bounds of the pixels in a row-major `alpha` plane of `width` that are
+/// not (nearly) transparent; `nil` when none are. Below the threshold is
+/// anti-aliasing haze, not lettering.
+func opaqueBounds(alpha: [UInt8], width: Int) -> PixelBounds? {
+    var left = Int.max, top = Int.max, right = -1, bottom = -1
+    for (index, value) in alpha.enumerated() where value > 8 {
+        let x = index % width, y = index / width
+        left = min(left, x)
+        right = max(right, x)
+        top = min(top, y)
+        bottom = max(bottom, y)
+    }
+    return right < 0 ? nil : PixelBounds(left: left, top: top, right: right, bottom: bottom)
+}
+
+/// `image` cropped to `opaqueBounds`, or itself when there is nothing to crop.
+func trimTransparent(_ image: UIImage) -> UIImage {
+    guard let cgImage = image.cgImage else { return image }
+    let width = cgImage.width, height = cgImage.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+        guard let context = CGContext(
+            data: buffer.baseAddress,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return false }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return true
+    }
+    guard drawn else { return image }
+    let alpha = stride(from: 3, to: pixels.count, by: 4).map { pixels[$0] }
+    guard let bounds = opaqueBounds(alpha: alpha, width: width),
+          bounds != PixelBounds(left: 0, top: 0, right: width - 1, bottom: height - 1)
+    else { return image }
+    let rect = CGRect(
+        x: bounds.left,
+        y: bounds.top,
+        width: bounds.right - bounds.left + 1,
+        height: bounds.bottom - bounds.top + 1
+    )
+    guard let cropped = cgImage.cropping(to: rect) else { return image }
+    return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
+}
+
 private enum ArtworkLoad {
     case pending
     case missing
@@ -194,6 +305,21 @@ final class ArtworkLoader: @unchecked Sendable {
     func artwork(url: String?, fallback: ThumbnailSource?) async -> UIImage? {
         if let image = await remote(url) { return image }
         return await thumbnail(fallback)
+    }
+
+    func cachedLogo(_ url: String?) -> UIImage? {
+        guard let url else { return nil }
+        return decoded.object(forKey: "logo:\(url)" as NSString)
+    }
+
+    /// A title's logo, trimmed to its lettering — see `trimTransparent`.
+    func logo(_ url: String?) async -> UIImage? {
+        guard let url else { return nil }
+        if let image = cachedLogo(url) { return image }
+        guard let image = await remote(url) else { return nil }
+        let trimmed = trimTransparent(image)
+        decoded.setObject(trimmed, forKey: "logo:\(url)" as NSString, cost: trimmed.cost)
+        return trimmed
     }
 
     /// Provider artwork, from the disk cache or the network.

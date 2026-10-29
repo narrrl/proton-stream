@@ -132,6 +132,20 @@ impl Art<'_> {
         self.of(title)
     }
 
+    /// The title's name as lettering, trimmed to it, when the provider has
+    /// one and it has arrived. Drawn over wide art in place of the name.
+    pub fn logo(&mut self, title: &Title) -> Option<egui::TextureHandle> {
+        let url = self
+            .metadata
+            .get(&title.key)
+            .and_then(|record| record.metadata.as_ref())
+            .and_then(|metadata| metadata.logo_url.clone())?;
+        let key = logo_key(&title.key);
+        let engine = self.engine;
+        self.posters
+            .texture(&key, || engine.request_logo(key.clone(), url))
+    }
+
     /// The picture for a title, and how to fit it.
     ///
     /// Provider artwork first, then Proton's still, then nothing. That order is
@@ -171,6 +185,46 @@ pub fn poster_key(title_key: &str) -> String {
 /// The texture key of a title's full-size wide art.
 pub fn wide_key(title_key: &str) -> String {
     format!("wide:{title_key}")
+}
+
+/// A title's logo in place of its name in Display type, when there is one to
+/// draw; `None` leaves the caller to set the name as it does.
+///
+/// At most `max_height` tall and as wide as the space allows, up to 420 px —
+/// a logo the width of the column shouts. A light palette keeps the name: a
+/// clear logo is lettering made for dark art, white as often as not, and over
+/// a near-white veil it is gone.
+pub fn logo_heading(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    title: &Title,
+    max_height: f32,
+) -> Option<egui::Response> {
+    if theme::palette().light {
+        return None;
+    }
+    let texture = art.logo(title)?;
+    let aspect = texture.aspect_ratio().max(0.1);
+    let width = ui.available_width().min(420.0).min(max_height * aspect);
+    let size = egui::vec2(width, width / aspect);
+    Some(
+        ui.add(egui::Image::new((texture.id(), size)))
+            .on_hover_text(art.name(title)),
+    )
+}
+
+/// The texture key of a title's logo.
+pub fn logo_key(title_key: &str) -> String {
+    format!("logo:{title_key}")
+}
+
+/// `24 min`, `2 h 4 min`, `2 h`: a provider's running time in minutes.
+pub fn format_runtime(minutes: u32) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, minutes) => format!("{minutes} min"),
+        (hours, 0) => format!("{hours} h"),
+        (hours, minutes) => format!("{hours} h {minutes} min"),
+    }
 }
 
 /// "just now", "5 min ago", "3 h ago", "2 days ago": how long before `now`
@@ -937,6 +991,13 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_running_time_reads_in_hours_and_minutes() {
+        assert_eq!(format_runtime(24), "24 min");
+        assert_eq!(format_runtime(120), "2 h");
+        assert_eq!(format_runtime(124), "2 h 4 min");
+    }
 
     #[test]
     fn times_are_formatted_by_length() {

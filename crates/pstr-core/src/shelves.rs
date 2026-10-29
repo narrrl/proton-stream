@@ -168,6 +168,7 @@ mod tests {
                     kind: TitleKind::Film,
                     poster_url: None,
                     backdrop_url: None,
+                    logo_url: None,
                     rating: None,
                     genres: genres.iter().map(|genre| genre.to_string()).collect(),
                     episodes: None,

@@ -2812,12 +2812,18 @@ fn changed_art(
                 .map(|(url, _)| url.to_owned()),
             found.and_then(|metadata| metadata.poster_url.clone()),
             found.and_then(|metadata| metadata.wide_art().map(str::to_owned)),
+            found.and_then(|metadata| metadata.logo_url.clone()),
         ]
     };
     let mut keys: Vec<String> = Vec::new();
     for key in before.keys().chain(after.keys()) {
         let (old, new) = (urls(before, key), urls(after, key));
-        let texture_keys = [key.clone(), ui::poster_key(key), ui::wide_key(key)];
+        let texture_keys = [
+            key.clone(),
+            ui::poster_key(key),
+            ui::wide_key(key),
+            ui::logo_key(key),
+        ];
         for ((old, new), texture) in old.iter().zip(&new).zip(texture_keys) {
             if old != new {
                 keys.push(texture);
@@ -3073,6 +3079,7 @@ mod tests {
             kind: TitleKind::Series,
             poster_url: Some(url.into()),
             backdrop_url: None,
+            logo_url: None,
             rating: None,
             genres: Vec::new(),
             episodes: None,

@@ -323,7 +323,9 @@ fn header(
             // Text in a column a person can read, with the picture to the
             // right of it rather than under it.
             ui.set_max_width(ui.available_width().min(820.0));
-            ui.label(theme::Role::Display.rich(&shown).strong());
+            if ui::logo_heading(ui, art, title, 120.0).is_none() {
+                ui.label(theme::Role::Display.rich(&shown).strong());
+            }
             // Whichever of the share's name and the provider's is not the one
             // shown. Worth showing rather than only replacing: a viewer should
             // be able to tell what the match actually matched, and find the
@@ -629,6 +631,15 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
     if let Some(year) = title.year {
         parts.push(year.to_string());
     }
+    // A film's running time is what it costs to start it. A series' is its
+    // episodes', which each row says.
+    if title.kind == TitleKind::Film
+        && let Some(minutes) = found
+            .and_then(|found| found.details.as_ref())
+            .and_then(|details| details.runtime)
+    {
+        parts.push(ui::format_runtime(minutes));
+    }
     if title.kind == TitleKind::Series {
         if title.seasons.len() > 1 {
             parts.push(ui::library::plural(title.seasons.len(), "season"));
@@ -701,6 +712,7 @@ fn episode_row(
             found.name.clone(),
             found.overview.clone(),
             found.air_date.clone(),
+            found.runtime,
         )
     });
     let watched = episode.is_watched();
@@ -732,7 +744,7 @@ fn episode_row(
                     .unwrap_or_default();
                 let name = found
                     .as_ref()
-                    .and_then(|(name, _, _)| name.clone())
+                    .and_then(|(name, ..)| name.clone())
                     .unwrap_or_else(|| episode.detail().to_string());
                 let mut job = egui::text::LayoutJob::default();
                 if !numbering.is_empty() {
@@ -762,9 +774,10 @@ fn episode_row(
                 ui.label(ui::muted(details(
                     episode,
                     found.as_ref().and_then(|f| f.2.as_deref()),
+                    found.as_ref().and_then(|f| f.3),
                 )));
 
-                if let Some((_, Some(overview), _)) = &found {
+                if let Some((_, Some(overview), ..)) = &found {
                     let mut job = egui::text::LayoutJob::simple(
                         overview.clone(),
                         theme::Role::Caption.font(),
@@ -836,9 +849,9 @@ fn episode_row(
     ui.add_space(theme::space::XXS);
 }
 
-/// The grey line under an episode's name: when it aired, how big it is, and
-/// where it would resume.
-fn details(episode: &Episode, air_date: Option<&str>) -> String {
+/// The grey line under an episode's name: when it aired, how long it runs,
+/// how big it is, and where it would resume.
+fn details(episode: &Episode, air_date: Option<&str>, runtime: Option<u32>) -> String {
     let mut parts = Vec::new();
     if let Some(at) = episode.resume_at() {
         let left = episode
@@ -852,6 +865,9 @@ fn details(episode: &Episode, air_date: Option<&str>) -> String {
     }
     if let Some(date) = air_date {
         parts.push(date.to_owned());
+    }
+    if let Some(minutes) = runtime {
+        parts.push(ui::format_runtime(minutes));
     }
     match episode.node.size {
         // A file the share says is empty is one that will not play — an upload

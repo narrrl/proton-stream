@@ -517,6 +517,9 @@ pub struct EpisodeRecord {
     /// What a continue-watching shelf orders by — "where I was last" is a
     /// question about time, and progress alone cannot answer it.
     pub last_played: i64,
+    /// The provider's running time, in minutes.
+    #[uniffi(default = None)]
+    pub runtime: Option<u32>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -574,6 +577,13 @@ pub struct TitleRecord {
     /// episode finished last. `None` keeps it off the shelf. See
     /// `pstr_core::library::Title::continue_with`.
     pub continue_index: Option<u32>,
+    /// The title's name as lettering, a transparent PNG with its source's
+    /// padding still around it — trim it before drawing.
+    #[uniffi(default = None)]
+    pub logo_url: Option<String>,
+    /// Minutes: an episode's length for a series, the running time of a film.
+    #[uniffi(default = None)]
+    pub runtime: Option<u32>,
 }
 
 /// Playback preferences that outlive one file, one title and one launch.
@@ -3649,6 +3659,8 @@ fn title_record(
         next_episode: None,
         next_airing_at: None,
         franchise: Vec::new(),
+        logo_url: metadata.and_then(|found| found.logo_url.clone()),
+        runtime: details.and_then(|details| details.runtime),
         continue_index: title.continue_with().and_then(|episode| {
             let at = title.position_of(&episode.node.share_id, &episode.node.link_id)?;
             u32::try_from(at).ok()
@@ -3730,6 +3742,8 @@ fn title_metadata(record: MatchRecord) -> TitleMetadata {
         kind: title_kind(record.kind),
         poster_url: record.poster_url,
         backdrop_url: record.backdrop_url,
+        // A search answer carries none; enriching the choice finds it.
+        logo_url: None,
         rating: record.rating.map(|rating| rating as f32),
         genres: record.genres,
         episodes: record.episode_count,
@@ -3773,6 +3787,7 @@ fn episode_record(
         still_url: named.and_then(|found| found.still_url.clone()),
         air_date: named.and_then(|found| found.air_date.clone()),
         last_played: episode.last_played(),
+        runtime: named.and_then(|found| found.runtime),
     }
 }
 
@@ -4110,6 +4125,7 @@ mod tests {
             kind: TitleKind::Series,
             poster_url: Some("https://example.test/poster.jpg".to_owned()),
             backdrop_url: Some("https://example.test/backdrop.jpg".to_owned()),
+            logo_url: None,
             rating: Some(8.7),
             genres: vec!["Action".to_owned(), "Sci-Fi".to_owned()],
             episodes: Some(26),
@@ -4204,6 +4220,7 @@ mod tests {
                 kind,
                 poster_url: None,
                 backdrop_url: None,
+                logo_url: None,
                 rating: None,
                 genres: Vec::new(),
                 episodes: None,

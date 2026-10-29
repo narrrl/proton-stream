@@ -170,6 +170,21 @@ const THUMBNAIL_MAX_EDGE: u32 = 640;
 /// best there is.
 pub const WIDE_MAX_EDGE: u32 = 1920;
 
+/// The longest edge of a title's logo once its padding is trimmed. Drawn at
+/// most a few hundred pixels wide; this leaves room for a 2× display.
+const LOGO_MAX_EDGE: u32 = 800;
+
+/// How a fetched picture is fitted before it becomes a texture.
+#[derive(Clone, Copy)]
+enum Fit {
+    /// Scaled down to this edge, nothing else.
+    Scaled(u32),
+    /// A logo: cropped to what is not transparent, then scaled to
+    /// [`LOGO_MAX_EDGE`]. TVDB pads every clear logo to a square, and the
+    /// padding would otherwise decide where it sits and how big it is drawn.
+    Logo,
+}
+
 /// What the background side tells the UI.
 pub enum Event {
     /// The share list changed on disk.
@@ -2794,18 +2809,29 @@ impl Engine {
     /// pixels rather than a tile's 640. A 640 px still stretched to 1600 was
     /// most of why those looked soft.
     pub fn request_art(&self, title_key: String, url: String, max_edge: u32) {
+        self.fetch_art(title_key, url, Fit::Scaled(max_edge));
+    }
+
+    /// [`Engine::request_poster`], for a title's logo: trimmed to its
+    /// lettering. See [`Fit::Logo`].
+    pub fn request_logo(&self, key: String, url: String) {
+        self.fetch_art(key, url, Fit::Logo);
+    }
+
+    fn fetch_art(&self, title_key: String, url: String, fit: Fit) {
         let engine = self.clone();
         // A size of its own on disk: the tile-sized copy of the same URL is
         // already there under the plain name, scaled down.
-        let name = match max_edge {
-            THUMBNAIL_MAX_EDGE => format!("{}.img", digest(&url)),
-            edge => format!("{}-{edge}.img", digest(&url)),
+        let name = match fit {
+            Fit::Scaled(THUMBNAIL_MAX_EDGE) => format!("{}.img", digest(&url)),
+            Fit::Scaled(edge) => format!("{}-{edge}.img", digest(&url)),
+            Fit::Logo => format!("{}-logo.img", digest(&url)),
         };
         let path = self.dirs.poster_cache().join(name);
 
         self.runtime.spawn(async move {
             if let Ok(bytes) = tokio::fs::read(&path).await {
-                match decode_scaled(&bytes, max_edge) {
+                match decode_fitted(&bytes, fit) {
                     Ok(decoded) => {
                         if let Some(smaller) = &decoded.smaller {
                             store_image(&path, smaller).await;
@@ -2832,7 +2858,7 @@ impl Engine {
                 }
             };
 
-            match decode_scaled(&bytes, max_edge) {
+            match decode_fitted(&bytes, fit) {
                 Ok(decoded) => {
                     store_image(&path, decoded.smaller.as_deref().unwrap_or(&bytes)).await;
                     engine.emit(Event::Poster {
@@ -2984,11 +3010,31 @@ fn decode_thumbnail(bytes: &[u8]) -> anyhow::Result<Decoded> {
 
 /// [`decode_thumbnail`], to `max_edge` rather than a tile's size.
 fn decode_scaled(bytes: &[u8], max_edge: u32) -> anyhow::Result<Decoded> {
-    let decoded = image::load_from_memory(bytes)?;
+    decode_fitted(bytes, Fit::Scaled(max_edge))
+}
+
+/// [`decode_scaled`], fitted as `fit` says. A trimmed logo is handed back
+/// for the cache like a scaled picture is, so the trim is paid once.
+fn decode_fitted(bytes: &[u8], fit: Fit) -> anyhow::Result<Decoded> {
+    let mut decoded = image::load_from_memory(bytes)?;
+    let mut changed = false;
+    let max_edge = match fit {
+        Fit::Scaled(edge) => edge,
+        Fit::Logo => {
+            if let Some(trimmed) = trim_alpha(&decoded) {
+                decoded = trimmed;
+                changed = true;
+            }
+            LOGO_MAX_EDGE
+        }
+    };
     let (decoded, smaller) = if decoded.width().max(decoded.height()) > max_edge {
         let scaled = decoded.thumbnail(max_edge, max_edge);
         let encoded = encode_for_cache(&scaled);
         (scaled, encoded)
+    } else if changed {
+        let encoded = encode_for_cache(&decoded);
+        (decoded, encoded)
     } else {
         (decoded, None)
     };
@@ -2998,6 +3044,36 @@ fn decode_scaled(bytes: &[u8], max_edge: u32) -> anyhow::Result<Decoded> {
         image: egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_flat_samples().as_slice()),
         smaller,
     })
+}
+
+/// `image` cropped to the pixels that are not (nearly) transparent, or
+/// `None` when there is nothing to crop — no padding, no alpha, or nothing
+/// but padding.
+fn trim_alpha(image: &image::DynamicImage) -> Option<image::DynamicImage> {
+    /// Below this the pixel is anti-aliasing haze or compression noise, not
+    /// lettering.
+    const VISIBLE: u8 = 8;
+    if !image.color().has_alpha() {
+        return None;
+    }
+    let rgba = image.to_rgba8();
+    let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, pixel) in rgba.enumerate_pixels() {
+        if pixel[3] > VISIBLE {
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x);
+            bottom = bottom.max(y);
+        }
+    }
+    if left > right {
+        return None;
+    }
+    let (width, height) = (right - left + 1, bottom - top + 1);
+    if (width, height) == (rgba.width(), rgba.height()) {
+        return None;
+    }
+    Some(image.crop_imm(left, top, width, height))
 }
 
 /// Encode a scaled picture for the cache: PNG when it has transparency to keep
@@ -3260,6 +3336,29 @@ mod image_cache_tests {
         cache.insert("a".into(), picture());
         cache.upload(&ctx);
         assert!(cache.textures.is_empty());
+    }
+
+    /// TVDB pads a clear logo to a square; trimmed, it is only its lettering.
+    #[test]
+    fn a_padded_logo_is_trimmed_to_its_lettering() {
+        let mut padded = image::RgbaImage::new(100, 100);
+        for x in 20..80 {
+            for y in 40..60 {
+                padded.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+            }
+        }
+        // Haze below the visibility threshold does not count.
+        padded.put_pixel(2, 2, image::Rgba([255, 255, 255, 3]));
+        let trimmed = trim_alpha(&image::DynamicImage::ImageRgba8(padded)).expect("trimmed");
+        assert_eq!((trimmed.width(), trimmed.height()), (60, 20));
+    }
+
+    #[test]
+    fn a_picture_with_nothing_to_trim_is_left_alone() {
+        let opaque = image::DynamicImage::ImageRgb8(image::RgbImage::new(10, 10));
+        assert!(trim_alpha(&opaque).is_none());
+        let blank = image::DynamicImage::ImageRgba8(image::RgbaImage::new(10, 10));
+        assert!(trim_alpha(&blank).is_none());
     }
 }
 

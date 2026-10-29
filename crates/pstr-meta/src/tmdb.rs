@@ -102,6 +102,7 @@ impl Provider for Tmdb {
         Ok(Enrichment {
             episodes: self.episodes(found).await?,
             backdrop_url: None,
+            logo_url: None,
             chain: Vec::new(),
         })
     }
@@ -170,6 +171,7 @@ impl Tmdb {
                         .as_deref()
                         .map(|path| image(STILL_SIZE, path)),
                     air_date: episode.air_date.clone().filter(|date| !date.is_empty()),
+                    runtime: episode.runtime.filter(|minutes| *minutes > 0),
                 }
             }));
         }
@@ -272,6 +274,8 @@ struct EpisodeRow {
     overview: Option<String>,
     still_path: Option<String>,
     air_date: Option<String>,
+    /// Minutes.
+    runtime: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -337,6 +341,7 @@ impl Result_ {
                 kind,
                 poster_url: self.poster_path.map(|path| image(POSTER_SIZE, &path)),
                 backdrop_url: self.backdrop_path.map(|path| image(BACKDROP_SIZE, &path)),
+                logo_url: None,
                 rating: self.vote_average.filter(|rating| *rating > 0.0),
                 // `search/multi` carries neither, and a detail request per
                 // candidate would be a round-trip per *result* rather than per

@@ -24,7 +24,7 @@ use crate::metadata::{
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -240,6 +240,19 @@ CREATE TABLE sidecars (
     PRIMARY KEY (share_id, link_id)
 );
 CREATE INDEX sidecars_by_video ON sidecars (share_id, video_link_id);
+"#;
+
+/// Title logos and running times.
+///
+/// ani.zip sent both all along and neither was kept. Every AniList title is
+/// marked un-enriched so the next match run asks for them; nothing is deleted,
+/// and the stored episodes and art stay on screen until the answer replaces
+/// them. The title runtime lives in `details`, which is refetched by
+/// `TitleDetails::revision` rather than blanked here.
+const MIGRATION_V13: &str = r#"
+ALTER TABLE title_metadata ADD COLUMN logo_url TEXT;
+ALTER TABLE episode_metadata ADD COLUMN runtime INTEGER;
+UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
 "#;
 
 /// How old a share's last crawl may be before an app looks again on its own.
@@ -495,6 +508,12 @@ impl Catalog {
             let tx = self.conn.transaction()?;
             tx.execute_batch(MIGRATION_V12)?;
             tx.pragma_update(None, "user_version", 12)?;
+            tx.commit()?;
+        }
+        if version < 13 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V13)?;
+            tx.pragma_update(None, "user_version", 13)?;
             tx.commit()?;
         }
 
@@ -1037,7 +1056,7 @@ impl Catalog {
         let mut statement = self.conn.prepare(
             "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                     overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
-                    manual, details, chain
+                    manual, details, chain, logo_url
              FROM title_metadata",
         )?;
         let rows = statement.query_map([], row_to_metadata)?;
@@ -1058,7 +1077,7 @@ impl Catalog {
             .query_row(
                 "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                         overview, year, kind, poster_url, backdrop_url, rating, genres, episodes,
-                        url, manual, details, chain
+                        url, manual, details, chain, logo_url
                  FROM title_metadata WHERE title_key = ?1",
                 params![title_key],
                 row_to_metadata,
@@ -1103,9 +1122,9 @@ impl Catalog {
             &"INSERT INTO title_metadata (
                  title_key, provider, matched, fetched_at, remote_id, name, original_name,
                  overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
-                 manual, details
+                 manual, details, logo_url
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                       ?17, ?18)
+                       ?17, ?18, ?19)
              ON CONFLICT (title_key) DO UPDATE SET
                  provider      = excluded.provider,
                  matched       = excluded.matched,
@@ -1120,6 +1139,9 @@ impl Catalog {
                  backdrop_url  = CASE WHEN same THEN COALESCE(excluded.backdrop_url,
                                                               title_metadata.backdrop_url)
                                       ELSE excluded.backdrop_url END,
+                 logo_url      = CASE WHEN same THEN COALESCE(excluded.logo_url,
+                                                              title_metadata.logo_url)
+                                      ELSE excluded.logo_url END,
                  rating        = excluded.rating,
                  genres        = excluded.genres,
                  episodes      = excluded.episodes,
@@ -1153,6 +1175,7 @@ impl Catalog {
                 data.and_then(|data| data.url.as_deref()),
                 record.manual as i64,
                 details,
+                data.and_then(|data| data.logo_url.as_deref()),
             ],
         )?;
         Ok(())
@@ -1220,7 +1243,8 @@ impl Catalog {
         replace_episodes(&tx, title_key, provider, fetched_at, &enrichment.episodes)?;
         tx.execute(
             "UPDATE title_metadata
-             SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url), chain = ?5
+             SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url), chain = ?5,
+                 logo_url = COALESCE(?6, logo_url)
              WHERE title_key = ?1 AND provider = ?2",
             params![
                 title_key,
@@ -1228,6 +1252,7 @@ impl Catalog {
                 fetched_at,
                 enrichment.backdrop_url.as_deref(),
                 enrichment.chain.join("\n"),
+                enrichment.logo_url.as_deref(),
             ],
         )?;
         tx.commit()?;
@@ -1241,7 +1266,7 @@ impl Catalog {
     pub fn all_episode_metadata(&self) -> Result<HashMap<String, EpisodeGuide>> {
         let mut statement = self.conn.prepare(
             "SELECT title_key, season, number, name, overview, still_url, air_date,
-                    absolute, entry_season, entry_number
+                    absolute, entry_season, entry_number, runtime
              FROM episode_metadata",
         )?;
         let rows = statement.query_map([], |row| {
@@ -1259,6 +1284,7 @@ impl Catalog {
                     overview: row.get(4)?,
                     still_url: row.get(5)?,
                     air_date: row.get(6)?,
+                    runtime: row.get(10)?,
                 },
             ))
         })?;
@@ -1365,8 +1391,8 @@ fn replace_episodes(
         "INSERT OR REPLACE INTO episode_metadata (
              title_key, season, number, provider, fetched_at,
              name, overview, still_url, air_date,
-             absolute, entry_season, entry_number
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             absolute, entry_season, entry_number, runtime
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
     for episode in episodes {
         insert.execute(params![
@@ -1382,6 +1408,7 @@ fn replace_episodes(
             episode.absolute,
             episode.entry_season,
             episode.entry_number,
+            episode.runtime,
         ])?;
     }
     Ok(())
@@ -1432,6 +1459,7 @@ fn row_to_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MetadataR
             kind: parse_kind(row.get::<_, Option<String>>(9)?.as_deref()),
             poster_url: row.get(10)?,
             backdrop_url: row.get(11)?,
+            logo_url: row.get(19)?,
             rating: row.get(12)?,
             genres: genres
                 .unwrap_or_default()
@@ -1981,6 +2009,7 @@ mod tests {
             kind: TitleKind::Series,
             poster_url: Some("https://example.invalid/p.jpg".into()),
             backdrop_url: None,
+            logo_url: None,
             rating: Some(8.4),
             genres: vec!["Action".into(), "Drama".into()],
             episodes: Some(25),
@@ -2076,6 +2105,7 @@ mod tests {
                     overview: None,
                     still_url: None,
                     air_date: None,
+                    runtime: None,
                 }],
             )
             .expect("store episodes");
@@ -2168,6 +2198,7 @@ mod tests {
                 overview: Some("Ed and Al…".into()),
                 still_url: None,
                 air_date: Some("2010-11-14".into()),
+                runtime: None,
             },
             EpisodeMetadata {
                 season: Some(1),
@@ -2179,6 +2210,7 @@ mod tests {
                 overview: None,
                 still_url: Some("still.jpg".into()),
                 air_date: None,
+                runtime: None,
             },
         ];
         catalog
@@ -2221,6 +2253,7 @@ mod tests {
             overview: None,
             still_url: None,
             air_date: None,
+            runtime: Some(24),
         };
         catalog
             .set_episode_metadata(
@@ -2264,6 +2297,7 @@ mod tests {
                     overview: None,
                     still_url: None,
                     air_date: None,
+                    runtime: None,
                 }],
             )
             .expect("store episodes");
@@ -2320,6 +2354,7 @@ mod tests {
                     overview: None,
                     still_url: None,
                     air_date: None,
+                    runtime: None,
                 }],
             )
             .expect("store episodes");
@@ -2336,16 +2371,18 @@ mod tests {
         assert!(catalog.all_episode_metadata().expect("read").is_empty());
     }
 
-    /// Enrichment adds a backdrop when it found one and otherwise leaves the
-    /// match's own alone; a new match makes the title un-enriched again.
+    /// Enrichment adds a backdrop or a logo when it found one and otherwise
+    /// leaves the match's own alone; a new match makes the title un-enriched
+    /// again, and refreshing the same one keeps both.
     #[test]
-    fn enrichment_keeps_the_backdrop_it_did_not_replace_and_a_different_match_resets_it() {
+    fn enrichment_keeps_the_art_it_did_not_replace_and_a_different_match_resets_it() {
         let mut catalog = Catalog::in_memory().expect("open");
         let record = MetadataRecord {
             title_key: "attack on titan".into(),
             provider: ProviderId::AniList,
             metadata: Some(TitleMetadata {
                 backdrop_url: Some("old.jpg".into()),
+                logo_url: Some("old.png".into()),
                 ..found()
             }),
             fetched_at: 1,
@@ -2357,8 +2394,9 @@ mod tests {
                 .metadata("attack on titan")
                 .expect("read")
                 .and_then(|record| record.metadata)
-                .and_then(|found| found.backdrop_url)
+                .map(|found| (found.backdrop_url, found.logo_url))
         };
+        let art = |backdrop: &str, logo: &str| Some((Some(backdrop.into()), Some(logo.into())));
 
         catalog
             .set_enrichment(
@@ -2368,16 +2406,26 @@ mod tests {
                 &Enrichment::default(),
             )
             .expect("enrich");
-        assert_eq!(backdrop(&catalog).as_deref(), Some("old.jpg"));
+        assert_eq!(backdrop(&catalog), art("old.jpg", "old.png"));
 
         let enrichment = Enrichment {
             backdrop_url: Some("fanart.jpg".into()),
+            logo_url: Some("clearlogo.png".into()),
             ..Enrichment::default()
         };
         catalog
             .set_enrichment("attack on titan", ProviderId::AniList, 3, &enrichment)
             .expect("enrich again");
-        assert_eq!(backdrop(&catalog).as_deref(), Some("fanart.jpg"));
+        assert_eq!(backdrop(&catalog), art("fanart.jpg", "clearlogo.png"));
+
+        // A refresh of the same entry answers with no art of its own.
+        catalog
+            .set_metadata(&MetadataRecord {
+                metadata: Some(found()),
+                ..record.clone()
+            })
+            .expect("refresh");
+        assert_eq!(backdrop(&catalog), art("fanart.jpg", "clearlogo.png"));
 
         catalog
             .set_metadata(&MetadataRecord {
@@ -2414,8 +2462,10 @@ mod tests {
                 overview: None,
                 still_url: None,
                 air_date: None,
+                runtime: None,
             }],
             backdrop_url: None,
+            logo_url: None,
             chain: Vec::new(),
         };
         catalog
@@ -2473,6 +2523,7 @@ mod tests {
             overview: None,
             still_url: None,
             air_date: Some(air_date.into()),
+            runtime: None,
         };
         let enrichment = Enrichment {
             episodes: vec![
@@ -2480,6 +2531,7 @@ mod tests {
                 episode(2, None, "2026-10-09"),
             ],
             backdrop_url: None,
+            logo_url: None,
             chain: Vec::new(),
         };
         catalog
@@ -2538,8 +2590,10 @@ mod tests {
                 overview: None,
                 still_url: None,
                 air_date: None,
+                runtime: None,
             }],
             backdrop_url: Some("fanart.jpg".into()),
+            logo_url: None,
             chain: vec!["457".into(), "20595".into()],
         };
         catalog
@@ -2699,6 +2753,63 @@ mod tests {
         assert!(catalog.sidecars("s", "a").expect("read").is_empty());
     }
 
+    /// Schema v13 asks every AniList title to be enriched again, for the
+    /// logos and running times it never kept — and deletes nothing: the
+    /// match, its details and its episode names stay on screen meanwhile.
+    #[test]
+    fn upgrading_to_v13_re_enriches_anilist_titles_and_keeps_everything_they_had() {
+        let conn = Connection::open_in_memory().expect("open");
+        for migration in [
+            MIGRATION_V1,
+            MIGRATION_V2,
+            MIGRATION_V3,
+            MIGRATION_V4,
+            MIGRATION_V5,
+            MIGRATION_V6,
+            MIGRATION_V7,
+            MIGRATION_V8,
+            MIGRATION_V9,
+            MIGRATION_V10,
+            MIGRATION_V11,
+            MIGRATION_V12,
+        ] {
+            conn.execute_batch(migration).expect("migrate");
+        }
+        conn.pragma_update(None, "user_version", 12)
+            .expect("set version");
+        conn.execute_batch(
+            "INSERT INTO title_metadata (title_key, provider, matched, fetched_at, remote_id,
+                                         name, kind, backdrop_url, manual, details, enriched_at)
+             VALUES ('aot', 'anilist', 1, 1, '16498', 'Attack on Titan', 'series',
+                     'fanart.jpg', 1, '{\"format\":\"TV\"}', 5),
+                    ('got', 'tmdb', 1, 1, '1399', 'Game of Thrones', 'series',
+                     'backdrop.jpg', 0, NULL, 5);
+             INSERT INTO episode_metadata (title_key, season, number, provider, fetched_at, name)
+             VALUES ('aot', 1, 1, 'anilist', 1, 'To You, in 2000 Years');",
+        )
+        .expect("seed");
+
+        let catalog = Catalog::from_connection(conn).expect("upgrade");
+        let records = catalog.all_metadata().expect("read");
+        assert!(records["aot"].manual);
+        let aot = records["aot"].metadata.as_ref().expect("still matched");
+        assert_eq!(aot.backdrop_url.as_deref(), Some("fanart.jpg"));
+        assert_eq!(aot.logo_url, None);
+        let details = aot.details.as_ref().expect("details kept");
+        assert_eq!(details.format.as_deref(), Some("TV"));
+        assert!(!details.is_current());
+
+        let ages = catalog.enrichment_ages().expect("ages");
+        assert!(!ages.contains_key("aot"));
+        assert!(ages.contains_key("got"));
+        let episodes = catalog.all_episode_metadata().expect("read");
+        assert_eq!(
+            episodes["aot"].get(Some(1), 1).and_then(|e| e.runtime),
+            None
+        );
+        assert_eq!(episodes["aot"].len(), 1);
+    }
+
     /// A file keeps the moment it first appeared across recrawls, and one
     /// that was there before this was recorded reads as 0.
     #[test]
@@ -2797,6 +2908,7 @@ mod tests {
                     overview: None,
                     still_url: None,
                     air_date: None,
+                    runtime: None,
                 }],
             )
             .expect("store");

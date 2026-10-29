@@ -137,6 +137,17 @@ internal fun nextUpIndex(playlist: List<EpisodeRecord>, continueIndex: UInt? = n
         ?: playlist.indexOfFirst { !it.watched }.takeIf { it >= 0 }
         ?: 0
 
+/** `24 min`, `2 h 4 min`, `2 h`: a provider's running time in minutes. */
+internal fun formatRuntime(minutes: UInt): String {
+    val hours = minutes / 60u
+    val rest = minutes % 60u
+    return when {
+        hours == 0u -> "$rest min"
+        rest == 0u -> "$hours h"
+        else -> "$hours h $rest min"
+    }
+}
+
 internal fun formatBytes(bytes: ULong): String {
     val value = bytes.toDouble()
     return when {

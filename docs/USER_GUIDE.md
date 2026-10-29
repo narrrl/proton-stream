@@ -72,6 +72,9 @@ Click a title to open its page. **Esc** goes back.
 - Each episode shows a tick when you have watched it. Right-click an episode and choose **Mark
   watched up to here** to tick it and every episode before it.
 - **In this franchise** lists the other parts of the series, when posters and descriptions are on.
+- With posters and descriptions on, a show's logo takes the place of its name at the top of the
+  page and on the library's banner, and each episode says how long it runs. A film says how long
+  it runs in the line under its name.
 
 An episode counts as watched once you have seen 90% of it.
 

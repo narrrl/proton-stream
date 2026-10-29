@@ -25,7 +25,8 @@ use std::sync::Arc;
 
 use pstr_core::library::{Title, TitleKind, title_key};
 use pstr_core::metadata::{
-    Enrichment, MATCH_TTL_SECS, MetadataConfig, MetadataRecord, ProviderId, TitleMetadata,
+    Enrichment, MATCH_TTL_SECS, MetadataConfig, MetadataRecord, ProviderId, TitleDetails,
+    TitleMetadata,
 };
 
 use crate::anilist::AniList;
@@ -261,8 +262,9 @@ pub enum Work {
     Match(Title),
     /// It is already matched; only its enrichment is missing or old.
     Enrich(Title, Box<TitleMetadata>),
-    /// It is matched, but stored before [`TitleMetadata::details`] existed:
-    /// fetch the same entry again by id — never searched for, so a match the
+    /// It is matched, but stored before [`TitleMetadata::details`] existed or
+    /// by an older [`TitleDetails::REVISION`] of them: fetch the same entry
+    /// again by id — never searched for, so a match the
     /// viewer picked by hand stays theirs — and enrich it too if `enrich`.
     Refresh {
         title: Title,
@@ -298,8 +300,8 @@ pub struct Outcome {
 /// already has a good match but has not been enriched — or was enriched longer
 /// ago than a match is trusted — needs enriching only, and searching for it
 /// again would ask the provider something it has already answered. One whose
-/// match predates its details is fetched again by id, which is one request
-/// and decides nothing.
+/// match predates its details, or this build's revision of them, is fetched
+/// again by id, which is one request and decides nothing.
 ///
 /// A hand-picked entry is never searched for again, not even when `force`d —
 /// that means "the automatic answers are wrong", and re-deciding the one title
@@ -335,7 +337,7 @@ pub fn plan(
             && record
                 .metadata
                 .as_ref()
-                .is_some_and(|found| found.details.is_none());
+                .is_some_and(|found| !found.details.as_ref().is_some_and(TitleDetails::is_current));
         if stale_details {
             work.push(Work::Refresh {
                 title,
@@ -394,14 +396,17 @@ impl MetadataService {
                         enrichment: None,
                     });
                 };
-                // An id the provider no longer has keeps what was stored, with
-                // empty details so it is not asked about on every run.
+                // An id the provider no longer has keeps what was stored, its
+                // details marked current so it is not asked about on every run.
                 let found = self
                     .source
                     .entry(&stored.remote_id)
                     .await?
                     .unwrap_or_else(|| TitleMetadata {
-                        details: Some(Default::default()),
+                        details: Some(TitleDetails {
+                            revision: TitleDetails::REVISION,
+                            ..stored.details.clone().unwrap_or_default()
+                        }),
                         ..stored.clone()
                     });
                 let enrichment = match enrich {
@@ -506,6 +511,7 @@ mod tests {
                 kind: TitleKind::Series,
                 poster_url: None,
                 backdrop_url: None,
+                logo_url: None,
                 rating: None,
                 genres: Vec::new(),
                 episodes: None,
@@ -619,6 +625,40 @@ mod tests {
             false,
         );
         assert_eq!(kinds(&work), vec![("automatic", "enrich")]);
+    }
+
+    /// Details from an older build are refetched by id, and kept meanwhile;
+    /// details this build wrote are not asked for again.
+    #[test]
+    fn details_from_an_older_revision_are_refreshed_and_current_ones_are_not() {
+        let with = |revision| {
+            let mut record = matched("k", false);
+            if let Some(found) = record.metadata.as_mut() {
+                found.details = Some(TitleDetails {
+                    revision,
+                    ..TitleDetails::default()
+                });
+            }
+            record
+        };
+        let enriched = HashMap::from([("k".to_string(), (ProviderId::AniList, now()))]);
+        let run = |record: MetadataRecord| {
+            let stored = HashMap::from([("k".to_string(), record)]);
+            let work = plan(
+                vec![title("k")],
+                &stored,
+                &enriched,
+                ProviderId::AniList,
+                true,
+                false,
+            );
+            kinds(&work)
+                .into_iter()
+                .map(|(_, kind)| kind.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(with(0)), vec!["refresh"]);
+        assert!(run(with(TitleDetails::REVISION)).is_empty());
     }
 
     /// A record from the other provider is never usable — switching provider has

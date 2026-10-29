@@ -104,6 +104,11 @@ pub struct TitleMetadata {
     /// Landscape art, around 16:9. Much rarer than a poster, and the reason the
     /// grid cannot simply prefer one shape.
     pub backdrop_url: Option<String>,
+    /// The title's name as its own lettering: a transparent PNG, drawn over
+    /// wide art in place of the name in type. Found by enrichment, like the
+    /// backdrop, and padded by its source — see `pstr-app`'s `trim_alpha`.
+    #[serde(default)]
+    pub logo_url: Option<String>,
     /// Out of 10, however the provider scores.
     pub rating: Option<f32>,
     pub genres: Vec<String>,
@@ -161,6 +166,15 @@ pub struct TitleDetails {
     /// side stories, recaps, retellings. What the library groups a franchise
     /// by; see `crate::franchise`.
     pub related: Vec<String>,
+    /// Minutes: an episode's length for a series, the whole running time for
+    /// a film.
+    pub runtime: Option<u32>,
+    /// Which [`TitleDetails::REVISION`] wrote this. A stored record from an
+    /// older one lacks a field a newer build asks for, and is fetched again
+    /// by id — see `pstr_meta::service::plan`. Not a reason to blank it in a
+    /// migration: until the refetch lands, the old details still group the
+    /// library and fill its shelves.
+    pub revision: u32,
     /// The entries enrichment walked through to find the title's episodes —
     /// its own sequels, by provider id. Stored apart from the rest, because
     /// it is enrichment's answer rather than the match's.
@@ -169,6 +183,18 @@ pub struct TitleDetails {
 }
 
 impl TitleDetails {
+    /// What a provider that fills these in today writes into
+    /// [`TitleDetails::revision`]. Raise it with a field that existing
+    /// records should be fetched again for. `1` added
+    /// [`TitleDetails::runtime`].
+    pub const REVISION: u32 = 1;
+
+    /// Whether these were written by this build's [`TitleDetails::REVISION`]
+    /// or a later one.
+    pub fn is_current(&self) -> bool {
+        self.revision >= Self::REVISION
+    }
+
     /// `TV` → `TV`, `MOVIE` → `Film`, `TV_SHORT` → `TV short`.
     pub fn format_label(&self) -> Option<&'static str> {
         Some(match self.format.as_deref()? {
@@ -317,6 +343,9 @@ pub struct EpisodeMetadata {
     /// sorted on, and a provider that answers `2009` should not be a parse
     /// error.
     pub air_date: Option<String>,
+    /// Minutes.
+    #[serde(default)]
+    pub runtime: Option<u32>,
 }
 
 /// What enriching a matched title found: its episodes, and art the search
@@ -331,6 +360,9 @@ pub struct Enrichment {
     /// A 16:9 picture of the whole title, when one was found. `None` leaves
     /// whatever backdrop the match already had.
     pub backdrop_url: Option<String>,
+    /// The title's logo, when one was found. `None` leaves whatever the match
+    /// already had, as with the backdrop.
+    pub logo_url: Option<String>,
     /// Every provider entry the episodes were taken from, the match's own
     /// included. See [`TitleDetails::chain`].
     pub chain: Vec<String>,
@@ -550,6 +582,7 @@ mod tests {
             kind: TitleKind::Series,
             poster_url: None,
             backdrop_url: None,
+            logo_url: None,
             rating: None,
             genres: Vec::new(),
             episodes: Some(26),
@@ -569,6 +602,7 @@ mod tests {
             overview: None,
             still_url: None,
             air_date: None,
+            runtime: None,
         }
     }
 

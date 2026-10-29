@@ -112,6 +112,84 @@ internal fun RemoteArtwork(
     }
 }
 
+/**
+ * A title's logo — its name as lettering — in place of [fallback], once it has
+ * loaded. [fallback] stands until then, and for good when there is none, so a
+ * title without a logo looks as it always did and one with a logo only gains.
+ *
+ * Trimmed to what is not transparent before it is drawn: TVDB pads every clear
+ * logo to a square, and the padding would otherwise decide its size and place.
+ */
+@Composable
+internal fun RemoteLogo(
+    url: String?,
+    description: String,
+    modifier: Modifier = Modifier,
+    fallback: @Composable () -> Unit,
+) {
+    val context = LocalContext.current
+    val enabled = LocalArtworkLoading.current
+    var logo by remember(url) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(url, enabled) {
+        logo = if (enabled) loadLogo(context, url)?.asImageBitmap() else null
+    }
+    when (val loaded = logo) {
+        null -> fallback()
+        else -> Image(
+            loaded,
+            description,
+            modifier,
+            alignment = Alignment.BottomStart,
+            contentScale = ContentScale.Fit,
+        )
+    }
+}
+
+private suspend fun loadLogo(context: Context, url: String?): Bitmap? {
+    val requested = url ?: return null
+    val key = "logo:$requested"
+    decoded.get(key)?.let { return it }
+    val bitmap = loadArtwork(context, requested, LOGO_EDGE) ?: return null
+    return withContext(Dispatchers.Default) { trimTransparent(bitmap) }.also { decoded.put(key, it) }
+}
+
+/** [bitmap] cropped to [opaqueBounds], or itself when there is nothing to crop. */
+private fun trimTransparent(bitmap: Bitmap): Bitmap {
+    if (!bitmap.hasAlpha()) return bitmap
+    val pixels = IntArray(bitmap.width * bitmap.height)
+    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+    val (left, top, right, bottom) = opaqueBounds(pixels, bitmap.width) ?: return bitmap
+    if (left == 0 && top == 0 && right == bitmap.width - 1 && bottom == bitmap.height - 1) return bitmap
+    return Bitmap.createBitmap(bitmap, left, top, right - left + 1, bottom - top + 1)
+}
+
+/**
+ * The inclusive `[left, top, right, bottom]` of the pixels in an ARGB [pixels]
+ * row-major image of [width] that are not (nearly) transparent; `null` when
+ * none are. Below the threshold is anti-aliasing haze, not lettering.
+ */
+internal fun opaqueBounds(pixels: IntArray, width: Int): IntArray? {
+    var left = Int.MAX_VALUE
+    var top = Int.MAX_VALUE
+    var right = -1
+    var bottom = -1
+    for (index in pixels.indices) {
+        if ((pixels[index] ushr 24) <= VISIBLE_ALPHA) continue
+        val x = index % width
+        val y = index / width
+        if (x < left) left = x
+        if (x > right) right = x
+        if (y < top) top = y
+        if (y > bottom) bottom = y
+    }
+    return if (right < 0) null else intArrayOf(left, top, right, bottom)
+}
+
+private const val VISIBLE_ALPHA = 8
+
+/** A logo is drawn a few hundred pixels wide at most. */
+private const val LOGO_EDGE = 800
+
 private sealed interface ArtworkLoad {
     data object Pending : ArtworkLoad
     data object Missing : ArtworkLoad

@@ -36,6 +36,8 @@ pub struct Mapping {
     pub episodes: Vec<EpisodeMetadata>,
     /// TVDB's fanart for the whole series: 16:9, usually 1920×1080.
     pub fanart: Option<String>,
+    /// TVDB's clear logo: the series' name as lettering, a transparent PNG.
+    pub logo: Option<String>,
 }
 
 pub struct AniZip {
@@ -108,6 +110,12 @@ struct Episode {
     summary: Option<String>,
     image: Option<String>,
     air_date: Option<String>,
+    /// TVDB's running time, in minutes.
+    #[serde(default, deserialize_with = "lenient_number")]
+    runtime: Option<u32>,
+    /// AniDB's, which is there when TVDB's is not.
+    #[serde(default, deserialize_with = "lenient_number")]
+    length: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -119,11 +127,14 @@ struct Image {
 
 impl Payload {
     fn into_mapping(self, language: &str, entry_season: Option<u32>) -> Mapping {
-        let fanart = self
-            .images
-            .into_iter()
-            .find(|image| image.cover_type.as_deref() == Some("Fanart"))
-            .and_then(|image| image.url);
+        let image = |kind: &str| {
+            self.images
+                .iter()
+                .find(|image| image.cover_type.as_deref() == Some(kind))
+                .and_then(|image| text(image.url.clone()))
+        };
+        let fanart = image("Fanart");
+        let logo = image("Clearlogo");
 
         let episodes = self
             .episodes
@@ -150,11 +161,19 @@ impl Payload {
                     overview: text(episode.overview).or_else(|| text(episode.summary)),
                     still_url: text(episode.image),
                     air_date: text(episode.air_date),
+                    runtime: episode
+                        .runtime
+                        .or(episode.length)
+                        .filter(|minutes| *minutes > 0),
                 })
             })
             .collect();
 
-        Mapping { episodes, fanart }
+        Mapping {
+            episodes,
+            fanart,
+            logo,
+        }
     }
 }
 
@@ -206,15 +225,16 @@ mod tests {
                   "title": {"en": "Beast Titan", "ja": "獣の巨人", "x-jat": "Kemono no Kyojin"},
                   "overview": "Titans appear inside Wall Rose.",
                   "image": "https://artworks.thetvdb.com/still.jpg",
-                  "airDate": "2017-04-01"},
+                  "airDate": "2017-04-01", "runtime": 24, "length": 25},
             "S1": {"seasonNumber": "0", "episodeNumber": "7", "episode": "S1",
                    "title": {"en": "TBA", "x-jat": "Ilse no Techou"},
-                   "summary": "An OVA."},
+                   "summary": "An OVA.", "length": "30"},
             "2": {"episode": "2", "title": {"en": "Unplaced"}}
         },
         "images": [
             {"coverType": "Banner", "url": "banner.jpg"},
-            {"coverType": "Fanart", "url": "fanart.jpg"}
+            {"coverType": "Fanart", "url": "fanart.jpg"},
+            {"coverType": "Clearlogo", "url": "clearlogo.png"}
         ]
     }"#;
 
@@ -241,6 +261,8 @@ mod tests {
             Some("Titans appear inside Wall Rose.")
         );
         assert_eq!(first.air_date.as_deref(), Some("2017-04-01"));
+        // TVDB's running time wins over AniDB's.
+        assert_eq!(first.runtime, Some(24));
     }
 
     /// A special is numbered in strings and filed under season zero, and no
@@ -260,6 +282,8 @@ mod tests {
         assert_eq!(special.name.as_deref(), Some("Ilse no Techou"));
         // AniDB's summary stands in for TVDB's missing overview.
         assert_eq!(special.overview.as_deref(), Some("An OVA."));
+        // And AniDB's length for TVDB's missing running time.
+        assert_eq!(special.runtime, Some(30));
     }
 
     #[test]
@@ -286,11 +310,17 @@ mod tests {
     }
 
     #[test]
+    fn the_clear_logo_is_kept() {
+        assert_eq!(mapping(None).logo.as_deref(), Some("clearlogo.png"));
+    }
+
+    #[test]
     fn an_entry_ani_zip_has_nothing_for_parses_to_nothing() {
         let mapping = serde_json::from_str::<Payload>("{}")
             .expect("parse")
             .into_mapping("en", Some(1));
         assert!(mapping.episodes.is_empty());
         assert_eq!(mapping.fanart, None);
+        assert_eq!(mapping.logo, None);
     }
 }

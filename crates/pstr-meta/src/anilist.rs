@@ -77,6 +77,7 @@ fragment entry on Media {
   genres
   tags { name rank isMediaSpoiler }
   episodes
+  duration
   format
   status
   siteUrl
@@ -249,6 +250,9 @@ impl Provider for AniList {
             if enrichment.backdrop_url.is_none() {
                 enrichment.backdrop_url = mapping.fanart;
             }
+            if enrichment.logo_url.is_none() {
+                enrichment.logo_url = mapping.logo;
+            }
             // Where two entries both list an episode, the earlier one — the
             // one closer to the match — keeps it.
             enrichment.episodes.extend(
@@ -308,7 +312,6 @@ impl AniList {
         Ok(next_in_chain(edges, visited))
     }
 
-    /// One GraphQL requestimpl AniList {
     /// One GraphQL request, paced, with AniList's two ways of failing — an HTTP
     /// status and an `errors` array under a 200 — folded into one.
     ///
@@ -560,6 +563,8 @@ struct Media {
     #[serde(default)]
     tags: Vec<Tag>,
     episodes: Option<u32>,
+    /// Minutes per episode, or the film's running time.
+    duration: Option<u32>,
     format: Option<String>,
     season: Option<String>,
     status: Option<String>,
@@ -734,6 +739,8 @@ impl Media {
                 .collect(),
             popularity: self.popularity,
             status: self.status,
+            runtime: self.duration.filter(|minutes| *minutes > 0),
+            revision: TitleDetails::REVISION,
             next_episode: self
                 .next_airing_episode
                 .as_ref()
@@ -774,6 +781,8 @@ impl Media {
                 // backdrop is ani.zip's fanart, found when the match is
                 // enriched.
                 backdrop_url: None,
+                // ani.zip's too, like the fanart.
+                logo_url: None,
                 rating: self.average_score.map(|score| score / SCORE_SCALE),
                 genres: self.genres,
                 episodes: self.episodes,
@@ -1022,6 +1031,7 @@ mod tests {
             overview: None,
             still_url: None,
             air_date: None,
+            runtime: None,
         };
         let season_one = vec![episode(1, 1, 1), episode(1, 2, 2)];
         assert!(answers_all(&season_one, &[(Some(1), 1), (None, 2)]));

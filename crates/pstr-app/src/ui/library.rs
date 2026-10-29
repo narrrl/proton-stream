@@ -274,15 +274,17 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             }
             ui.label(ui::muted(facts.join("  ·  ")));
             ui.add_space(theme::space::XXS);
-            ui.add(
-                egui::Label::new(
-                    theme::Role::Display
-                        .rich(art.name(title))
-                        .strong()
-                        .color(theme::text()),
-                )
-                .truncate(),
-            );
+            if ui::logo_heading(ui, art, title, 110.0).is_none() {
+                ui.add(
+                    egui::Label::new(
+                        theme::Role::Display
+                            .rich(art.name(title))
+                            .strong()
+                            .color(theme::text()),
+                    )
+                    .truncate(),
+                );
+            }
         },
     );
 

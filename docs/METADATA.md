@@ -170,6 +170,26 @@ AniList, so a search that finds nothing is asked again without it.
 
 Not done: TMDB fills no details.
 
+**Logos and running times.** ani.zip sent both from the start and neither was
+kept. Enrichment now keeps the series' TVDB *Clearlogo* — a transparent PNG —
+in `title_metadata.logo_url`, kept across a refresh of the same entry like the
+fanart, and each episode's running time (TVDB's, else AniDB's `length`) in
+`episode_metadata.runtime`. AniList's `duration` lands in
+`TitleDetails::runtime`: minutes per episode for a series, the whole running
+time for a film. TMDB's episode runtimes are kept the same way.
+
+A clear logo is padded to a square, so every client crops it to its visible
+pixels before drawing it (`trim_alpha` on the desktop, `opaqueBounds` on
+Android and iOS). It replaces the name over the library's banner and at the
+top of the title page — except on a light theme's title page, where lettering
+made for dark art could vanish. A film's running time joins its line of facts;
+an episode row shows its own (on Android and iOS in place of the file size).
+
+**Schema v13** adds the two columns and marks every AniList title un-enriched,
+deleting nothing. `TitleDetails::revision` makes details written before
+`runtime` existed refetch by id on the next run; they stay on screen until the
+answer lands, rather than being blanked by the migration as schema v10 did.
+
 ## Phase 3 — reach
 
 - **Local matching** against the offline database, so only ids leave the
