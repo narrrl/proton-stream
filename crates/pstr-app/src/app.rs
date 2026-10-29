@@ -2813,6 +2813,8 @@ fn changed_art(
             found.and_then(|metadata| metadata.poster_url.clone()),
             found.and_then(|metadata| metadata.wide_art().map(str::to_owned)),
             found.and_then(|metadata| metadata.logo_url.clone()),
+            // The poster again: the blurred band is made from it.
+            found.and_then(|metadata| metadata.poster_url.clone()),
         ]
     };
     let mut keys: Vec<String> = Vec::new();
@@ -2823,6 +2825,7 @@ fn changed_art(
             ui::poster_key(key),
             ui::wide_key(key),
             ui::logo_key(key),
+            ui::ambient_key(key),
         ];
         for ((old, new), texture) in old.iter().zip(&new).zip(texture_keys) {
             if old != new {
@@ -3153,12 +3156,16 @@ mod tests {
             record("added", Some("w")),
         ]
         .into();
-        // The tile and the cover are both drawn from the poster here; the
-        // wide art has nothing to be.
+        // The tile, the cover and the blurred band are all drawn from the
+        // poster here; the wide art has nothing to be.
         assert_eq!(
             changed_art(&before, &after),
             vec![
                 "added",
+                "ambient:added",
+                "ambient:dropped",
+                "ambient:found",
+                "ambient:moved",
                 "dropped",
                 "found",
                 "moved",

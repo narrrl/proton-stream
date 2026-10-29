@@ -240,6 +240,19 @@ With TMDB itself chosen, enrichment now makes the same request for the logo,
 and backdrops are fetched at `w1280` rather than `w780`, since they fill the
 width of the title page.
 
+**A band that never looks broken (done).** A title with no wide art drew
+its poster cropped to the band's shape: a blown-up slice of the middle of it.
+Now the poster is squeezed to 64×36 and blurred once, when it is fetched
+(`Fit::Ambient`; the cache keeps the wash, not the poster), and that is
+stretched across the band — the poster's colours and light rather than a
+crop. The library's banner then stands the poster itself at its right. Android
+and iOS blur the poster the same way (Android 12 and later; older versions
+decode it tiny, which softens it less).
+
+**Quality from file names (done).** `naming::quality` reads `2160p`, `HDR`,
+`10-bit` and `Dual-Audio` out of a release name, and a title's page shows what
+most of its files say. No release group is read.
+
 Still to do:
 
 - **Local matching** against the offline database, so only ids leave the

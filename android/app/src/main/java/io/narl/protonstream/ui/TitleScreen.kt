@@ -183,13 +183,7 @@ internal fun TitleScreen(
                 // the page says, and a framed thumbnail with a margin round it read
                 // as one card among the many below it.
                 Box(Modifier.sharedArt(title.key).fillMaxWidth().height(backdropHeight)) {
-                    RemoteArtwork(
-                        title.backdropUrl ?: title.posterUrl,
-                        title.displayName,
-                        Modifier.fillMaxSize(),
-                        fallback = title.thumbnailSource,
-                        labelled = false,
-                    )
+                    Backdrop(title, Modifier.fillMaxSize())
                     Box(
                         Modifier.fillMaxSize().background(
                             Brush.verticalGradient(

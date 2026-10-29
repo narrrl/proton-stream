@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -34,6 +35,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
 import io.narl.protonstream.native.NativeRuntime
 import kotlinx.coroutines.Dispatchers
@@ -111,6 +113,29 @@ internal fun RemoteArtwork(
         is ArtworkLoad.Loaded -> Image(loaded.image, description, modifier, contentScale = ContentScale.Crop)
     }
 }
+
+/**
+ * A title's art across the top of a page: its backdrop, or with none, its
+ * poster as a wash of its own colours — decoded tiny and blurred, so it reads as
+ * the poster's light rather than a blown-up slice of it. The desktop's
+ * `Fit::Ambient`. Android 11 and older cannot blur; there the tiny decode,
+ * stretched, is what softens it.
+ */
+@Composable
+internal fun Backdrop(title: TitleRecord, modifier: Modifier = Modifier) {
+    val wash = title.backdropUrl == null && title.posterUrl != null
+    RemoteArtwork(
+        title.backdropUrl ?: title.posterUrl,
+        title.displayName,
+        if (wash) modifier.blur(WASH_BLUR) else modifier,
+        fallback = title.thumbnailSource,
+        labelled = false,
+        maxEdge = if (wash) WASH_EDGE else null,
+    )
+}
+
+private val WASH_EDGE = 48.dp
+private val WASH_BLUR = 24.dp
 
 /**
  * A title's logo — its name as lettering — in place of [fallback], once it has

@@ -119,7 +119,7 @@ struct TitleView: View {
     /// Edge to edge, fading into the page: the art is the first thing the page
     /// says.
     private func backdrop(height: CGFloat, top: CGFloat) -> some View {
-        RemoteArtwork(title.backdropUrl ?? title.posterUrl, title.displayName, fallback: title.thumbnailSource, labelled: false)
+        Backdrop(title: title)
             .frame(height: height)
             .frame(maxWidth: .infinity)
             .clipped()

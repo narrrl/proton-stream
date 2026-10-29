@@ -494,7 +494,7 @@ private struct FeaturedBanner: View {
     let onOpen: () -> Void
 
     var body: some View {
-        RemoteArtwork(title.backdropUrl ?? title.posterUrl, title.displayName, fallback: title.thumbnailSource, labelled: false)
+        Backdrop(title: title)
             .aspectRatio(4 / 3, contentMode: .fit)
             .overlay {
                 LinearGradient(

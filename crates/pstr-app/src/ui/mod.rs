@@ -107,7 +107,9 @@ impl Art<'_> {
     }
 
     /// Art for a strip across the whole window, at full size: fanart, else
-    /// AniList's banner, else whatever [`Art::of`] has.
+    /// AniList's banner, else the poster blurred into a wash of its colours —
+    /// see [`crate::engine::Engine::request_ambient`] — else whatever
+    /// [`Art::of`] has.
     ///
     /// Its own texture rather than the tile's: a 640 px tile picture
     /// stretched to a 1600 px hero is soft, and a 1920 px one in every tile
@@ -128,8 +130,33 @@ impl Art<'_> {
             {
                 return Some((texture, ArtShape::Landscape));
             }
+        } else if let Some(url) = self.poster_url(title) {
+            let key = ambient_key(&title.key);
+            let engine = self.engine;
+            if let Some(texture) = self
+                .posters
+                .texture(&key, || engine.request_ambient(key.clone(), url))
+            {
+                return Some((texture, ArtShape::Landscape));
+            }
         }
         self.of(title)
+    }
+
+    /// Whether `title` has a picture made for a strip across the window, rather
+    /// than [`Art::wide`] standing one in.
+    pub fn has_wide_art(&self, title: &Title) -> bool {
+        self.metadata
+            .get(&title.key)
+            .and_then(|record| record.metadata.as_ref())
+            .is_some_and(|metadata| metadata.wide_art().is_some())
+    }
+
+    fn poster_url(&self, title: &Title) -> Option<String> {
+        self.metadata
+            .get(&title.key)
+            .and_then(|record| record.metadata.as_ref())
+            .and_then(|metadata| metadata.poster_url.clone())
     }
 
     /// The title's name as lettering, trimmed to it, when the provider has
@@ -185,6 +212,11 @@ pub fn poster_key(title_key: &str) -> String {
 /// The texture key of a title's full-size wide art.
 pub fn wide_key(title_key: &str) -> String {
     format!("wide:{title_key}")
+}
+
+/// The texture key of a title's poster blurred for a band.
+pub fn ambient_key(title_key: &str) -> String {
+    format!("ambient:{title_key}")
 }
 
 /// A title's logo in place of its name in Display type, when there is one to

@@ -230,6 +230,34 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             rect.bottom() - 28.0,
         ),
     );
+
+    // With no wide art the banner is the poster's wash, so the poster itself
+    // stands at the right, where wide art keeps its subject — over the veils,
+    // and only where it clears the text.
+    if !art.has_wide_art(title)
+        && let Some((poster, pstr_core::metadata::ArtShape::Portrait)) = art.poster(title)
+    {
+        const INSET: f32 = 28.0;
+        let height = rect.height() - 2.0 * INSET;
+        let size = egui::vec2(height * 2.0 / 3.0, height);
+        let at = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - 2.0 * INSET - size.x, rect.top() + INSET),
+            size,
+        );
+        if at.left() > inner.right() + INSET {
+            painter.add(
+                egui::epaint::RectShape::filled(
+                    at,
+                    egui::CornerRadius::same(theme::radius::MD),
+                    egui::Color32::WHITE.gamma_multiply(art_in),
+                )
+                .with_texture(
+                    poster.id(),
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                ),
+            );
+        }
+    }
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(inner)

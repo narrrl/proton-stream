@@ -628,13 +628,7 @@ private fun featured(titles: List<TitleRecord>, resumable: List<Resumable>): Tit
 private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int) -> Unit, onOpen: () -> Unit) {
     val playlist = remember(title) { title.seasons.flatMap(SeasonRecord::episodes) }
     Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(MaterialTheme.shapes.large)) {
-        RemoteArtwork(
-            title.backdropUrl ?: title.posterUrl,
-            title.displayName,
-            Modifier.fillMaxSize(),
-            fallback = title.thumbnailSource,
-            labelled = false,
-        )
+        Backdrop(title, Modifier.fillMaxSize())
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(0.35f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.85f)),

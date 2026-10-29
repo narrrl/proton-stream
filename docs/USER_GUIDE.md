@@ -76,6 +76,8 @@ Click a title to open its page. **Esc** goes back.
 - With posters and descriptions on, a show's logo takes the place of its name at the top of the
   page and on the library's banner, and each episode says how long it runs. A film says how long
   it runs in the line under its name.
+- A title with no wide picture shows its poster blurred across the top of the page instead, and
+  on the library's banner the poster itself beside it.
 - The line under the name also says what most of the files are, when their names say it: **4K**,
   **1080p**, **HDR**, **10-bit** or **Dual audio**.
 

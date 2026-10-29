@@ -174,6 +174,15 @@ pub const WIDE_MAX_EDGE: u32 = 1920;
 /// most a few hundred pixels wide; this leaves room for a 2× display.
 const LOGO_MAX_EDGE: u32 = 800;
 
+/// The size a poster is squeezed to for [`Fit::Ambient`]: 16:9, and small
+/// enough that what is left of it is colour and light rather than shapes.
+const AMBIENT_SIZE: (u32, u32) = (64, 36);
+
+/// How far the squeezed poster is blurred, in its own pixels. With linear
+/// filtering stretching it across the window, this is what keeps the stretch
+/// from showing its pixels.
+const AMBIENT_BLUR: f32 = 3.0;
+
 /// How a fetched picture is fitted before it becomes a texture.
 #[derive(Clone, Copy)]
 enum Fit {
@@ -183,6 +192,11 @@ enum Fit {
     /// [`LOGO_MAX_EDGE`]. TVDB pads every clear logo to a square, and the
     /// padding would otherwise decide where it sits and how big it is drawn.
     Logo,
+    /// A poster made into a wash of its own colours, for a band across the
+    /// window when a title has no wide art: squeezed to [`AMBIENT_SIZE`] and
+    /// blurred. A poster cropped to that shape was a blown-up slice of it,
+    /// which read as broken; this reads as the poster's light.
+    Ambient,
 }
 
 /// What the background side tells the UI.
@@ -2810,6 +2824,11 @@ impl Engine {
         self.fetch_art(key, url, Fit::Logo);
     }
 
+    /// [`Engine::request_poster`], blurred for a band. See [`Fit::Ambient`].
+    pub fn request_ambient(&self, key: String, url: String) {
+        self.fetch_art(key, url, Fit::Ambient);
+    }
+
     fn fetch_art(&self, title_key: String, url: String, fit: Fit) {
         let engine = self.clone();
         // A size of its own on disk: the tile-sized copy of the same URL is
@@ -2818,6 +2837,7 @@ impl Engine {
             Fit::Scaled(THUMBNAIL_MAX_EDGE) => format!("{}.img", digest(&url)),
             Fit::Scaled(edge) => format!("{}-{edge}.img", digest(&url)),
             Fit::Logo => format!("{}-logo.img", digest(&url)),
+            Fit::Ambient => format!("{}-ambient.img", digest(&url)),
         };
         let path = self.dirs.poster_cache().join(name);
 
@@ -3018,6 +3038,18 @@ fn decode_fitted(bytes: &[u8], fit: Fit) -> anyhow::Result<Decoded> {
                 changed = true;
             }
             LOGO_MAX_EDGE
+        }
+        Fit::Ambient => {
+            // Already blurred when it came out of the cache: only a picture
+            // of another size is the poster itself.
+            let (width, height) = AMBIENT_SIZE;
+            if (decoded.width(), decoded.height()) != AMBIENT_SIZE {
+                decoded = decoded
+                    .resize_exact(width, height, image::imageops::FilterType::Triangle)
+                    .blur(AMBIENT_BLUR);
+                changed = true;
+            }
+            width
         }
     };
     let (decoded, smaller) = if decoded.width().max(decoded.height()) > max_edge {
@@ -3343,6 +3375,29 @@ mod image_cache_tests {
         padded.put_pixel(2, 2, image::Rgba([255, 255, 255, 3]));
         let trimmed = trim_alpha(&image::DynamicImage::ImageRgba8(padded)).expect("trimmed");
         assert_eq!((trimmed.width(), trimmed.height()), (60, 20));
+    }
+
+    /// A poster for a band is squeezed and blurred once; what the cache keeps
+    /// is already the wash, and decoding it again leaves it as it is.
+    #[test]
+    fn a_poster_for_a_band_becomes_a_small_blurred_wash_once() {
+        let mut poster = image::RgbImage::new(200, 300);
+        for y in 0..150 {
+            for x in 0..200 {
+                poster.put_pixel(x, y, image::Rgb([255, 255, 255]));
+            }
+        }
+        let poster = encode_for_cache(&image::DynamicImage::ImageRgb8(poster)).expect("encode");
+        let decoded = decode_fitted(&poster, Fit::Ambient).expect("decode");
+        assert_eq!(decoded.image.size, [64, 36]);
+        // White above, black below, and a ramp between rather than an edge.
+        let middle = decoded.image.pixels[18 * 64 + 32];
+        assert!(middle.r() > 40 && middle.r() < 215, "{middle:?}");
+
+        let cached = decoded.smaller.expect("the wash is what is cached");
+        let again = decode_fitted(&cached, Fit::Ambient).expect("decode");
+        assert_eq!(again.image.size, [64, 36]);
+        assert!(again.smaller.is_none());
     }
 
     #[test]

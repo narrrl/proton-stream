@@ -81,6 +81,19 @@ struct RemoteArtwork: View {
     }
 }
 
+/// A title's art across the top of a page: its backdrop, or with none, its
+/// poster as a wash of its own colours — blurred, so it reads as the poster's
+/// light rather than a blown-up slice of it. The desktop's `Fit::Ambient`.
+struct Backdrop: View {
+    let title: TitleRecord
+
+    var body: some View {
+        let wash = title.backdropUrl == nil && title.posterUrl != nil
+        RemoteArtwork(title.backdropUrl ?? title.posterUrl, title.displayName, fallback: title.thumbnailSource, labelled: false)
+            .blur(radius: wash ? 24 : 0, opaque: true)
+    }
+}
+
 /// A title's logo — its name as lettering — in place of `fallback`, once it
 /// has loaded. `fallback` stands until then, and for good when there is none,
 /// so a title without a logo looks as it always did and one with a logo only
