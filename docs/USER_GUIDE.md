@@ -65,9 +65,10 @@ Click a title to open its page. **Esc** goes back.
 - **Resume S01E03 · 12:04** continues where you stopped. **Start over** plays the episode from
   the beginning.
 - **Download show** keeps every episode on this device. See [Downloads](#downloads).
-- **Match…** opens the matcher, where you choose which AniList or TMDB entry the title is. Use it
-  when the app guessed wrong or did not guess at all. A match you pick is never replaced.
-- **More on AniList** (or TMDB) opens the title's page there.
+- **Match…** opens the matcher, where you choose which AniList, TVmaze or TMDB entry the title
+  is. Each result names the site it came from. Use it when the app guessed wrong or did not guess
+  at all. A match you pick is never replaced.
+- **More on AniList** (or TVmaze, or TMDB) opens the title's page there.
 - Each season has **Mark season watched** and **Download season**.
 - Each episode shows a tick when you have watched it. Right-click an episode and choose **Mark
   watched up to here** to tick it and every episode before it.
@@ -220,6 +221,8 @@ a video that is playing changes at once.
 **Posters and descriptions**
 
 - Off by default. When it is on, the app sends the names of your titles to the provider you pick:
-  **AniList** (no key needed) or **TMDB** (needs a free API key). See [Privacy](PRIVACY.md).
+  **AniList** (no key needed) or **TMDB** (needs a free API key). With AniList, a title it does
+  not have, such as a live-action show, is looked up on **TVmaze** next, which needs no key
+  either. See [Privacy](PRIVACY.md).
 - **Match the library** looks up new titles now. **Match everything again** looks up every title,
   except those you matched by hand.

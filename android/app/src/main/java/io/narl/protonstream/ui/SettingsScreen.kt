@@ -438,16 +438,16 @@ private fun MetadataSettingsDialog(
         title = { Text("Metadata enrichment") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Off by default: enabling sends the titles in your library to a third party, associated with your IP address and subject to their privacy policy. With AniList, the matched ids also go to ani.zip for episode names and wide artwork.")
+                Text("Off by default: enabling sends the titles in your library to a third party, associated with your IP address and subject to their privacy policy. With AniList, a title it has nothing for is then sent to TVmaze, and the matched ids go to ani.zip for episode names and wide artwork.")
                 SettingToggle("Enable enrichment", enabled) { enabled = it }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MetadataProvider.entries.forEach { option ->
+                    listOf(MetadataProvider.ANI_LIST, MetadataProvider.TMDB).forEach { option ->
                         if (option == provider) AccentButton(onClick = { provider = option }) { Text(option.displayName()) }
                         else EdgedButton(onClick = { provider = option }) { Text(option.displayName()) }
                     }
                 }
                 Text(
-                    if (provider == MetadataProvider.ANI_LIST) "Anime; no account or API key required."
+                    if (provider == MetadataProvider.ANI_LIST) "Anime, and television from TVmaze; no account or API key required."
                     else "Film and television; requires a free TMDB API key.",
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -497,6 +497,7 @@ private fun MetadataSettingsDialog(
 internal fun MetadataProvider.displayName(): String = when (this) {
     MetadataProvider.ANI_LIST -> "AniList"
     MetadataProvider.TMDB -> "TMDB"
+    MetadataProvider.TV_MAZE -> "TVmaze"
 }
 
 private data class LegalDocument(val title: String, val assetPath: String)

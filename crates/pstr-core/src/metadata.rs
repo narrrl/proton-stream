@@ -39,15 +39,23 @@ pub enum ProviderId {
     AniList,
     /// The Movie Database. Film and television, needs a free API key.
     Tmdb,
+    /// TVmaze. Television, no API key. Never chosen on its own: it answers
+    /// for what AniList has not got — see `pstr_meta::service`.
+    TvMaze,
 }
 
 impl ProviderId {
-    pub const ALL: [Self; 2] = [Self::AniList, Self::Tmdb];
+    /// Every provider a stored row can name.
+    pub const ALL: [Self; 3] = [Self::AniList, Self::Tmdb, Self::TvMaze];
+
+    /// The ones a viewer picks between in the settings.
+    pub const CHOOSABLE: [Self; 2] = [Self::AniList, Self::Tmdb];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AniList => "anilist",
             Self::Tmdb => "tmdb",
+            Self::TvMaze => "tvmaze",
         }
     }
 
@@ -56,6 +64,7 @@ impl ProviderId {
         match self {
             Self::AniList => "AniList",
             Self::Tmdb => "TMDB",
+            Self::TvMaze => "TVmaze",
         }
     }
 
@@ -64,9 +73,11 @@ impl ProviderId {
         match self {
             Self::AniList => {
                 "Anime, with no API key and no account. Episode names and wide art come from \
-                 ani.zip, which is sent the matched ids."
+                 ani.zip, which is sent the matched ids. Shows AniList does not have are \
+                 looked up on TVmaze."
             }
             Self::Tmdb => "Film and television. Needs a free API key from themoviedb.org.",
+            Self::TvMaze => "Television, with no API key and no account.",
         }
     }
 
@@ -528,8 +539,13 @@ pub const MISS_TTL_SECS: i64 = 60 * 60 * 24 * 3;
 
 impl MetadataRecord {
     /// Whether this answer is still worth using rather than asking again.
-    pub fn is_fresh(&self, now: i64, provider: ProviderId) -> bool {
-        if self.provider != provider {
+    ///
+    /// `chain` is the providers asked, in order. A match from any of them
+    /// stands. A miss is stored under the last one asked, and only stands for
+    /// a chain that ends there: one an earlier provider stored was never
+    /// followed by the providers after it.
+    pub fn is_fresh(&self, now: i64, chain: &[ProviderId]) -> bool {
+        if !chain.contains(&self.provider) {
             return false;
         }
         // A hand-picked match does not go stale: nothing a re-ask could learn
@@ -539,8 +555,10 @@ impl MetadataRecord {
         }
         let ttl = if self.metadata.is_some() {
             MATCH_TTL_SECS
-        } else {
+        } else if chain.last() == Some(&self.provider) {
             MISS_TTL_SECS
+        } else {
+            return false;
         };
         now.saturating_sub(self.fetched_at) < ttl
     }
@@ -786,13 +804,13 @@ mod tests {
             fetched_at: now - MISS_TTL_SECS - 1,
             manual: false,
         };
-        assert!(!miss.is_fresh(now, ProviderId::AniList));
+        assert!(!miss.is_fresh(now, &[ProviderId::AniList]));
 
         let matched = MetadataRecord {
             metadata: Some(metadata()),
             ..miss.clone()
         };
-        assert!(matched.is_fresh(now, ProviderId::AniList));
+        assert!(matched.is_fresh(now, &[ProviderId::AniList]));
     }
 
     /// What the viewer picked by hand outlives every TTL: it is not an answer
@@ -806,9 +824,9 @@ mod tests {
             fetched_at: 0,
             manual: true,
         };
-        assert!(record.is_fresh(MATCH_TTL_SECS * 100, ProviderId::AniList));
+        assert!(record.is_fresh(MATCH_TTL_SECS * 100, &[ProviderId::AniList]));
         // But it is still one provider's id, and it means nothing to the other.
-        assert!(!record.is_fresh(MATCH_TTL_SECS * 100, ProviderId::Tmdb));
+        assert!(!record.is_fresh(MATCH_TTL_SECS * 100, &[ProviderId::Tmdb]));
     }
 
     /// Switching provider must re-ask rather than trust the other one's answer —
@@ -822,6 +840,32 @@ mod tests {
             fetched_at: 1_000_000_000,
             manual: false,
         };
-        assert!(!record.is_fresh(1_000_000_000, ProviderId::Tmdb));
+        assert!(!record.is_fresh(1_000_000_000, &[ProviderId::Tmdb]));
+    }
+
+    /// AniList's miss was stored before TVmaze followed it, and so says
+    /// nothing about what TVmaze has; TVmaze's miss, last in the chain, does.
+    /// A match from either stands.
+    #[test]
+    fn a_miss_only_stands_when_the_last_provider_asked_stored_it() {
+        let chain = [ProviderId::AniList, ProviderId::TvMaze];
+        let now = 1_000_000_000;
+        let miss = |provider| MetadataRecord {
+            title_key: "game of thrones".into(),
+            provider,
+            metadata: None,
+            fetched_at: now,
+            manual: false,
+        };
+        assert!(!miss(ProviderId::AniList).is_fresh(now, &chain));
+        assert!(miss(ProviderId::TvMaze).is_fresh(now, &chain));
+        assert!(miss(ProviderId::AniList).is_fresh(now, &[ProviderId::AniList]));
+
+        let found = |provider| MetadataRecord {
+            metadata: Some(metadata()),
+            ..miss(provider)
+        };
+        assert!(found(ProviderId::AniList).is_fresh(now, &chain));
+        assert!(found(ProviderId::TvMaze).is_fresh(now, &chain));
     }
 }

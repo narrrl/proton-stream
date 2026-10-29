@@ -321,7 +321,7 @@ private struct MetadataSettingsSheet: View {
 
     var body: some View {
         DialogSheet("Metadata enrichment") {
-            Text("Off by default: enabling sends the titles in your library to a third party, associated with your IP address and subject to their privacy policy. With AniList, the matched ids also go to ani.zip for episode names and wide artwork.")
+            Text("Off by default: enabling sends the titles in your library to a third party, associated with your IP address and subject to their privacy policy. With AniList, a title it has nothing for is then sent to TVmaze, and the matched ids go to ani.zip for episode names and wide artwork.")
             Toggle("Enable enrichment", isOn: $enabled).tint(scheme.primary).foregroundStyle(scheme.onSurface).padding(.vertical, 6)
             HStack(spacing: 8) {
                 ForEach([MetadataProvider.aniList, .tmdb], id: \.self) { option in
@@ -329,7 +329,7 @@ private struct MetadataSettingsSheet: View {
                         .buttonStyle(option == provider ? ProtonButtonStyle(kind: .accent) : ProtonButtonStyle(kind: .edged))
                 }
             }
-            Text(provider == .aniList ? "Anime; no account or API key required." : "Film and television; requires a free TMDB API key.")
+            Text(provider == .aniList ? "Anime, and television from TVmaze; no account or API key required." : "Film and television; requires a free TMDB API key.")
                 .textStyle(.bodySmall)
             if provider == .tmdb {
                 Field(label: "Language", text: $language)

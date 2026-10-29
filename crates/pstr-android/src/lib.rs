@@ -304,6 +304,9 @@ pub enum TitleType {
 pub enum MetadataProvider {
     AniList,
     Tmdb,
+    /// Never chosen in the settings: what AniList hands a show it does not
+    /// have. Seen on a [`MatchRecord`] from a hand search.
+    TvMaze,
 }
 
 /// A palette family. The shared `pstr_core::appearance::Flavor`.
@@ -1746,7 +1749,7 @@ impl AndroidEngine {
         spawned(&runtime, async move {
             let service = self.metadata_service()?;
             let metadata = title_metadata(found);
-            if metadata.provider != service.provider() {
+            if !service.chain().contains(&metadata.provider) {
                 return Err(BridgeError::Failure {
                     reason: "match came from a different metadata provider".to_owned(),
                 });
@@ -1762,7 +1765,7 @@ impl AndroidEngine {
             if let Some(enrichment) = &outcome.enrichment {
                 let stored = self.catalog.lock().set_enrichment(
                     &title_key,
-                    service.provider(),
+                    outcome.provider,
                     now(),
                     enrichment,
                 );
@@ -2363,21 +2366,13 @@ impl AndroidEngine {
     /// behaviour.
     async fn match_titles_inner(&self, force: bool) -> Result<MatchSummary, BridgeError> {
         let service = Arc::new(self.metadata_service()?);
-        let provider = service.provider();
         let (titles, stored) = self.titles_and_metadata()?;
         let enriched = self
             .catalog
             .lock()
             .enrichment_ages()
             .map_err(BridgeError::from_display)?;
-        let pending = pstr_meta::service::plan(
-            titles,
-            &stored,
-            &enriched,
-            provider,
-            service.has_details(),
-            force,
-        );
+        let pending = pstr_meta::service::plan(titles, &stored, &enriched, &service.chain(), force);
 
         let permits = Arc::new(tokio::sync::Semaphore::new(LOOKUP_CONCURRENCY));
         let mut lookups = tokio::task::JoinSet::new();
@@ -2409,7 +2404,7 @@ impl AndroidEngine {
                         summary.episodes += enrichment.episodes.len() as u32;
                         let stored = self.catalog.lock().set_enrichment(
                             &outcome.title_key,
-                            provider,
+                            outcome.provider,
                             now(),
                             enrichment,
                         );
@@ -3685,6 +3680,7 @@ fn metadata_provider(provider: ProviderId) -> MetadataProvider {
     match provider {
         ProviderId::AniList => MetadataProvider::AniList,
         ProviderId::Tmdb => MetadataProvider::Tmdb,
+        ProviderId::TvMaze => MetadataProvider::TvMaze,
     }
 }
 
@@ -3692,6 +3688,7 @@ fn provider_id(provider: MetadataProvider) -> ProviderId {
     match provider {
         MetadataProvider::AniList => ProviderId::AniList,
         MetadataProvider::Tmdb => ProviderId::Tmdb,
+        MetadataProvider::TvMaze => ProviderId::TvMaze,
     }
 }
 

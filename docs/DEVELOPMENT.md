@@ -10,7 +10,7 @@
 | `pstr-stream` — block cache, read-ahead | **done, live-verified** — 68 offline tests; benchmarked against a real 761 MiB episode (see `docs/TESTING.md`) |
 | `pstr-player` — libmpv `stream_cb` + render API | **done, live-verified** — 33 offline tests; plays a real 1080p HEVC episode over a public link, seeks, resumes from the disk cache, and renders into the app's GL context |
 | `pstr-app` — egui UI, poster grid, embedded video | **done, offline-tested** — 15 offline tests; library wall, title pages, player page with overlay controls, themes, share management |
-| Metadata providers (AniList / TMDB) | **done** — 32 offline tests; posters, synopses, per-episode titles, hand-pinned matches. Opt-in, off by default |
+| Metadata providers (AniList, then TVmaze / TMDB) | **done** — 32 offline tests; posters, synopses, per-episode titles, hand-pinned matches. Opt-in, off by default |
 | Packaging | **done, locally verified** — `scripts/build.sh` (tarball, `.deb`, `.rpm`, `.app`, `.dmg`) and `scripts/build.ps1` (portable `.zip`, WiX `.msi`), plus `packaging/PKGBUILD`. See `packaging/README.md`. The macOS half is written but has not been run on a Mac |
 
 ## Build order from here

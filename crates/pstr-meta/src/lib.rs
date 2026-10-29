@@ -8,10 +8,10 @@
 //!
 //! ```text
 //!   Title ──▶ Query ──▶ Provider::search ──▶ [Candidate] ──▶ matching::best
-//!                        (anilist | tmdb)                        │
+//!               (anilist, then tvmaze | tmdb)                    │
 //!                                                                ▼
 //!   Enrichment ◀── Provider::enrich ◀──────────────────── TitleMetadata
-//!   (episodes, fanart)  (anilist relations + ani.zip | tmdb)
+//!   (episodes, fanart)  (anilist relations + ani.zip | tvmaze | tmdb)
 //! ```
 //!
 //! Three things are worth knowing before touching any of it:
@@ -37,6 +37,7 @@ pub mod provider;
 pub mod service;
 pub mod settings;
 pub mod tmdb;
+pub mod tvmaze;
 
 pub use error::{Error, Result};
 pub use matching::{Candidate, Query};

@@ -812,7 +812,7 @@ fn kind_of(format: Option<&str>) -> TitleKind {
 /// AniList descriptions carry a little HTML even with `asHtml: false` — `<br>`
 /// mostly, and the occasional `<i>`. egui draws no markup, so tags become
 /// nothing and `<br>` becomes the line break it stands for.
-fn strip_markup(text: &str) -> String {
+pub(crate) fn strip_markup(text: &str) -> String {
     let text = text
         .replace("<br>", "\n")
         .replace("<br/>", "\n")

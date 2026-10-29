@@ -376,8 +376,14 @@ extension MetadataProvider {
         switch self {
         case .aniList: "AniList"
         case .tmdb: "TMDB"
+        case .tvMaze: "TVmaze"
         }
     }
+}
+
+extension MatchRecord {
+    /// Unique across one search: the same id can come back from two providers.
+    var choiceId: String { "\(provider.displayName):\(remoteId)" }
 }
 
 extension EpisodeRecord {
@@ -515,7 +521,7 @@ struct ChangeMatchSheet: View {
 
     var body: some View {
         DialogSheet("Change match") {
-            Text("Search the configured metadata provider. Nothing is stored until you choose an entry.")
+            Text("Search the configured metadata providers. Nothing is stored until you choose an entry.")
             Field(label: "Title", text: $term, submit: .search)
                 .onSubmit(search)
             Button(searching ? "Searching…" : "Search", action: search)
@@ -534,11 +540,11 @@ struct ChangeMatchSheet: View {
             if !searching, options.isEmpty, searched {
                 Text("Nothing found. Try the title's original or English name.").textStyle(.bodySmall)
             }
-            ForEach(options, id: \.remoteId) { option in
+            ForEach(options, id: \.choiceId) { option in
                 Button { choose(option) } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(option.name).textStyle(.labelLarge, semibold: true)
-                        Text([option.year.map(String.init), option.originalName].compactMap { $0 }.joined(separator: " · "))
+                        Text([option.year.map(String.init), option.originalName, option.provider.displayName].compactMap { $0 }.joined(separator: " · "))
                             .textStyle(.labelLarge)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

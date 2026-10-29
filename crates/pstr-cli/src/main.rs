@@ -575,12 +575,16 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
             api_key,
         } => {
             if let Some(name) = provider {
-                settings.provider = ProviderId::parse(&name).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "unknown provider {name:?}; try one of: {}",
-                        ProviderId::ALL.map(|provider| provider.as_str()).join(", ")
-                    )
-                })?;
+                settings.provider = ProviderId::parse(&name)
+                    .filter(|provider| ProviderId::CHOOSABLE.contains(provider))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "unknown provider {name:?}; try one of: {}",
+                            ProviderId::CHOOSABLE
+                                .map(|provider| provider.as_str())
+                                .join(", ")
+                        )
+                    })?;
             }
             if on {
                 settings.enabled = true;
@@ -606,10 +610,11 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
             // `Engine::set_metadata_config`.
             if off || settings.enabled {
                 let catalog = Catalog::open(&dirs.catalog_db()).context("open catalog")?;
+                let chain = pstr_meta::service::chain_of(settings.provider);
                 let stale = catalog
                     .all_metadata()?
                     .values()
-                    .any(|record| record.provider != settings.provider);
+                    .any(|record| !chain.contains(&record.provider));
                 if off || stale {
                     catalog.clear_metadata()?;
                     println!("cleared the stored answers");
@@ -627,7 +632,7 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                 anyhow::bail!(
                     "lookups are off — run `pstr metadata set --on` first.\n\
                      Matching sends the titles in your catalog to {}.",
-                    settings.provider.label()
+                    pstr_meta::service::chain_label(settings.provider)
                 );
             }
 
@@ -646,8 +651,7 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                 library.titles,
                 &stored,
                 &enriched,
-                settings.provider,
-                service.has_details(),
+                &service.chain(),
                 force,
             );
             if let Some(limit) = limit {
@@ -661,7 +665,7 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
             println!(
                 "looking up {} titles against {}…",
                 pending.len(),
-                settings.provider.label()
+                service.label()
             );
 
             // Serial, not concurrent: both providers rate-limit by the minute,
@@ -691,12 +695,17 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                         Some(found) => {
                             matched += 1;
                             println!(
-                                "  {name:<40} → {} ({})",
+                                "  {name:<40} → {} ({}){}",
                                 found.name,
                                 found
                                     .year
                                     .map(|year| year.to_string())
-                                    .unwrap_or_else(|| "-".into())
+                                    .unwrap_or_else(|| "-".into()),
+                                if found.provider == service.provider() {
+                                    String::new()
+                                } else {
+                                    format!(" on {}", found.provider.label())
+                                }
                             );
                         }
                         None => println!("  {name:<40} → no match"),
@@ -717,7 +726,7 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                         );
                         catalog.set_enrichment(
                             &outcome.title_key,
-                            settings.provider,
+                            outcome.provider,
                             unix_now(),
                             enrichment,
                         )?;

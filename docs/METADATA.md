@@ -46,7 +46,7 @@ good. What hung off it was not:
 | **AniList** GraphQL | none | Identity. Search, every alias, cover art, relations (`SEQUEL`, `PREQUEL`, `SIDE_STORY`…), studios, staff, tags, format, season, popularity, next airing episode, the MAL id. |
 | **ani.zip** `api.ani.zip/mappings?anilist_id=` | none | Everything AniList lacks, per AniList id: TVDB season, episode and absolute numbers; episode titles in several languages; TVDB synopses; 16:9 stills; air dates; runtime. Series art: TVDB **fanart at 1920×1080**, poster, banner, logo. Cross-ids for MAL, AniDB, TVDB, TMDB, Kitsu, IMDb. A community service — cache what it says. |
 | **TMDB** | free key | Film backdrops and logos; live-action TV. Already implemented. |
-| **TVmaze** | none | Live-action TV episodes, keyless. |
+| **TVmaze** | none | Live-action TV: episodes with 16:9 stills and runtimes, network, status, full-HD backgrounds. No films; its "typography" art is a JPEG, so no logos. In use after AniList. |
 | **AniSkip** | none | Opening and ending timestamps by MAL id and episode. |
 | **Jikan** (MAL) | none | Filler and recap flags. Timed out when tried; optional. |
 | **manami-project/anime-offline-database** | none | Every anime with its synonyms, ids and relations, as one 6 MB `.zst`. Matching against it locally sends no title anywhere. |
@@ -192,9 +192,37 @@ answer lands, rather than being blanked by the migration as schema v10 did.
 
 ## Phase 3 — reach
 
+**Routing by title (done).** One provider for the whole library left Game of
+Thrones unmatched in a share of anime, and switching the library to TMDB would
+have thrown away every AniList match, chain and shelf. So the providers are now
+asked in a chain (`pstr_meta::service::chain_of`): with AniList chosen, a title
+AniList has no match for is searched on TVmaze, keyless, before it is given up
+on. TMDB, which has television itself, is still asked alone.
+
+- A match is stored under the provider that gave it, and everything after it
+  — enrichment, refreshing details by id — goes to that provider.
+- A miss is stored under the *last* provider asked. `MetadataRecord::is_fresh`
+  takes the chain, and a miss only stands when the chain ends with the provider
+  that stored it. So an AniList miss from before TVmaze joined is not trusted,
+  and the next run asks TVmaze at once rather than after the miss expires.
+- A provider that fails (a timeout, a 429) ends the lookup with an error rather
+  than falling through. The next provider's answer for a title AniList could
+  not be asked about is a guess about an anime, and a guess stored as a match
+  would stay.
+- TVmaze is not asked about a title the library knows to be a film. It has
+  none, and a show sharing a film's name is far more often wrong than an
+  adaptation.
+- A hand search asks every provider in the chain and labels each result with
+  the provider it came from; picking one pins the title to that provider.
+
+TVmaze answers search with whole show records — genres, network, status,
+premiere date, runtime, rating — so a match carries its details with no second
+request. Enrichment is one more: `/shows/{id}` with the episodes and images
+embedded. Specials, which TVmaze numbers nowhere a file would, are left out.
+
+Still to do:
+
 - **Local matching** against the offline database, so only ids leave the
   machine.
-- **Routing by title**: AniList first, then TMDB (with a key) or TVmaze for
-  whatever is not anime — Game of Thrones in a mostly-anime share.
 - **Skip intro** from AniSkip for files without chapters, and filler flags from
   Jikan.

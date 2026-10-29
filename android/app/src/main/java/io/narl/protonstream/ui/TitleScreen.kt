@@ -759,7 +759,7 @@ internal fun ChangeMatchDialog(
         title = { Text("Change match") },
         text = {
             Column {
-                Text("Search the configured metadata provider. Nothing is stored until you choose an entry.")
+                Text("Search the configured metadata providers. Nothing is stored until you choose an entry.")
                 OutlinedTextField(term, { term = it }, Modifier.fillMaxWidth().padding(vertical = 8.dp), singleLine = true)
                 AccentButton(enabled = term.isNotBlank() && !searching, onClick = {
                     searching = true
@@ -794,7 +794,10 @@ internal fun ChangeMatchDialog(
                         ) {
                             Column(Modifier.fillMaxWidth()) {
                                 Text(option.name, fontWeight = FontWeight.SemiBold)
-                                Text(listOfNotNull(option.year?.toString(), option.originalName).joinToString(" · "))
+                                Text(
+                                    listOfNotNull(option.year?.toString(), option.originalName, option.provider.displayName())
+                                        .joinToString(" · "),
+                                )
                             }
                         }
                     }

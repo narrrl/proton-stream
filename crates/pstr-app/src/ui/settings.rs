@@ -874,8 +874,8 @@ fn metadata_form(
                  without this every tile is a pair of initials. Turning it on sends the titles \
                  in your library — not your files, and nothing about what you have watched — to \
                  the provider you choose, over HTTPS, each time a new one appears. With AniList, \
-                 the ids it matched — not the titles — then go to ani.zip for episode names and \
-                 wide artwork.",
+                 a title it has nothing for is then sent to TVmaze, and the ids AniList matched — \
+                 not the titles — go to ani.zip for episode names and wide artwork.",
         ));
         ui.add_space(theme::space::L);
 
@@ -889,7 +889,7 @@ fn metadata_form(
         if settings.enabled {
             ui.add_space(theme::space::L);
             ui.label(ui::muted("Provider"));
-            for provider in ProviderId::ALL {
+            for provider in ProviderId::CHOOSABLE {
                 if ui
                     .radio(settings.provider == provider, provider.label())
                     .on_hover_text(provider.description())

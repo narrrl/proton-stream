@@ -9,6 +9,7 @@ and to nothing else unless you turn on posters and descriptions. This page lists
 |---|---|---|
 | Proton | Requests for the shares you added and, if you signed in, your account's Drive | Always |
 | AniList and ani.zip, or TMDB | The names of the titles in your library, and the ids of matched titles | Only with **Posters and descriptions** on |
+| TVmaze | With AniList chosen: the names of the titles AniList has no match for, and the ids of those TVmaze matched | Only with **Posters and descriptions** on |
 
 Nothing else leaves your device. There is no telemetry, no crash reporting and no update check.
 

@@ -2605,8 +2605,6 @@ impl Engine {
             }
             return self.emit(Event::Error(self.no_service_reason()));
         };
-        let provider = service.provider();
-
         let (stored, enriched) = {
             let catalog = self.catalog.lock();
             match catalog
@@ -2618,14 +2616,7 @@ impl Engine {
             }
         };
 
-        let pending = pstr_meta::service::plan(
-            titles,
-            &stored,
-            &enriched,
-            provider,
-            service.has_details(),
-            force,
-        );
+        let pending = pstr_meta::service::plan(titles, &stored, &enriched, &service.chain(), force);
         if pending.is_empty() {
             if automatic {
                 return;
@@ -2636,7 +2627,7 @@ impl Engine {
         self.emit(Event::Status(format!(
             "matching {} titles against {}…",
             pending.len(),
-            provider.label()
+            service.label()
         )));
 
         let (mut matched, mut unmatched, mut failed) = (0usize, 0usize, 0usize);
@@ -2673,7 +2664,7 @@ impl Engine {
                         episodes_found += enrichment.episodes.len();
                         let stored = self.catalog.lock().set_enrichment(
                             &outcome.title_key,
-                            provider,
+                            outcome.provider,
                             now(),
                             enrichment,
                         );
@@ -2755,7 +2746,7 @@ impl Engine {
             if let Some(enrichment) = &outcome.enrichment {
                 let stored = engine.catalog.lock().set_enrichment(
                     &title.key,
-                    service.provider(),
+                    outcome.provider,
                     now(),
                     enrichment,
                 );

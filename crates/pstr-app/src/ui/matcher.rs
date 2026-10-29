@@ -55,8 +55,8 @@ pub fn show(
                     .color(theme::text()),
             );
             ui.label(ui::muted(format!(
-                "Everything {} answers with, in its own order — nothing is scored here.",
-                provider.label()
+                "Everything {} answer with, in their own order — nothing is scored here.",
+                pstr_meta::service::chain_label(provider)
             )));
             ui.add_space(theme::space::L);
 
@@ -279,8 +279,9 @@ fn poster(art: &mut Art<'_>, found: &TitleMetadata) -> Option<egui::TextureHandl
         .texture(&key, || engine.request_poster(key.clone(), url))
 }
 
-/// `Film · 2017 · 26 episodes · ★ 8.2`, with whatever the provider left out
-/// simply absent.
+/// `Film · 2017 · 26 episodes · ★ 8.2 · AniList`, with whatever the provider
+/// left out simply absent. The provider last, because one search asks more
+/// than one, and the same show can come back from each.
 fn facts(found: &TitleMetadata) -> String {
     let mut parts: Vec<String> = vec![
         match found.kind {
@@ -298,5 +299,6 @@ fn facts(found: &TitleMetadata) -> String {
     if let Some(rating) = found.rating {
         parts.push(format!("{} {rating:.1}", egui_phosphor::regular::STAR));
     }
+    parts.push(found.provider.label().to_string());
     parts.join("  ·  ")
 }
