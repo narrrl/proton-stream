@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use crate::catalog::{CatalogNode, WatchState};
+use crate::naming;
 
 /// A file has been watched once playback passed this fraction of it. Short of
 /// 1.0 because nobody sits through the credits, and a title that never reaches
@@ -156,6 +157,34 @@ impl Title {
             .iter()
             .map(|season| season.episodes.len())
             .sum()
+    }
+
+    /// What most of its files' names say about their quality — see
+    /// [`naming::quality`]. A fact holds when more than half the files state
+    /// it, so one 720p special does not mark a 1080p show down.
+    pub fn quality(&self) -> naming::Quality {
+        let stated: Vec<naming::Quality> = self
+            .episodes()
+            .map(|episode| naming::quality(&episode.node.name))
+            .collect();
+        let most = |holds: &dyn Fn(&naming::Quality) -> bool| {
+            stated.iter().filter(|quality| holds(quality)).count() * 2 > stated.len()
+        };
+        // The height most files have, if most have the same one.
+        let mut heights: HashMap<u32, usize> = HashMap::new();
+        for height in stated.iter().filter_map(|quality| quality.height) {
+            *heights.entry(height).or_default() += 1;
+        }
+        let height = heights
+            .into_iter()
+            .find(|(_, files)| files * 2 > stated.len())
+            .map(|(height, _)| height);
+        naming::Quality {
+            height,
+            hdr: most(&|quality| quality.hdr),
+            ten_bit: most(&|quality| quality.ten_bit),
+            dual_audio: most(&|quality| quality.dual_audio),
+        }
     }
 
     pub fn watched_count(&self) -> usize {
@@ -565,6 +594,36 @@ mod tests {
             Some("b".to_string())
         );
         assert_eq!(title.preceding("s1", "a"), None);
+    }
+
+    /// One odd file out — a 720p special, a release with no dub — does not
+    /// change what the title as a whole is said to be.
+    #[test]
+    fn a_title_states_the_quality_most_of_its_files_have() {
+        let library = Library::build(
+            vec![
+                node(
+                    "s1",
+                    "a",
+                    "Show - S01E01 [1080p][Dual-Audio].mkv",
+                    Some(1),
+                    Some(1),
+                ),
+                node(
+                    "s1",
+                    "b",
+                    "Show - S01E02 [1080p][Dual-Audio].mkv",
+                    Some(1),
+                    Some(2),
+                ),
+                node("s1", "c", "Show - S01E03 [720p].mkv", Some(1), Some(3)),
+            ],
+            &HashMap::new(),
+        );
+        assert_eq!(
+            library.titles[0].quality().badges(),
+            ["1080p", "Dual audio"]
+        );
     }
 
     #[test]

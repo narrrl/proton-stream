@@ -231,7 +231,7 @@ struct TitleView: View {
         // A series' running time is its episodes', which each row says.
         let runtime: String? = title.kind == .film ? title.runtime.map(formatRuntime) : nil
         let parts: [String?] = [title.formatLabel, title.seasonLabel ?? year, runtime, rating, watched]
-        return parts.compactMap { $0 }.joined(separator: "  ·  ")
+        return (parts.compactMap { $0 } + title.quality).joined(separator: "  ·  ")
     }
 
     private func playLabel(playlist: [EpisodeRecord], upNext: EpisodeRecord?) -> String {

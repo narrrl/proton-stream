@@ -243,7 +243,7 @@ internal fun TitleScreen(
                             title.runtime?.takeIf { title.kind == TitleType.FILM }?.let(::formatRuntime),
                             title.rating?.let { "★ %.1f".format(it) },
                             "${title.watchedCount} of ${title.episodeCount} watched".takeIf { title.episodeCount > 1uL },
-                        ).joinToString("  ·  "),
+                        ).plus(title.quality).joinToString("  ·  "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),

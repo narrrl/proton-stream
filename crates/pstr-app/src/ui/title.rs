@@ -689,6 +689,8 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
             parts.push(format!("{total} on {}", found.provider.label()));
         }
     }
+    // Last: what the files are, rather than what the title is.
+    parts.extend(title.quality().badges().into_iter().map(str::to_owned));
     parts.join("  ·  ")
 }
 

@@ -587,6 +587,10 @@ pub struct TitleRecord {
     /// Minutes: an episode's length for a series, the running time of a film.
     #[uniffi(default = None)]
     pub runtime: Option<u32>,
+    /// What most of its files' names say about them — `4K`, `HDR`, `10-bit`,
+    /// `Dual audio` — in that order. Never a release group's name.
+    #[uniffi(default = [])]
+    pub quality: Vec<String>,
 }
 
 /// Playback preferences that outlive one file, one title and one launch.
@@ -3656,6 +3660,12 @@ fn title_record(
         franchise: Vec::new(),
         logo_url: metadata.and_then(|found| found.logo_url.clone()),
         runtime: details.and_then(|details| details.runtime),
+        quality: title
+            .quality()
+            .badges()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         continue_index: title.continue_with().and_then(|episode| {
             let at = title.position_of(&episode.node.share_id, &episode.node.link_id)?;
             u32::try_from(at).ok()

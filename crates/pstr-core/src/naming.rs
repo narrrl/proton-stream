@@ -145,6 +145,87 @@ fn is_release_tag(word: &str) -> bool {
     resolution || TAGS.contains(&word.as_str())
 }
 
+/// What a release name says about its picture and sound.
+///
+/// Read for the facts line of a title's page, and nothing else: no release
+/// group's name is ever taken, and a name that says nothing yields the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Quality {
+    /// Lines of picture: `2160` for `2160p`, `4K` or `UHD`.
+    pub height: Option<u32>,
+    /// `HDR`, `HDR10`, `HDR10+` or Dolby Vision.
+    pub hdr: bool,
+    pub ten_bit: bool,
+    /// Two audio languages, as anime releases mark a dub beside the original.
+    pub dual_audio: bool,
+}
+
+impl Quality {
+    /// The short labels to show, in a fixed order: `4K`, `HDR`, `10-bit`,
+    /// `Dual audio`.
+    pub fn badges(&self) -> Vec<&'static str> {
+        let resolution = self.height.map(|height| match height {
+            2160.. => "4K",
+            1440.. => "1440p",
+            1080.. => "1080p",
+            720.. => "720p",
+            _ => "SD",
+        });
+        resolution
+            .into_iter()
+            .chain(self.hdr.then_some("HDR"))
+            .chain(self.ten_bit.then_some("10-bit"))
+            .chain(self.dual_audio.then_some("Dual audio"))
+            .collect()
+    }
+}
+
+/// The [`Quality`] a file name states.
+///
+/// Words are taken apart on everything but letters, digits and `+`, so
+/// `[1080p][10-bit]`, `.10bit.` and `(BD 1080p HEVC 10bit Dual Audio)` read
+/// the same.
+pub fn quality(file_name: &str) -> Quality {
+    let lower = strip_extension(file_name).to_ascii_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '+')
+        .filter(|word| !word.is_empty())
+        .collect();
+    let mut quality = Quality::default();
+    for (index, word) in words.iter().enumerate() {
+        let next = words.get(index + 1).copied();
+        let height = match *word {
+            "4k" | "uhd" => Some(2160),
+            _ => resolution(word),
+        };
+        if let Some(height) = height {
+            quality.height = quality.height.max(Some(height));
+        }
+        match (*word, next) {
+            ("hdr" | "hdr10" | "hdr10+" | "dv" | "dovi", _) | ("dolby", Some("vision")) => {
+                quality.hdr = true;
+            }
+            ("10bit" | "10bits" | "hi10" | "hi10p", _) | ("10", Some("bit" | "bits")) => {
+                quality.ten_bit = true;
+            }
+            ("dualaudio", _) | ("dual" | "multi", Some("audio")) => quality.dual_audio = true,
+            _ => {}
+        }
+    }
+    quality
+}
+
+/// `1080` out of `1080p`, and out of `bd1080p`, which some groups write.
+fn resolution(word: &str) -> Option<u32> {
+    let digits = word
+        .strip_suffix('p')?
+        .trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    if !(3..=4).contains(&digits.len()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Drop a trailing extension, but only one that looks like an extension.
 ///
 /// A bare `rsplit('.')` would eat the tail of `Serial.Experiments.Lain`, so the
@@ -1160,6 +1241,33 @@ mod tests {
     #[test]
     fn a_dotted_run_no_tag_ends_is_not_an_episode_name() {
         assert_eq!(parse("Show.S01E01.Pilot.mkv").episode_title, None);
+    }
+
+    #[test]
+    fn a_scene_release_states_4k_hdr_and_10_bit() {
+        let stated =
+            quality("Game.of.Thrones.S01E01.Winter.Is.Coming.2160p.UHD.BluRay.x265.10bit.HDR.mkv");
+        assert_eq!(stated.badges(), ["4K", "HDR", "10-bit"]);
+    }
+
+    #[test]
+    fn a_fansub_release_states_its_tags_in_brackets() {
+        let bracketed =
+            quality("[Group] Show - S01E01 [1080p][BD][x265][10-bit][Dual-Audio][1A2B3C4D].mkv");
+        assert_eq!(bracketed.badges(), ["1080p", "10-bit", "Dual audio"]);
+        let spaced = quality("Film (BD 1080p HEVC 10bit Dual Audio).mkv");
+        assert_eq!(spaced.badges(), ["1080p", "10-bit", "Dual audio"]);
+        assert_eq!(
+            quality("[Group] Show - 01 [BD1080p].mkv").height,
+            Some(1080)
+        );
+    }
+
+    /// Most of a real library: a group, a number and nothing else to say.
+    #[test]
+    fn a_name_with_no_tags_states_nothing() {
+        assert_eq!(quality("[Group] Bleach - S17E01.mkv"), Quality::default());
+        assert!(Quality::default().badges().is_empty());
     }
 
     /// A library that names its files with nothing but the episode marker.
