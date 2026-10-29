@@ -220,6 +220,11 @@ premiere date, runtime, rating — so a match carries its details with no second
 request. Enrichment is one more: `/shows/{id}` with the episodes and images
 embedded. Specials, which TVmaze numbers nowhere a file would, are left out.
 
+**Episode names from scene releases (done).** `Game.of.Thrones.S01E01.Winter.Is.Coming.2160p…`
+names its episode in dotted words, and `naming::episode_title` now reads them,
+stopping at the first release tag. A dotted run that no tag ends is not taken.
+This is the fallback for a title no provider has.
+
 Still to do:
 
 - **Local matching** against the offline database, so only ids leave the

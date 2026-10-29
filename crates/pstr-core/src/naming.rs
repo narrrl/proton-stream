@@ -22,8 +22,9 @@ pub struct ParsedName {
     /// Release year, from a parenthesised or bracketed four-digit group.
     pub year: Option<u32>,
     /// The episode's own name, when the filename states one after the
-    /// numbering (`S01E01-Mother and Children`). Never the quality and codec
-    /// tags that follow numbering in scene releases — see [`episode_title`].
+    /// numbering (`S01E01-Mother and Children`, `S01E01.Winter.Is.Coming.2160p`).
+    /// Never the quality and codec tags that follow numbering in scene
+    /// releases — see [`episode_title`].
     pub episode_title: Option<String>,
 }
 
@@ -98,23 +99,50 @@ struct NumberingMatch {
 
 /// The episode's own name out of what followed the numbering.
 ///
-/// Only taken when a dash introduces it. Scene releases separate their quality,
-/// source and codec tags with the same character as their title words (`.`), so
-/// without that requirement `Show.Name.S02E05.1080p.WEB-DL.x265` would yield an
-/// "episode title" of `1080p WEB-DL x265`.
+/// Taken when a dash introduces it, or from a scene release's dotted words up
+/// to its first release tag. Scene releases separate their quality, source and
+/// codec tags with the same character as their title words (`.`), so the tag
+/// is what ends the name: `Show.S01E01.Winter.Is.Coming.2160p.BluRay` names
+/// its episode, `Show.Name.S02E05.1080p.WEB-DL.x265` does not, and a dotted
+/// run that no tag ends is not trusted to be a name at all.
 fn episode_title(tail: &str) -> Option<String> {
     let rest = tail.trim_start();
-    let rest = rest
+    let cleaned = match rest
         .strip_prefix('-')
-        .or_else(|| rest.strip_prefix('\u{2013}'))?;
-
-    let cleaned = clean_title(rest, None);
+        .or_else(|| rest.strip_prefix('\u{2013}'))
+    {
+        Some(rest) => clean_title(rest, None),
+        None => dotted_title(rest.strip_prefix('.')?)?,
+    };
     let cleaned = cleaned.trim().to_string();
     if cleaned.is_empty() {
         None
     } else {
         Some(cleaned)
     }
+}
+
+/// `Winter.Is.Coming.2160p.UHD…` → `Winter Is Coming`.
+fn dotted_title(rest: &str) -> Option<String> {
+    let words: Vec<&str> = rest.split('.').collect();
+    let end = words.iter().position(|word| is_release_tag(word))?;
+    Some(words[..end].join(" "))
+}
+
+/// Whether a dotted word is a release's quality, source or codec rather than
+/// part of a name.
+fn is_release_tag(word: &str) -> bool {
+    const TAGS: &[&str] = &[
+        "4k", "uhd", "bluray", "blu-ray", "bdrip", "brrip", "bdremux", "remux", "web", "web-dl",
+        "webdl", "webrip", "hdtv", "dvdrip", "hdrip", "x264", "x265", "h264", "h265", "hevc",
+        "avc", "hdr", "hdr10", "dv", "10bit", "10-bit", "proper", "repack", "amzn", "nf", "dsnp",
+        "hmax", "atvp",
+    ];
+    let word = word.to_ascii_lowercase();
+    let resolution = word.strip_suffix('p').is_some_and(|digits| {
+        (3..=4).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+    });
+    resolution || TAGS.contains(&word.as_str())
 }
 
 /// Drop a trailing extension, but only one that looks like an extension.
@@ -1110,6 +1138,28 @@ mod tests {
         let p = parse("Show.Name.S02E05.1080p.WEB-DL.x265.mkv");
         assert_eq!(p.episode_title, None, "1080p.WEB-DL.x265 is not a name");
         assert_eq!(p.title, "Show Name");
+    }
+
+    /// A scene release names its episode in dotted words before its tags, and
+    /// the first tag is where the name ends.
+    #[test]
+    fn a_dotted_episode_name_before_the_release_tags_is_captured() {
+        let p = parse(
+            "Game.of.Thrones.S01E01.Winter.Is.Coming.2160p.UHD.BluRay.10bit.HDR.x265-GRP.mkv",
+        );
+        assert_eq!(p.title, "Game of Thrones");
+        assert_eq!((p.season, p.episode), (Some(1), Some(1)));
+        assert_eq!(p.episode_title.as_deref(), Some("Winter Is Coming"));
+
+        let p = parse("Game.of.Thrones.S06E05.The.Door.1080p.WEB-DL.mkv");
+        assert_eq!(p.episode_title.as_deref(), Some("The Door"));
+    }
+
+    /// Without a tag to end it, a dotted run could be a group's name or
+    /// anything else, and is not taken.
+    #[test]
+    fn a_dotted_run_no_tag_ends_is_not_an_episode_name() {
+        assert_eq!(parse("Show.S01E01.Pilot.mkv").episode_title, None);
     }
 
     /// A library that names its files with nothing but the episode marker.
