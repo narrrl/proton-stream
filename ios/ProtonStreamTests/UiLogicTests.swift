@@ -171,6 +171,18 @@ final class CommonTests: XCTestCase {
         XCTAssertEqual(bare.heading(0), "Episode 4")
     }
 
+    func testThePlayerCaptionsAnEpisodeWithItsNameAndNeverItsFilename() {
+        var named = episode("e")
+        named.providerName = "Dog & Chainsaw"
+        XCTAssertEqual(named.shownName, "Dog & Chainsaw")
+        var bare = episode("e")
+        bare.name = "[Group] Show - S01E01.mkv"
+        bare.detail = bare.name
+        XCTAssertNil(bare.shownName)
+        bare.detail = ""
+        XCTAssertNil(bare.shownName)
+    }
+
     func testEpisodesAreNumberedBySeasonThenByPlaceInTheList() {
         var numbered = episode("e", number: 38)
         numbered.season = 3

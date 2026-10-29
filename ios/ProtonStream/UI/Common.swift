@@ -342,12 +342,19 @@ func downloadStatusLine(_ download: RetainedDownload, waitingFor: String? = nil)
 }
 
 extension EpisodeRecord {
+    /// The episode's own name: the provider's, else the one the filename gave
+    /// it. `nil` rather than the filename, which is a release group's tag and
+    /// the episode's numbering again.
+    var shownName: String? {
+        providerName ?? (detail != name && !detail.isEmpty ? detail : nil)
+    }
+
     /// What an episode row is headed with: "1. Mother and Children".
     ///
     /// The provider's name for the episode, else the name the filename gave it,
     /// else "Episode 1". The bare filename only when none of those exist.
     func heading(_ position: Int) -> String {
-        let named = providerName ?? (detail != name ? detail : nil)
+        let named = shownName
         switch (named, number) {
         case let (named?, number?): return "\(number). \(named)"
         case let (named?, nil): return named

@@ -222,6 +222,13 @@ internal fun rememberQueueReason(key: Any?): String? {
 }
 
 /**
+ * The episode's own name: the provider's, else the one the filename gave it.
+ * `null` rather than the filename, which is a release group's tag and the
+ * episode's numbering again.
+ */
+internal fun EpisodeRecord.shownName(): String? = providerName ?: detail.takeIf { it != name && it.isNotBlank() }
+
+/**
  * What an episode row is headed with: "1. Mother and Children".
  *
  * The provider's name for the episode, else the name the filename gave it,
@@ -229,7 +236,7 @@ internal fun rememberQueueReason(key: Any?): String? {
  * of `[Group] Show - S01E01.mkv` is forty rows that differ in two characters.
  */
 internal fun EpisodeRecord.heading(position: Int): String {
-    val named = providerName ?: detail.takeIf { it != name }
+    val named = shownName()
     val number = number?.toInt()
     return when {
         named != null && number != null -> "$number. $named"

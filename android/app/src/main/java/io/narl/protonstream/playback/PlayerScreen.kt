@@ -97,6 +97,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.native.NativeRuntime
+import io.narl.protonstream.ui.shownName
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.AccentTrack
 import io.narl.protonstream.ui.theme.EdgedButton
@@ -567,8 +568,11 @@ fun PlayerScreen(
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.titleMedium,
                     )
+                    // The episode's name, never its file name: a release
+                    // group's tag is no caption, and it is what a screenshot
+                    // of the player would carry away.
                     Text(
-                        listOfNotNull(title.displayName, episode.detail.takeIf(String::isNotBlank))
+                        listOfNotNull(title.displayName, episode.shownName())
                             .joinToString("  •  "),
                         color = Color.White.copy(alpha = 0.7f),
                         maxLines = 1,

@@ -210,7 +210,9 @@ struct PlayerView: View {
             // thing a viewer who has just woken the controls is checking.
             VStack(alignment: .leading, spacing: 0) {
                 Text(host.episode?.label ?? "").textStyle(.titleMedium).foregroundStyle(.white).lineLimit(1)
-                Text([host.title?.displayName, host.episode?.detail].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  •  "))
+                // The episode's name, never its file name: a release group's
+                // tag is no caption, and it is what a screenshot would carry away.
+                Text([host.title?.displayName, host.episode?.shownName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  •  "))
                     .textStyle(.bodySmall).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
