@@ -329,12 +329,12 @@ private struct MetadataSettingsSheet: View {
                         .buttonStyle(option == provider ? ProtonButtonStyle(kind: .accent) : ProtonButtonStyle(kind: .edged))
                 }
             }
-            Text(provider == .aniList ? "Anime, and television from TVmaze; no account or API key required." : "Film and television; requires a free TMDB API key.")
+            Text(provider == .aniList ? "Anime, and television from TVmaze; no account or API key required. With a TMDB API key, films get TMDB's backdrops and logos, asked for by id alone." : "Film and television; requires a free TMDB API key.")
                 .textStyle(.bodySmall)
             if provider == .tmdb {
                 Field(label: "Language", text: $language)
-                Field(label: current.ready ? "TMDB API key (leave blank to keep)" : "TMDB API key", text: $apiKey, secret: true)
             }
+            Field(label: provider == .aniList ? "TMDB API key (optional)" : current.ready ? "TMDB API key (leave blank to keep)" : "TMDB API key", text: $apiKey, secret: true)
             if enabled, provider == .tmdb, !current.ready, apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
                 Text("Enter a TMDB API key to save.").foregroundStyle(scheme.error)
             }

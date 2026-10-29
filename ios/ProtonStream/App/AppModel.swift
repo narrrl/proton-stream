@@ -637,8 +637,10 @@ final class AppModel {
     func saveMetadataSettings(enabled: Bool, provider: MetadataProvider, language: String, apiKey: String) async -> String? {
         do {
             metadataSettings = try await run { engine in
-                if provider == .tmdb, !apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
-                    try engine.setMetadataApiKey(provider: provider, key: apiKey)
+                // TMDB's is the only key: the provider's with TMDB chosen, and
+                // film art's with AniList.
+                if !apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+                    try engine.setMetadataApiKey(provider: .tmdb, key: apiKey)
                 }
                 try engine.setMetadataSettings(settings: MetadataSettingsRecord(enabled: enabled, provider: provider, language: language, ready: true))
                 return try engine.metadataSettings()

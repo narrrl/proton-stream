@@ -727,8 +727,10 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         val stored = runCatching {
             withContext(Dispatchers.IO) {
                 val engine = NativeRuntime.engine()
-                if (provider == MetadataProvider.TMDB && apiKey.isNotBlank()) {
-                    engine.setMetadataApiKey(provider, apiKey)
+                // TMDB's is the only key: the provider's with TMDB chosen, and
+                // film art's with AniList.
+                if (apiKey.isNotBlank()) {
+                    engine.setMetadataApiKey(MetadataProvider.TMDB, apiKey)
                 }
                 engine.setMetadataSettings(MetadataSettingsRecord(enabled, provider, language, true))
                 engine.metadataSettings()

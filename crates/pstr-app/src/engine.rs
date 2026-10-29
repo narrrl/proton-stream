@@ -460,7 +460,7 @@ impl Enrichment {
     /// Resolve a service for `config`, if one can be had.
     fn build(config: MetadataConfig) -> Self {
         let service = config.enabled.then(|| {
-            let key = pstr_meta::settings::api_key(config.provider);
+            let key = pstr_meta::settings::api_key(ProviderId::Tmdb);
             MetadataService::new(&config, key)
                 .inspect_err(|error| tracing::debug!("metadata provider unavailable: {error}"))
                 .ok()
@@ -508,12 +508,13 @@ impl Engine {
             Appearance::default()
         });
 
-        // A provider with an API key needs it out of the OS credential store,
-        // and that can be a D-Bus round trip to a keyring that has to unlock
-        // first — not something to hold the first frame for. Built on the
-        // blocking pool instead; until it lands, everything that needs the
-        // provider waits for it rather than concluding there is none.
-        let deferred = config.enabled && config.provider.needs_api_key();
+        // The TMDB key, which every provider looks for, comes out of the OS
+        // credential store, and that can be a D-Bus round trip to a keyring
+        // that has to unlock first — not something to hold the first frame
+        // for. Built on the blocking pool instead; until it lands, everything
+        // that needs the provider waits for it rather than concluding there is
+        // none.
+        let deferred = config.enabled;
         let enrichment = if deferred {
             Enrichment {
                 config: config.clone(),

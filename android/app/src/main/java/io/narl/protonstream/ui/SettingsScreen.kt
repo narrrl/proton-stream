@@ -447,21 +447,33 @@ private fun MetadataSettingsDialog(
                     }
                 }
                 Text(
-                    if (provider == MetadataProvider.ANI_LIST) "Anime, and television from TVmaze; no account or API key required."
-                    else "Film and television; requires a free TMDB API key.",
+                    if (provider == MetadataProvider.ANI_LIST) {
+                        "Anime, and television from TVmaze; no account or API key required. " +
+                            "With a TMDB API key, films get TMDB's backdrops and logos, asked for by id alone."
+                    } else {
+                        "Film and television; requires a free TMDB API key."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (provider == MetadataProvider.TMDB) {
                     OutlinedTextField(language, { language = it }, label = { Text("Language") }, singleLine = true)
-                    OutlinedTextField(
-                        apiKey,
-                        { apiKey = it },
-                        label = { Text(if (current.ready) "TMDB API key (leave blank to keep)" else "TMDB API key") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                    )
                 }
+                OutlinedTextField(
+                    apiKey,
+                    { apiKey = it },
+                    label = {
+                        Text(
+                            when {
+                                provider == MetadataProvider.ANI_LIST -> "TMDB API key (optional)"
+                                current.ready -> "TMDB API key (leave blank to keep)"
+                                else -> "TMDB API key"
+                            },
+                        )
+                    },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                )
                 if (needsKey) Text("Enter a TMDB API key to save.", color = MaterialTheme.colorScheme.error)
                 // Said before Save rather than after: what is forgotten
                 // includes matches chosen by hand, which no look-up redoes.

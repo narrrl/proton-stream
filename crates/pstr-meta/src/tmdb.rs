@@ -9,6 +9,11 @@
 //! not evidence enough to pick an endpoint. The `media_type` on each result is
 //! better evidence than the guess, and [`crate::matching`] only nudges on kind
 //! anyway.
+//!
+//! A stored key is also used with AniList chosen, by id alone: ani.zip names
+//! the TMDB entry an AniList match is, and [`Tmdb::art`] fetches its backdrop
+//! and logo — what the films TVDB has no art for are missing. No title is
+//! searched for that way.
 
 use pstr_core::library::{Title, TitleKind};
 use pstr_core::metadata::{Enrichment, EpisodeMetadata, ProviderId, TitleMetadata};
@@ -34,13 +39,16 @@ const STILL_SIZE: &str = "w300";
 
 /// Where TMDB serves artwork from, and the sizes worth asking for.
 ///
-/// `w500` for a poster and `w780` for a backdrop are what the images are drawn
-/// at here, give or take; `original` is several megabytes of print-resolution
-/// artwork per title, which is bandwidth spent on pixels no tile can show.
+/// `w500` for a poster and a logo and `w1280` for a backdrop are what the
+/// images are drawn at here, give or take — a backdrop fills the width of the
+/// title page and the library's banner; `original` is several megabytes of
+/// print-resolution artwork per title, which is bandwidth spent on pixels no
+/// window shows.
 const IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
 
 const POSTER_SIZE: &str = "w500";
-const BACKDROP_SIZE: &str = "w780";
+const BACKDROP_SIZE: &str = "w1280";
+const LOGO_SIZE: &str = "w500";
 
 /// TMDB's published ceiling is around fifty requests a second and it no longer
 /// enforces a daily one. This is well under it: the point of pacing here is a
@@ -66,6 +74,30 @@ impl Tmdb {
             limiter: RateLimiter::per_minute(REQUESTS_PER_MINUTE),
         }
     }
+}
+
+/// A TMDB entry, by id. Films and television are numbered separately, so the
+/// id alone does not name one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TmdbId {
+    Movie(u32),
+    Tv(u32),
+}
+
+impl TmdbId {
+    fn path(self) -> String {
+        match self {
+            Self::Movie(id) => format!("movie/{id}"),
+            Self::Tv(id) => format!("tv/{id}"),
+        }
+    }
+}
+
+/// An entry's wide picture and its logo.
+#[derive(Debug, Default, PartialEq)]
+pub struct Art {
+    pub backdrop: Option<String>,
+    pub logo: Option<String>,
 }
 
 impl Provider for Tmdb {
@@ -95,14 +127,25 @@ impl Provider for Tmdb {
             .collect())
     }
 
-    /// The episode list, and nothing else: the match already carried a proper
+    /// The episode list and the logo. The match already carried a proper
     /// backdrop, and TMDB files every season under one show, so the library's
     /// seasons need no walking.
     async fn enrich(&self, _title: &Title, found: &TitleMetadata) -> Result<Enrichment> {
+        let logo_url = match found.remote_id.parse() {
+            Ok(id) => {
+                self.art_or_nothing(match found.kind {
+                    TitleKind::Series => TmdbId::Tv(id),
+                    TitleKind::Film => TmdbId::Movie(id),
+                })
+                .await
+                .logo
+            }
+            Err(_) => None,
+        };
         Ok(Enrichment {
             episodes: self.episodes(found).await?,
             backdrop_url: None,
-            logo_url: None,
+            logo_url,
             chain: Vec::new(),
         })
     }
@@ -169,13 +212,44 @@ impl Tmdb {
                     still_url: episode
                         .still_path
                         .as_deref()
-                        .map(|path| image(STILL_SIZE, path)),
+                        .map(|path| image_url(STILL_SIZE, path)),
                     air_date: episode.air_date.clone().filter(|date| !date.is_empty()),
                     runtime: episode.runtime.filter(|minutes| *minutes > 0),
                 }
             }));
         }
         Ok(episodes)
+    }
+
+    /// The best backdrop and logo TMDB has for `id`.
+    ///
+    /// Artwork in the viewer's language, English or Japanese is asked for, and
+    /// artwork with no language at all, which for a backdrop is the one without
+    /// lettering on it. One request.
+    pub async fn art(&self, id: TmdbId) -> Result<Art> {
+        let languages = format!("{},en,ja,null", self.language_code());
+        let images: Images = self
+            .get(
+                &format!("{API_BASE}/{}/images", id.path()),
+                &[("include_image_language", languages.as_str())],
+            )
+            .await?;
+        Ok(images.into_art(self.language_code()))
+    }
+
+    /// [`Tmdb::art`], with a failure logged and taken as no art: the art is
+    /// decoration on an answer that is already complete, and a bad key or a
+    /// slow minute must not stop the episodes beside it being stored.
+    pub async fn art_or_nothing(&self, id: TmdbId) -> Art {
+        self.art(id)
+            .await
+            .inspect_err(|error| tracing::debug!("TMDB art for {id:?}: {error}"))
+            .unwrap_or_default()
+    }
+
+    /// `de` out of `de-DE`: images are tagged by language alone.
+    fn language_code(&self) -> &str {
+        self.language.split('-').next().unwrap_or("en")
     }
 
     /// One authenticated GET, paced, with TMDB's failures named.
@@ -278,6 +352,64 @@ struct EpisodeRow {
     runtime: Option<u32>,
 }
 
+/// `/{movie,tv}/{id}/images`.
+#[derive(Deserialize, Default)]
+struct Images {
+    #[serde(default)]
+    backdrops: Vec<Image>,
+    #[serde(default)]
+    logos: Vec<Image>,
+}
+
+#[derive(Deserialize)]
+struct Image {
+    file_path: String,
+    iso_639_1: Option<String>,
+    #[serde(default)]
+    vote_average: f32,
+}
+
+impl Images {
+    fn into_art(self, language: &str) -> Art {
+        // Bare is best for a backdrop: a logo or a title is drawn over it,
+        // and lettering already in the picture fights that.
+        let backdrop = best(&self.backdrops, |image| match image.iso_639_1.as_deref() {
+            None => 2,
+            Some(tag) if tag == language || tag == "en" => 1,
+            Some(_) => 0,
+        });
+        // A logo is lettering, so it is wanted in a language the viewer reads.
+        // Only PNGs: an SVG is nothing the art loaders here can draw.
+        let logos: Vec<&Image> = self
+            .logos
+            .iter()
+            .filter(|image| image.file_path.ends_with(".png"))
+            .collect();
+        let logo = best(&logos, |image| match image.iso_639_1.as_deref() {
+            Some(tag) if tag == language => 3,
+            Some("en") => 2,
+            None => 1,
+            Some(_) => 0,
+        });
+        Art {
+            backdrop: backdrop.map(|image| image_url(BACKDROP_SIZE, &image.file_path)),
+            logo: logo.map(|image| image_url(LOGO_SIZE, &image.file_path)),
+        }
+    }
+}
+
+/// The image `rank` likes most, the better-voted one among equals.
+fn best<T: std::borrow::Borrow<Image>>(
+    images: &[T],
+    rank: impl Fn(&Image) -> u8,
+) -> Option<&Image> {
+    images.iter().map(|image| image.borrow()).max_by(|a, b| {
+        rank(a)
+            .cmp(&rank(b))
+            .then(a.vote_average.total_cmp(&b.vote_average))
+    })
+}
+
 #[derive(Deserialize)]
 struct SearchResponse {
     #[serde(default)]
@@ -339,8 +471,10 @@ impl Result_ {
                 overview: self.overview.filter(|text| !text.is_empty()),
                 year: year_of(self.first_air_date.or(self.release_date).as_deref()),
                 kind,
-                poster_url: self.poster_path.map(|path| image(POSTER_SIZE, &path)),
-                backdrop_url: self.backdrop_path.map(|path| image(BACKDROP_SIZE, &path)),
+                poster_url: self.poster_path.map(|path| image_url(POSTER_SIZE, &path)),
+                backdrop_url: self
+                    .backdrop_path
+                    .map(|path| image_url(BACKDROP_SIZE, &path)),
                 logo_url: None,
                 rating: self.vote_average.filter(|rating| *rating > 0.0),
                 // `search/multi` carries neither, and a detail request per
@@ -368,7 +502,7 @@ impl Result_ {
     }
 }
 
-fn image(size: &str, path: &str) -> String {
+fn image_url(size: &str, path: &str) -> String {
     format!("{IMAGE_BASE}/{size}{path}")
 }
 
@@ -442,7 +576,7 @@ mod tests {
         );
         assert_eq!(
             series.metadata.backdrop_url.as_deref(),
-            Some("https://image.tmdb.org/t/p/w780/b.jpg")
+            Some("https://image.tmdb.org/t/p/w1280/b.jpg")
         );
 
         let film: Result_ = serde_json::from_str(
@@ -454,6 +588,61 @@ mod tests {
         assert_eq!(film.metadata.kind, TitleKind::Film);
         assert_eq!(film.metadata.name, "Akira");
         assert_eq!(film.metadata.year, Some(1988));
+    }
+
+    /// Paprika's images as TMDB answers them, trimmed: a bare backdrop beside
+    /// better-voted lettered ones, and logos in three languages and two
+    /// formats.
+    #[test]
+    fn the_bare_backdrop_and_a_png_logo_in_the_viewers_language_are_chosen() {
+        let images: Images = serde_json::from_str(
+            r#"{
+                "backdrops": [
+                    {"file_path": "/en.jpg", "iso_639_1": "en", "vote_average": 5.5},
+                    {"file_path": "/bare.jpg", "iso_639_1": null, "vote_average": 5.2},
+                    {"file_path": "/bare-worse.jpg", "iso_639_1": null, "vote_average": 4.0},
+                    {"file_path": "/ja.jpg", "iso_639_1": "ja", "vote_average": 6.0}
+                ],
+                "logos": [
+                    {"file_path": "/ja.png", "iso_639_1": "ja", "vote_average": 6.0},
+                    {"file_path": "/de.svg", "iso_639_1": "de", "vote_average": 5.0},
+                    {"file_path": "/en.png", "iso_639_1": "en", "vote_average": 3.0},
+                    {"file_path": "/de.png", "iso_639_1": "de", "vote_average": 1.0}
+                ]
+            }"#,
+        )
+        .expect("parse");
+        let art = images.into_art("en");
+        assert_eq!(
+            art.backdrop.as_deref(),
+            Some("https://image.tmdb.org/t/p/w1280/bare.jpg")
+        );
+        assert_eq!(
+            art.logo.as_deref(),
+            Some("https://image.tmdb.org/t/p/w500/en.png")
+        );
+    }
+
+    #[test]
+    fn a_logo_in_the_viewers_own_language_beats_an_english_one() {
+        let images: Images = serde_json::from_str(
+            r#"{"logos": [
+                {"file_path": "/en.png", "iso_639_1": "en", "vote_average": 9.0},
+                {"file_path": "/de.svg", "iso_639_1": "de", "vote_average": 9.0},
+                {"file_path": "/de.png", "iso_639_1": "de", "vote_average": 1.0}
+            ]}"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            images.into_art("de").logo.as_deref(),
+            Some("https://image.tmdb.org/t/p/w500/de.png")
+        );
+    }
+
+    #[test]
+    fn an_entry_with_no_images_has_no_art() {
+        let images: Images = serde_json::from_str("{}").expect("parse");
+        assert_eq!(images.into_art("en"), Art::default());
     }
 
     /// A rating of zero means "nobody has voted", not "everybody hated it", and

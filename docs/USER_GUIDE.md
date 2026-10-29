@@ -224,5 +224,8 @@ a video that is playing changes at once.
   **AniList** (no key needed) or **TMDB** (needs a free API key). With AniList, a title it does
   not have, such as a live-action show, is looked up on **TVmaze** next, which needs no key
   either. See [Privacy](PRIVACY.md).
+- **TMDB API key:** needed for TMDB, optional with AniList. With a key, films and shows that have
+  no wide picture or logo get TMDB's, asked for by their TMDB id alone. After saving a key,
+  **Match everything again** fetches them for titles already matched.
 - **Match the library** looks up new titles now. **Match everything again** looks up every title,
   except those you matched by hand.

@@ -901,28 +901,35 @@ fn metadata_form(
                 }
             }
 
+            // TMDB's is the only key there is: the provider's with TMDB chosen,
+            // and with AniList, the art of films TVDB has none for.
+            ui.add_space(theme::space::L);
             if settings.provider.needs_api_key() {
-                ui.add_space(theme::space::L);
-                ui.label(ui::muted(format!("{} API key", settings.provider.label())));
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(api_key)
-                            .password(true)
-                            .hint_text("v3 API key")
-                            .desired_width(300.0),
-                    );
-                    if ui.button("Save key").clicked() {
-                        actions.push(Action::SetApiKey {
-                            provider: settings.provider,
-                            key: std::mem::take(api_key),
-                        });
-                    }
-                });
+                ui.label(ui::muted("TMDB API key"));
+            } else {
                 ui.label(ui::muted(
-                    "Stored in your system keyring, never in a config file. Leave the box \
-                         empty and save to forget it.",
+                    "TMDB API key, optional. With one, films get TMDB's backdrops and logos, \
+                         asked for by the film's TMDB id alone.",
                 ));
             }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(api_key)
+                        .password(true)
+                        .hint_text("v3 API key")
+                        .desired_width(300.0),
+                );
+                if ui.button("Save key").clicked() {
+                    actions.push(Action::SetApiKey {
+                        provider: ProviderId::Tmdb,
+                        key: std::mem::take(api_key),
+                    });
+                }
+            });
+            ui.label(ui::muted(
+                "Stored in your system keyring, never in a config file. Leave the box \
+                     empty and save to forget it.",
+            ));
 
             ui.add_space(theme::space::L);
             ui.horizontal(|ui| {

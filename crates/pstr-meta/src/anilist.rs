@@ -27,6 +27,7 @@ use crate::error::{Error, Result};
 use crate::limiter::RateLimiter;
 use crate::matching::{Candidate, Query};
 use crate::provider::Provider;
+use crate::tmdb::{Tmdb, TmdbId};
 
 const ENDPOINT: &str = "https://graphql.anilist.co";
 
@@ -159,16 +160,20 @@ pub struct AniList {
     /// Shared by every lookup in flight — see [`crate::limiter`].
     limiter: RateLimiter,
     anizip: AniZip,
+    /// Asked by id for the art TVDB has not got, when a TMDB key is stored.
+    tmdb: Option<Tmdb>,
 }
 
 impl AniList {
     /// `language` is the one episode names are wanted in, where ani.zip has
-    /// them in it.
-    pub fn new(http: reqwest::Client, language: String) -> Self {
+    /// them in it. `tmdb` is asked for the art of entries TVDB has none for —
+    /// see [`Tmdb::art`].
+    pub fn new(http: reqwest::Client, language: String, tmdb: Option<Tmdb>) -> Self {
         Self {
             anizip: AniZip::new(http.clone(), language),
             http,
             limiter: RateLimiter::per_minute(REQUESTS_PER_MINUTE),
+            tmdb,
         }
     }
 }
@@ -204,7 +209,8 @@ impl Provider for AniList {
     }
 
     /// The episodes of every entry the library's files are spread across, and
-    /// the series' fanart.
+    /// the series' fanart and logo — from TMDB, by the id ani.zip gives, for
+    /// an entry TVDB has no art for.
     ///
     /// AniList files a sequel as its own entry — Bleach's seventeenth season is
     /// four of them, Mushoku Tensei's first is two — so a title's match is
@@ -235,6 +241,8 @@ impl Provider for AniList {
         // The same ids as `visited`, in the order they were read.
         let mut chain = Vec::new();
         let mut series_entries = 0;
+        // The match's own: a sequel's art is not the title's.
+        let mut tmdb_id: Option<TmdbId> = None;
         let mut next = Some(Link {
             id: first,
             series: found.kind == TitleKind::Series,
@@ -247,6 +255,9 @@ impl Provider for AniList {
                 series_entries
             });
             let mapping = self.anizip.mapping(link.id, entry_season).await?;
+            if chain.len() == 1 {
+                tmdb_id = mapping.tmdb;
+            }
             if enrichment.backdrop_url.is_none() {
                 enrichment.backdrop_url = mapping.fanart;
             }
@@ -266,6 +277,14 @@ impl Provider for AniList {
                 break;
             }
             next = self.sequel(link.id, &visited).await?;
+        }
+
+        if let (Some(tmdb), Some(id)) = (&self.tmdb, tmdb_id)
+            && (enrichment.backdrop_url.is_none() || enrichment.logo_url.is_none())
+        {
+            let art = tmdb.art_or_nothing(id).await;
+            enrichment.backdrop_url = enrichment.backdrop_url.or(art.backdrop);
+            enrichment.logo_url = enrichment.logo_url.or(art.logo);
         }
 
         tracing::debug!(

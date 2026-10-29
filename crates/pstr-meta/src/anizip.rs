@@ -20,6 +20,7 @@ use serde::Deserialize;
 
 use crate::error::{Error, Result};
 use crate::limiter::RateLimiter;
+use crate::tmdb::TmdbId;
 
 const ENDPOINT: &str = "https://api.ani.zip/mappings";
 
@@ -38,6 +39,8 @@ pub struct Mapping {
     pub fanart: Option<String>,
     /// TVDB's clear logo: the series' name as lettering, a transparent PNG.
     pub logo: Option<String>,
+    /// The same entry on TMDB, where TVDB has none of the films.
+    pub tmdb: Option<TmdbId>,
 }
 
 pub struct AniZip {
@@ -92,6 +95,31 @@ struct Payload {
     episodes: std::collections::BTreeMap<String, Episode>,
     #[serde(default)]
     images: Vec<Image>,
+    mappings: Option<Ids>,
+}
+
+/// The entry's ids elsewhere.
+#[derive(Deserialize)]
+struct Ids {
+    /// AniList's format, upper-cased: `TV`, `MOVIE`, `OVA`…
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "lenient_number")]
+    themoviedb_id: Option<u32>,
+}
+
+impl Ids {
+    /// The TMDB entry, where its kind says which list the id is from. An OVA
+    /// or a special is filed either way on TMDB, so it is left alone rather
+    /// than guessed.
+    fn tmdb(&self) -> Option<TmdbId> {
+        let id = self.themoviedb_id?;
+        match self.kind.as_deref()? {
+            "MOVIE" => Some(TmdbId::Movie(id)),
+            "TV" | "TV_SHORT" | "ONA" => Some(TmdbId::Tv(id)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -135,6 +163,7 @@ impl Payload {
         };
         let fanart = image("Fanart");
         let logo = image("Clearlogo");
+        let tmdb = self.mappings.as_ref().and_then(Ids::tmdb);
 
         let episodes = self
             .episodes
@@ -173,6 +202,7 @@ impl Payload {
             episodes,
             fanart,
             logo,
+            tmdb,
         }
     }
 }
@@ -322,5 +352,32 @@ mod tests {
         assert!(mapping.episodes.is_empty());
         assert_eq!(mapping.fanart, None);
         assert_eq!(mapping.logo, None);
+        assert_eq!(mapping.tmdb, None);
+    }
+
+    /// Paprika: a film with no TVDB art at all, and a TMDB id written as a
+    /// string.
+    #[test]
+    fn a_films_tmdb_id_is_kept_as_a_film() {
+        let mapping = serde_json::from_str::<Payload>(
+            r#"{"images": [], "mappings": {"type": "MOVIE", "themoviedb_id": "4977"}}"#,
+        )
+        .expect("parse")
+        .into_mapping("en", None);
+        assert_eq!(mapping.tmdb, Some(TmdbId::Movie(4977)));
+    }
+
+    #[test]
+    fn a_series_tmdb_id_is_kept_and_a_specials_is_not() {
+        let tmdb = |kind: &str| {
+            serde_json::from_str::<Payload>(&format!(
+                r#"{{"mappings": {{"type": "{kind}", "themoviedb_id": 209867}}}}"#
+            ))
+            .expect("parse")
+            .into_mapping("en", Some(1))
+            .tmdb
+        };
+        assert_eq!(tmdb("TV"), Some(TmdbId::Tv(209867)));
+        assert_eq!(tmdb("OVA"), None);
     }
 }

@@ -141,29 +141,33 @@ pub struct MetadataService {
 impl MetadataService {
     /// Build a service for `config`, asking [`chain_of`] its provider.
     ///
-    /// `api_key` is only consulted for a provider that needs one; for AniList it
-    /// is ignored, and passing `None` there is not an error.
-    pub fn new(config: &MetadataConfig, mut api_key: Option<String>) -> Result<Self> {
+    /// `tmdb_key` is the stored TMDB key, if there is one. TMDB as the provider
+    /// cannot do without it; AniList uses one for the art of films TVDB has
+    /// none for, and does without it otherwise.
+    pub fn new(config: &MetadataConfig, tmdb_key: Option<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(TIMEOUT)
             .build()
             .map_err(Error::Network)?;
 
+        let tmdb_key = tmdb_key.filter(|key| !key.trim().is_empty());
+        let tmdb = || {
+            tmdb_key
+                .clone()
+                .map(|key| Tmdb::new(http.clone(), key, config.language.clone()))
+                .ok_or(Error::MissingApiKey(ProviderId::Tmdb))
+        };
         let sources = chain_of(config.provider)
             .iter()
             .map(|provider| {
                 Ok(match provider {
-                    ProviderId::AniList => {
-                        Source::AniList(AniList::new(http.clone(), config.language.clone()))
-                    }
-                    ProviderId::Tmdb => Source::Tmdb(Tmdb::new(
+                    ProviderId::AniList => Source::AniList(AniList::new(
                         http.clone(),
-                        api_key
-                            .take()
-                            .ok_or(Error::MissingApiKey(ProviderId::Tmdb))?,
                         config.language.clone(),
+                        tmdb().ok(),
                     )),
+                    ProviderId::Tmdb => Source::Tmdb(tmdb()?),
                     ProviderId::TvMaze => Source::TvMaze(TvMaze::new(http.clone())),
                 })
             })
@@ -412,7 +416,7 @@ pub struct Outcome {
 /// A hand-picked entry is never searched for again, not even when `force`d —
 /// that means "the automatic answers are wrong", and re-deciding the one title
 /// the viewer already fixed by hand is the opposite of what they asked for. It
-/// is still enriched and refreshed.
+/// is still enriched and refreshed, and `force` enriches it again.
 ///
 /// `chain` is [`MetadataService::chain`]. Enriching and refreshing go to the
 /// provider each title is matched to.
@@ -435,9 +439,12 @@ pub fn plan(
         let Some(record) = record.filter(|record| record.metadata.is_some()) else {
             continue;
         };
-        let fresh = enriched.get(&title.key).is_some_and(|(asked, at)| {
-            *asked == record.provider && now.saturating_sub(*at) < MATCH_TTL_SECS
-        });
+        // Forced, a pinned title is enriched again even when it is fresh: art
+        // a newly saved key reaches is the usual reason to force.
+        let fresh = !force
+            && enriched.get(&title.key).is_some_and(|(asked, at)| {
+                *asked == record.provider && now.saturating_sub(*at) < MATCH_TTL_SECS
+            });
         let stale_details = gives_details(record.provider)
             && record
                 .metadata
@@ -578,6 +585,8 @@ mod tests {
             ..MetadataConfig::default()
         };
         assert!(MetadataService::new(&anilist, None).is_ok());
+        // A stored TMDB key is used for art, not demanded.
+        assert!(MetadataService::new(&anilist, Some("key".into())).is_ok());
 
         let tmdb = MetadataConfig {
             provider: ProviderId::Tmdb,
@@ -741,7 +750,8 @@ mod tests {
 
     /// A title AniList had nothing for is asked of TVmaze at once, rather than
     /// waiting out AniList's stored miss; a match from TVmaze is enriched by
-    /// TVmaze, and a hand-picked one stays pinned.
+    /// TVmaze, and a hand-picked one stays pinned — re-enriched when forced,
+    /// never searched for.
     #[test]
     fn titles_are_planned_against_the_provider_each_is_matched_to() {
         let miss = MetadataRecord {
@@ -770,10 +780,16 @@ mod tests {
             vec![("anilist miss", "match"), ("on tvmaze", "enrich")]
         );
 
+        // Forced, the pinned title is not searched for, but is enriched again
+        // although it is fresh.
         let work = plan(titles, &stored, &enriched, ANILIST, true);
         assert_eq!(
             kinds(&work),
-            vec![("anilist miss", "match"), ("on tvmaze", "match")]
+            vec![
+                ("anilist miss", "match"),
+                ("on tvmaze", "match"),
+                ("pinned", "enrich")
+            ]
         );
     }
 

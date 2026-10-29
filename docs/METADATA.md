@@ -45,7 +45,7 @@ good. What hung off it was not:
 |---|---|---|
 | **AniList** GraphQL | none | Identity. Search, every alias, cover art, relations (`SEQUEL`, `PREQUEL`, `SIDE_STORY`…), studios, staff, tags, format, season, popularity, next airing episode, the MAL id. |
 | **ani.zip** `api.ani.zip/mappings?anilist_id=` | none | Everything AniList lacks, per AniList id: TVDB season, episode and absolute numbers; episode titles in several languages; TVDB synopses; 16:9 stills; air dates; runtime. Series art: TVDB **fanart at 1920×1080**, poster, banner, logo. Cross-ids for MAL, AniDB, TVDB, TMDB, Kitsu, IMDb. A community service — cache what it says. |
-| **TMDB** | free key | Film backdrops and logos; live-action TV. Already implemented. |
+| **TMDB** | free key | Film backdrops and logos; live-action TV. Chosen as the provider, or with AniList chosen, asked by id for art alone. |
 | **TVmaze** | none | Live-action TV: episodes with 16:9 stills and runtimes, network, status, full-HD backgrounds. No films; its "typography" art is a JPEG, so no logos. In use after AniList. |
 | **AniSkip** | none | Opening and ending timestamps by MAL id and episode. |
 | **Jikan** (MAL) | none | Filler and recap flags. Timed out when tried; optional. |
@@ -224,6 +224,21 @@ embedded. Specials, which TVmaze numbers nowhere a file would, are left out.
 names its episode in dotted words, and `naming::episode_title` now reads them,
 stopping at the first release tag. A dotted run that no tag ends is not taken.
 This is the fallback for a title no provider has.
+
+**Film art from TMDB by id (done).** TVDB has no films, so ani.zip has no
+fanart or logo for one, and seventeen of the library's titles — nearly all
+films — had nothing wide to draw. ani.zip does give the TMDB id
+(`mappings.themoviedb_id`, with `mappings.type` saying whether it is a film's
+or a show's). With a TMDB key stored and AniList chosen, an entry left without a
+backdrop or a logo is asked for `/{movie,tv}/{id}/images`: one request, by id,
+so no title name goes to TMDB. A backdrop without lettering is preferred, and a
+PNG logo in the viewer's language, then English. An OVA's or a special's id is
+left alone, since TMDB files those either way. A failure there is logged and
+the enrichment stored without the art, rather than lost over decoration.
+
+With TMDB itself chosen, enrichment now makes the same request for the logo,
+and backdrops are fetched at `w1280` rather than `w780`, since they fill the
+width of the title page.
 
 Still to do:
 

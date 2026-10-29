@@ -546,15 +546,16 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
                 settings.provider.label(),
                 settings.provider.description()
             );
-            if settings.provider.needs_api_key() {
-                println!(
-                    "api key:  {}",
-                    match pstr_meta::settings::api_key(settings.provider) {
-                        Some(_) => "stored in the credential store",
-                        None => "not set — run `pstr metadata set --api-key`",
-                    }
-                );
-            }
+            let stored_key = pstr_meta::settings::api_key(ProviderId::Tmdb).is_some();
+            println!(
+                "tmdb key: {}",
+                match (stored_key, settings.provider.needs_api_key()) {
+                    (true, true) => "stored in the credential store",
+                    (true, false) => "stored — used for the art of films TVDB has none for",
+                    (false, true) => "not set — run `pstr metadata set --api-key`",
+                    (false, false) => "not set (optional, for film art)",
+                }
+            );
 
             let catalog = Catalog::open(&dirs.catalog_db()).context("open catalog")?;
             let stored = catalog.all_metadata()?;
@@ -594,12 +595,11 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
             }
 
             if api_key {
-                let key = rpassword::prompt_password(format!(
-                    "{} API key (empty to forget it): ",
-                    settings.provider.label()
-                ))
-                .context("read the API key")?;
-                pstr_meta::settings::set_api_key(settings.provider, &key)
+                // TMDB's is the only key there is: the provider with TMDB
+                // chosen, and film art with AniList.
+                let key = rpassword::prompt_password("TMDB API key (empty to forget it): ")
+                    .context("read the API key")?;
+                pstr_meta::settings::set_api_key(ProviderId::Tmdb, &key)
                     .context("store the API key")?;
             }
 
@@ -638,7 +638,7 @@ async fn metadata(dirs: &AppDirs, command: MetadataCommand) -> Result<()> {
 
             let service = pstr_meta::MetadataService::new(
                 &settings,
-                pstr_meta::settings::api_key(settings.provider),
+                pstr_meta::settings::api_key(ProviderId::Tmdb),
             )
             .context("build the metadata provider")?;
 

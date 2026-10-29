@@ -2432,7 +2432,7 @@ impl AndroidEngine {
                 reason: "turn on metadata enrichment first".to_owned(),
             });
         }
-        let key = pstr_meta::settings::api_key_in(self.secrets.as_ref(), config.provider);
+        let key = pstr_meta::settings::api_key_in(self.secrets.as_ref(), ProviderId::Tmdb);
         pstr_meta::MetadataService::new(&config, key).map_err(BridgeError::from_display)
     }
 
