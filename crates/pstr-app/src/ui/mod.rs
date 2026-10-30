@@ -235,13 +235,23 @@ pub fn logo_heading(
     if theme::palette().light {
         return None;
     }
-    let texture = art.logo(title)?;
+    let texture = art.logo(title);
+    // From nothing rather than from the name it replaces: the name is gone the
+    // frame the logo is ready, and a logo easing in reads as it arriving.
+    let shown = ui.ctx().animate_bool_with_time(
+        ui.id().with(("logo", &title.key)),
+        texture.is_some(),
+        theme::motion::ARRIVE,
+    );
+    let texture = texture?;
     let aspect = texture.aspect_ratio().max(0.1);
     let width = ui.available_width().min(420.0).min(max_height * aspect);
     let size = egui::vec2(width, width / aspect);
     Some(
-        ui.add(egui::Image::new((texture.id(), size)))
-            .on_hover_text(art.name(title)),
+        ui.add(
+            egui::Image::new((texture.id(), size)).tint(egui::Color32::WHITE.gamma_multiply(shown)),
+        )
+        .on_hover_text(art.name(title)),
     )
 }
 
@@ -340,6 +350,19 @@ pub fn muted(text: impl Into<String>) -> egui::RichText {
 /// The one button style that means "this is the action".
 pub fn accent_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     filled(ui, text, Fill::Accent, Vec2::new(0.0, 0.0))
+}
+
+/// The button beside the accent one: the same shape, in a film of the text
+/// colour, so "Start over" next to "Resume" reads as the alternative rather
+/// than as a second, unrelated kind of control.
+pub fn tonal_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    filled(ui, text, Fill::Tonal, Vec2::new(0.0, 0.0))
+}
+
+/// A button laid over the picture: dark glass and white ink, whatever the
+/// theme, because what is under it is a video frame and not the page.
+pub fn glass_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    filled(ui, text, Fill::Glass, Vec2::new(0.0, 0.0))
 }
 
 /// The search box in the top bar: a magnifier, the text, and a way to clear it.
@@ -548,6 +571,10 @@ enum Fill {
     Ink,
     /// Nothing at rest, the hover colour under the pointer.
     None,
+    /// A film of the text colour over whatever is behind it.
+    Tonal,
+    /// Dark glass over the picture.
+    Glass,
 }
 
 /// A row of tabs with one accent pill that slides between them.
@@ -668,6 +695,35 @@ fn filled(ui: &mut egui::Ui, text: &str, fill: Fill, extra: Vec2) -> egui::Respo
             }
             theme::muted().lerp_to_gamma(theme::text(), hover)
         }
+        Fill::Tonal => {
+            let film = if theme::palette().light {
+                Color32::from_black_alpha(16)
+            } else {
+                Color32::from_white_alpha(22)
+            };
+            ui.painter().rect_filled(rect, radius, film);
+            theme::veil_over(ui.painter(), rect, radius, lift);
+            theme::text()
+        }
+        Fill::Glass => {
+            ui.painter()
+                .rect_filled(rect, radius, Color32::from_black_alpha(140));
+            ui.painter().rect_stroke(
+                rect,
+                radius,
+                Stroke::new(1.0, Color32::from_white_alpha(18)),
+                egui::StrokeKind::Inside,
+            );
+            theme::veil_over(ui.painter(), rect, radius, lift);
+            Color32::WHITE
+        }
+    };
+    // A disabled control is drawn at part strength: the ink is what says what
+    // the button is, so that is what fades.
+    let ink = if ui.is_enabled() {
+        ink
+    } else {
+        ink.gamma_multiply(0.4)
     };
 
     let position = rect.center() - galley.size() / 2.0;
@@ -740,18 +796,27 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
         return response;
     }
 
-    let image_rect = Rect::from_min_size(rect.min, Vec2::new(width, image_height));
+    let resting = Rect::from_min_size(rect.min, Vec2::new(width, image_height));
     // Hover is a value, not a flag: the border, the lift and the shadow all
     // ride it, so they arrive together rather than each snapping on its own.
     // egui drives this from wall-clock time, so it is the same speed whatever
     // the frame rate — and it needs no state kept here.
-    // Focus lights a tile the way the pointer does, so the keyboard can be
-    // followed across the grid.
+    // Focus lifts a tile the way the pointer does, and adds a ring of its own,
+    // so the keyboard can be followed across the grid.
     let hover = ui.ctx().animate_bool_with_time(
         response.id.with("hover"),
         response.hovered() || response.has_focus(),
         theme::motion::HOVER,
     );
+    let focus = ui.ctx().animate_bool_with_time(
+        response.id.with("focus"),
+        response.has_focus(),
+        theme::motion::HOVER,
+    );
+    // The picture grows towards the viewer into the gap around it, which is
+    // what says "this one" across a shelf of near-identical rectangles. The
+    // name under it stays put, so the row's text never wobbles.
+    let image_rect = resting.expand2(resting.size() * lift_per_side(width) * hover);
     // The picture arrives whenever its download finishes, several frames after
     // the tile first drew. Fading it in over the placeholder turns a wall of
     // letters popping into stills into one settle.
@@ -867,9 +932,17 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
             egui::StrokeKind::Inside,
         );
     }
+    if focus > 0.0 {
+        painter.rect_stroke(
+            image_rect.expand(3.0),
+            CornerRadius::same(theme::radius::MD + 3),
+            Stroke::new(2.0, theme::text().gamma_multiply(focus)),
+            egui::StrokeKind::Outside,
+        );
+    }
 
     let text_rect = Rect::from_min_size(
-        image_rect.left_bottom() + Vec2::new(0.0, 6.0),
+        resting.left_bottom() + Vec2::new(0.0, 6.0),
         Vec2::new(width, text_height - 6.0),
     );
     let painter = painter.with_clip_rect(text_rect);
@@ -898,6 +971,146 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
     );
 
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Every sideways row in the app: the shelves on the home page and the
+/// franchise on a title's page.
+///
+/// What runs past either edge fades into the page rather than being cut off
+/// by it, so a row says there is more without a scroll bar saying it. Under
+/// the pointer, a round button at each edge with more beyond it pages the row
+/// by most of its width: a mouse has no sideways wheel, and the bar was the
+/// only other way across.
+///
+/// The row is padded by half a gap all round inside its scroll area, and the
+/// area reaches the same half gap past the column on either side, so a lifted
+/// tile is not clipped by the area and the tiles still line up with the
+/// headings above them.
+pub fn shelf<R>(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let half = (theme::CARD_GAP / 2.0) as i8;
+    let id = ui.id().with(("shelf", &id_salt));
+    let page = id.with("page");
+    let pending: Option<f32> = ui.ctx().data_mut(|data| data.remove_temp(page));
+    let output = egui::Frame::new()
+        .outer_margin(egui::Margin {
+            left: -half,
+            right: -half,
+            top: -half,
+            bottom: -half,
+        })
+        .show(ui, |ui| {
+            egui::ScrollArea::horizontal()
+                .id_salt(id)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    if let Some(delta) = pending {
+                        ui.scroll_with_delta_animation(
+                            Vec2::new(delta, 0.0),
+                            egui::style::ScrollAnimation::duration(SHELF_PAGE_SECONDS),
+                        );
+                    }
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::same(half))
+                        .show(ui, add)
+                        .inner
+                })
+        })
+        .inner;
+
+    let rect = output.inner_rect;
+    let offset = output.state.offset.x;
+    let overflow = (output.content_size.x - rect.width()).max(0.0);
+    let ends = [
+        (offset > 1.0, false, egui_phosphor::regular::CARET_LEFT, 1.0),
+        (
+            offset < overflow - 1.0,
+            true,
+            egui_phosphor::regular::CARET_RIGHT,
+            -1.0,
+        ),
+    ];
+    let pointer_in = ui.rect_contains_pointer(rect);
+    let painter = ui.painter_at(rect);
+    for (more, right, icon, direction) in ends {
+        if !more {
+            continue;
+        }
+        let strip = if right {
+            Rect::from_min_max(egui::pos2(rect.right() - SHELF_FADE, rect.top()), rect.max)
+        } else {
+            Rect::from_min_max(
+                rect.min,
+                egui::pos2(rect.left() + SHELF_FADE, rect.bottom()),
+            )
+        };
+        painter.add(theme::fade_shape(
+            ui.ctx(),
+            strip,
+            theme::background(),
+            theme::Direction::Horizontal,
+            right,
+        ));
+
+        let button_id = id.with(right);
+        let shown = ui
+            .ctx()
+            .animate_bool_with_time(button_id, pointer_in, theme::motion::HOVER);
+        if shown == 0.0 {
+            continue;
+        }
+        let centre = egui::pos2(
+            if right {
+                rect.right() - SHELF_BUTTON / 2.0 - theme::space::M
+            } else {
+                rect.left() + SHELF_BUTTON / 2.0 + theme::space::M
+            },
+            rect.center().y,
+        );
+        let button = Rect::from_center_size(centre, Vec2::splat(SHELF_BUTTON));
+        let response = ui
+            .interact(button, button_id.with("button"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let response = response.named(if right { "Scroll right" } else { "Scroll left" });
+        let lit = if response.hovered() { 1.0 } else { 0.0 };
+        painter.circle_filled(
+            centre,
+            SHELF_BUTTON / 2.0,
+            Color32::from_black_alpha((150.0 + 60.0 * lit) as u8).gamma_multiply(shown),
+        );
+        painter.text(
+            centre,
+            Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(18.0),
+            Color32::WHITE.gamma_multiply(shown),
+        );
+        if response.clicked() {
+            let delta = direction * rect.width() * SHELF_PAGE;
+            ui.ctx().data_mut(|data| data.insert_temp(page, delta));
+            ui.ctx().request_repaint();
+        }
+    }
+    output.inner
+}
+
+/// How wide the fade at a shelf's edge is.
+const SHELF_FADE: f32 = 56.0;
+/// The diameter of a shelf's paging buttons.
+const SHELF_BUTTON: f32 = 40.0;
+/// How much of a shelf's width one page moves: most of it, so the tile that
+/// was cut by the edge is whole on the next page.
+const SHELF_PAGE: f32 = 0.85;
+const SHELF_PAGE_SECONDS: f32 = 0.35;
+
+/// How far a lifted tile grows past each edge, as a fraction of its size:
+/// [`theme::TILE_LIFT`], but never so far that it reaches into the gap's other
+/// half, which belongs to the neighbour. A wide window makes wide tiles.
+fn lift_per_side(width: f32) -> f32 {
+    (theme::TILE_LIFT / 2.0).min((theme::CARD_GAP / 2.0 - 1.0) / width.max(1.0))
 }
 
 /// The largest centred rectangle inside `target` with `image`'s aspect ratio.
@@ -1023,6 +1236,16 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_lifted_tile_never_reaches_its_neighbour_however_wide_the_window() {
+        for available in [400.0, 1280.0, 1919.0, 2560.0, 3840.0] {
+            for minimum in [theme::CARD_WIDTH, theme::POSTER_WIDTH] {
+                let width = columns_of(available, minimum).width;
+                assert!(width * lift_per_side(width) < theme::CARD_GAP / 2.0);
+            }
+        }
+    }
 
     #[test]
     fn a_running_time_reads_in_hours_and_minutes() {

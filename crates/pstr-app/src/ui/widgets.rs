@@ -390,6 +390,25 @@ pub fn download_button(ui: &mut egui::Ui, glyph: DownloadGlyph) -> egui::Respons
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// A fact about the files rather than the title — 4K, HDR, Dual audio — as
+/// a small outlined mark: quieter than a [`chip`], which is something the
+/// title is filed under.
+pub fn spec_badge(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    egui::Frame::new()
+        .stroke(egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.7)))
+        .corner_radius(CornerRadius::same(theme::radius::BADGE))
+        .inner_margin(egui::Margin::symmetric(5, 1))
+        .show(ui, |ui| {
+            ui.label(
+                theme::Role::Micro
+                    .rich(text)
+                    .family(theme::semibold())
+                    .color(theme::muted()),
+            );
+        })
+        .response
+}
+
 /// A small rounded label: a genre, a year, a fact.
 pub fn chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
     egui::Frame::new()

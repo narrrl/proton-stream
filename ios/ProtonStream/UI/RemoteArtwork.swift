@@ -32,9 +32,12 @@ extension EpisodeRecord {
 ///
 /// `fallback` is used only when there is no provider artwork or it fails to
 /// load, which — with metadata off — is the common case rather than the rare
-/// one. Until either answers, the box pulses as a skeleton; when neither has
+/// one. Until either answers, the box shimmers as a skeleton; when neither has
 /// anything, it shows `ArtworkPlaceholder` rather than an empty card — without
 /// initials when `labelled` is false, for art with the name already over it.
+///
+/// Art that arrives fades in over the skeleton, as on Android; art already
+/// decoded is drawn in the first frame and has nothing to fade.
 struct RemoteArtwork: View {
     let url: String?
     let description: String
@@ -57,11 +60,11 @@ struct RemoteArtwork: View {
             .overlay {
                 switch load {
                 case .pending:
-                    Skeleton()
+                    Skeleton().transition(.opacity)
                 case .missing:
-                    ArtworkPlaceholder(name: description, labelled: labelled)
+                    ArtworkPlaceholder(name: description, labelled: labelled).transition(.opacity)
                 case let .loaded(image):
-                    Image(uiImage: image).resizable().scaledToFill()
+                    Image(uiImage: image).resizable().scaledToFill().transition(.opacity)
                 }
             }
             .clipped()
@@ -71,7 +74,7 @@ struct RemoteArtwork: View {
                 if case .loaded = load, ArtworkLoader.shared.cached(url: url, fallback: fallback) != nil { return }
                 let loaded = await ArtworkLoader.shared.artwork(url: url, fallback: fallback)
                 if Task.isCancelled { return }
-                load = loaded.map(ArtworkLoad.loaded) ?? .missing
+                withAnimation(Motion.arrive) { load = loaded.map(ArtworkLoad.loaded) ?? .missing }
             }
     }
 
@@ -136,15 +139,16 @@ struct RemoteLogo<Fallback: View>: View {
                     .scaledToFit()
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .bottomLeading)
                     .accessibilityLabel(description)
+                    .transition(.opacity)
             } else {
-                fallback()
+                fallback().transition(.opacity)
             }
         }
         .task(id: url) {
             if logo != nil { return }
             let loaded = await ArtworkLoader.shared.logo(url)
             if Task.isCancelled { return }
-            logo = loaded
+            withAnimation(Motion.arrive) { logo = loaded }
         }
     }
 }
@@ -211,20 +215,38 @@ private enum ArtworkLoad {
     case loaded(UIImage)
 }
 
-/// Something being loaded: the surface tint, breathing.
+/// How long things take to change: the desktop's `theme::motion`.
+enum Motion {
+    /// Artwork arriving over its skeleton.
+    static let arrive = Animation.easeOut(duration: 0.24)
+    /// One pass of a skeleton's highlight.
+    static let shimmer = Animation.linear(duration: 1.4).repeatForever(autoreverses: false)
+}
+
+/// Something being loaded: the surface tint, with a soft highlight sweeping
+/// across it on a diagonal.
 ///
 /// A spinner per tile is a grid of spinners; a shape where the poster will be
 /// says what is coming and where, and settles the layout before it arrives.
 struct Skeleton: View {
     @Environment(\.scheme) private var scheme
-    @State private var dim = false
+    @State private var sweep: CGFloat = -1
 
     var body: some View {
         scheme.surfaceVariant
-            .opacity(dim ? 0.55 : 1)
-            .onAppear {
-                withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
+            .overlay {
+                GeometryReader { geometry in
+                    LinearGradient(
+                        colors: [.clear, mix(scheme.surfaceVariant, scheme.onSurface, 0.07), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(width: geometry.size.width * 1.2)
+                    .offset(x: sweep * geometry.size.width)
+                }
             }
+            .clipped()
+            .onAppear { withAnimation(Motion.shimmer) { sweep = 2 } }
     }
 }
 

@@ -4,6 +4,9 @@ import android.net.ConnectivityManager
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -255,4 +258,39 @@ internal fun EpisodeRecord.heading(position: Int): String {
         number != null -> "Episode $number"
         else -> name.substringBeforeLast('.').ifBlank { "Episode ${position + 1}" }
     }
+}
+
+/**
+ * Something the title is filed under — a genre — as a small rounded label.
+ * The desktop's `widgets::chip`.
+ */
+@Composable
+internal fun GenreChip(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    )
+}
+
+/**
+ * A fact about the files rather than the title — 4K, HDR, Dual audio — as a
+ * small outlined mark, the way a box prints them. Quieter than a [GenreChip].
+ * The desktop's `widgets::spec_badge`.
+ */
+@Composable
+internal fun SpecBadge(text: String) {
+    val ink = MaterialTheme.colorScheme.onSurfaceVariant
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        color = ink,
+        modifier = Modifier
+            .border(1.dp, ink.copy(alpha = 0.7f), MaterialTheme.shapes.extraSmall)
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
 }

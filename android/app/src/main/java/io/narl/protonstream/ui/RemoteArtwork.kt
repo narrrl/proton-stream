@@ -6,13 +6,15 @@ import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,10 +27,11 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -79,9 +82,13 @@ internal val EpisodeRecord.thumbnailSource: ThumbnailSource
  *
  * [fallback] is used only when there is no provider artwork or it fails to
  * load, which — with metadata off — is the common case rather than the rare
- * one. Until either answers, the box pulses as a skeleton; when neither has
+ * one. Until either answers, the box shimmers as a skeleton; when neither has
  * anything, it shows [ArtworkPlaceholder] rather than an empty card — without
  * initials when [labelled] is false, for art with the name already over it.
+ *
+ * Art that arrives fades in over the skeleton rather than replacing it in one
+ * frame, which across a grid reads as flicker. Art already decoded is drawn
+ * at once: a tile scrolled back into view has nothing to arrive.
  */
 @Composable
 internal fun RemoteArtwork(
@@ -97,7 +104,7 @@ internal fun RemoteArtwork(
     // Decoded at the size it is drawn: a grid tile is a few hundred pixels,
     // and decoding its poster at 1024 holds four times the memory for nothing.
     val edge = with(LocalDensity.current) { maxEdge?.roundToPx() }?.coerceIn(1, MAX_ART_EDGE) ?: MAX_ART_EDGE
-    var image by remember(url, fallback) { mutableStateOf<ArtworkLoad>(ArtworkLoad.Pending) }
+    var image by remember(url, fallback) { mutableStateOf(alreadyDecoded(url, fallback, edge)) }
     LaunchedEffect(url, fallback, enabled) {
         if (!enabled) {
             image = ArtworkLoad.Missing
@@ -107,12 +114,34 @@ internal fun RemoteArtwork(
             ?.let { ArtworkLoad.Loaded(it.asImageBitmap()) }
             ?: ArtworkLoad.Missing
     }
-    when (val loaded = image) {
-        ArtworkLoad.Pending -> Skeleton(modifier)
-        ArtworkLoad.Missing -> ArtworkPlaceholder(description, modifier, labelled)
-        is ArtworkLoad.Loaded -> Image(loaded.image, description, modifier, contentScale = ContentScale.Crop)
+    Crossfade(image, modifier, animationSpec = tween(ARRIVE_MS), label = "artwork") { loaded ->
+        when (loaded) {
+            ArtworkLoad.Pending -> Skeleton(Modifier.fillMaxSize())
+            ArtworkLoad.Missing -> ArtworkPlaceholder(description, Modifier.fillMaxSize(), labelled)
+            is ArtworkLoad.Loaded -> Image(
+                loaded.image,
+                description,
+                Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
     }
 }
+
+/** What the decoded cache already holds for this art, so it skips the fade. */
+private fun alreadyDecoded(url: String?, fallback: ThumbnailSource?, edge: Int): ArtworkLoad {
+    val hit = url?.let { decoded.get(sized(it, edge)) } ?: fallback?.let { decoded.get(sized(it.key, edge)) }
+    return hit?.let { ArtworkLoad.Loaded(it.asImageBitmap()) } ?: ArtworkLoad.Pending
+}
+
+/**
+ * How long art takes to fade in over its skeleton: the desktop's
+ * `motion::ARRIVE`.
+ */
+private const val ARRIVE_MS = 240
+
+/** One pass of the skeleton's highlight: the desktop's `motion::SHIMMER`. */
+private const val SHIMMER_MS = 1_400
 
 /**
  * A title's art across the top of a page: its backdrop, or with none, its
@@ -158,15 +187,17 @@ internal fun RemoteLogo(
     LaunchedEffect(url, enabled) {
         logo = if (enabled) loadLogo(context, url)?.asImageBitmap() else null
     }
-    when (val loaded = logo) {
-        null -> fallback()
-        else -> Image(
-            loaded,
-            description,
-            modifier,
-            alignment = Alignment.BottomStart,
-            contentScale = ContentScale.Fit,
-        )
+    Crossfade(logo, animationSpec = tween(ARRIVE_MS), label = "logo") { loaded ->
+        when (loaded) {
+            null -> fallback()
+            else -> Image(
+                loaded,
+                description,
+                modifier,
+                alignment = Alignment.BottomStart,
+                contentScale = ContentScale.Fit,
+            )
+        }
     }
 }
 
@@ -231,20 +262,38 @@ private sealed interface ArtworkLoad {
 internal val LocalArtworkLoading = staticCompositionLocalOf { true }
 
 /**
- * Something being loaded: the surface tint, breathing.
+ * Something being loaded: the surface tint, with a soft highlight sweeping
+ * across it on a diagonal.
  *
  * A spinner per tile is a grid of spinners; a shape where the poster will be
  * says what is coming and where, and settles the layout before it arrives.
+ * The sweep is measured in the tile's own width, so neighbouring tiles of one
+ * size shimmer in step, as one surface.
  */
 @Composable
 internal fun Skeleton(modifier: Modifier = Modifier) {
-    val pulse by rememberInfiniteTransition(label = "skeleton").animateFloat(
-        initialValue = 0.55f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
-        label = "skeleton alpha",
+    val sweep by rememberInfiniteTransition(label = "skeleton").animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(tween(SHIMMER_MS, easing = LinearEasing)),
+        label = "skeleton sweep",
     )
-    Box(modifier.graphicsLayer { alpha = pulse }.background(MaterialTheme.colorScheme.surfaceVariant))
+    val base = MaterialTheme.colorScheme.surfaceVariant
+    val highlight = lerp(base, MaterialTheme.colorScheme.onSurface, 0.07f)
+    Box(
+        modifier.drawBehind {
+            drawRect(base)
+            val centre = size.width * sweep
+            val half = size.width * 0.6f
+            drawRect(
+                Brush.linearGradient(
+                    listOf(Color.Transparent, highlight, Color.Transparent),
+                    start = Offset(centre - half, 0f),
+                    end = Offset(centre + half, size.height),
+                ),
+            )
+        },
+    )
 }
 
 /**

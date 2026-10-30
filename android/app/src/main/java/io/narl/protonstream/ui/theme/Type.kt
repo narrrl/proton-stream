@@ -25,6 +25,13 @@ internal val Inter = FontFamily(
 )
 
 /**
+ * Inter Display Bold, the optical size drawn for large text, for the one
+ * [HERO] line: the banner's name and the name at the top of a title's page.
+ * The desktop's `theme::display` family, from the same file.
+ */
+internal val InterDisplay = FontFamily(Font(R.font.inter_display_bold, FontWeight.Bold))
+
+/**
  * The type ramp, which is the desktop client's type ramp.
  *
  * `pstr_app::theme::Role` names nine sizes and the desktop asks for a role
@@ -33,7 +40,10 @@ internal val Inter = FontFamily(
  * were built to share one palette; sharing one scale is the other half of why
  * they should read as one app.
  *
- * The rungs, largest first: 26 / 20 / 18 / 17 / 15 / 14 / 13 / 12 / 11.
+ * The rungs, largest first: 34 / 26 / 20 / 18 / 17 / 15 / 14 / 13 / 12 / 11.
+ * The top one is the hero line, in [InterDisplay] and set tighter, at
+ * [HERO_LEADING]: at that size the text face's leading pushes a two-line name
+ * apart.
  *
  * Where a role maps is decided by what actually draws with it here, not by
  * Material's own sizes — Material's `displayLarge` is 57sp, which is a size for
@@ -44,7 +54,8 @@ internal val Inter = FontFamily(
  * [TypeRampTest] pins every one of these against the Rust ramp.
  */
 internal val ProtonTypography = Typography(
-    displayLarge = role(DISPLAY, FontWeight.SemiBold),
+    // The banner's name and the title page's name, where no logo stands in.
+    displayLarge = role(HERO, FontWeight.Bold, InterDisplay, HERO_LEADING),
     displayMedium = role(DISPLAY, FontWeight.SemiBold),
     displaySmall = role(TITLE, FontWeight.SemiBold),
     // The name of the title you opened — the desktop's display line.
@@ -69,6 +80,7 @@ internal val ProtonTypography = Typography(
     labelSmall = role(MICRO, FontWeight.Medium),
 )
 
+internal const val HERO = 34f
 internal const val DISPLAY = 26f
 internal const val TITLE = 20f
 internal const val HEADING = 18f
@@ -79,6 +91,9 @@ internal const val LABEL = 13f
 internal const val CAPTION = 12f
 internal const val MICRO = 11f
 
+internal const val LEADING = 1.35f
+internal const val HERO_LEADING = 1.1f
+
 /**
  * One rung as a `TextStyle`.
  *
@@ -87,9 +102,14 @@ internal const val MICRO = 11f
  * enough for the two-line title names in the grid and tight enough that a
  * label on a control does not float.
  */
-private fun role(size: Float, weight: FontWeight) = TextStyle(
+private fun role(
+    size: Float,
+    weight: FontWeight,
+    family: FontFamily = Inter,
+    leading: Float = LEADING,
+) = TextStyle(
     fontSize = size.sp,
-    lineHeight = (size * 1.35f).sp,
+    lineHeight = (size * leading).sp,
     fontWeight = weight,
-    fontFamily = Inter,
+    fontFamily = family,
 )

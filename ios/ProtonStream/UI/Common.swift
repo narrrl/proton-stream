@@ -400,3 +400,84 @@ private extension UIColor {
         return (red, green, blue, alpha)
     }
 }
+
+/// Something the title is filed under — a genre — as a small rounded label.
+/// Android's `GenreChip`.
+struct GenreChip: View {
+    @Environment(\.scheme) private var scheme
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .textStyle(.labelMedium)
+            .foregroundStyle(scheme.onSurface)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// A fact about the files rather than the title — 4K, HDR, Dual audio — as a
+/// small outlined mark, the way a box prints them. Android's `SpecBadge`.
+struct SpecBadge: View {
+    @Environment(\.scheme) private var scheme
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .textStyle(.labelSmall, semibold: true)
+            .foregroundStyle(scheme.onSurfaceVariant)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(scheme.onSurfaceVariant.opacity(0.7), lineWidth: 1))
+    }
+}
+
+/// Children left to right, wrapping onto a new line when the next one would
+/// not fit: Compose's `FlowRow`, which SwiftUI does not have.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.members {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var members: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = [Row()]
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = rows[rows.count - 1].members.isEmpty ? size.width : rows[rows.count - 1].width + spacing + size.width
+            if needed > width, !rows[rows.count - 1].members.isEmpty {
+                rows.append(Row())
+            }
+            var row = rows[rows.count - 1]
+            row.width = row.members.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.members.append(index)
+            rows[rows.count - 1] = row
+        }
+        return rows.filter { !$0.members.isEmpty }
+    }
+}

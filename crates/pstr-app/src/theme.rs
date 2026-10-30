@@ -41,6 +41,10 @@ pub const CARD_GAP: f32 = 14.0;
 pub const POSTER_WIDTH: f32 = 168.0;
 /// Covers are 2:3.
 pub const POSTER_ASPECT: f32 = 3.0 / 2.0;
+/// How much a tile's picture grows under the pointer, as a fraction of its
+/// size. Half of it lands on each side, which has to fit in half of
+/// [`CARD_GAP`] at the widest card, or a lifted tile overlaps its neighbour.
+pub const TILE_LIFT: f32 = 0.04;
 
 /// The type ramp, named once.
 ///
@@ -55,6 +59,11 @@ pub const POSTER_ASPECT: f32 = 3.0 / 2.0;
 /// the one monospace style in the app is egui's own, set in [`apply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
+    /// The name in the library's banner and at the top of a title's page,
+    /// where there is no logo to stand in for it. Set in Inter Display, the
+    /// cut drawn for this size: tighter and heavier than the text face, which
+    /// at forty points looks like body copy that was zoomed.
+    Hero,
     /// The name of the thing you are looking at, once per page.
     Display,
     /// An empty state, or the heading of a page that has no display line.
@@ -78,6 +87,7 @@ pub enum Role {
 impl Role {
     pub const fn size(self) -> f32 {
         match self {
+            Self::Hero => 34.0,
             Self::Display => 26.0,
             Self::Title => 20.0,
             Self::Heading => 18.0,
@@ -90,10 +100,11 @@ impl Role {
         }
     }
 
-    /// Headings are set in the semibold cut; everything below them in the
-    /// regular one.
+    /// The hero line is set in the display cut, headings in the semibold
+    /// one, and everything below them in the regular one.
     pub fn family(self) -> egui::FontFamily {
         match self {
+            Self::Hero => display(),
             Self::Display | Self::Title | Self::Heading | Self::Section => semibold(),
             _ => egui::FontFamily::Proportional,
         }
@@ -159,6 +170,9 @@ pub mod motion {
     /// Artwork arriving over its placeholder. Slower, because it replaces
     /// something rather than adding to it, and a fast swap reads as a flicker.
     pub const ARRIVE: f32 = 0.24;
+    /// One pass of the highlight across a loading skeleton. Slow, because it
+    /// is something to wait in front of, not something happening.
+    pub const SHIMMER: f32 = 1.4;
 
     /// Fast out, slow in: the curve every hand-driven transition uses.
     pub fn ease_out(t: f32) -> f32 {
@@ -170,7 +184,7 @@ pub mod motion {
 /// sets the same on every desktop. Inter, under the OFL — the licence is
 /// beside the files.
 ///
-/// Both files have their private use area mappings removed, because the
+/// All three files have their private use area mappings removed, because the
 /// Phosphor icons live there. Inter maps 745 codepoints in that area to its
 /// own alternate glyphs, and as the first font in the family it won: the
 /// refresh arrow drew as an accented letter. The glyphs themselves are still
@@ -179,11 +193,19 @@ pub mod motion {
 /// U+E000..=U+F8FF).
 const INTER: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
 const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
+/// Inter Display Bold, the optical size for the hero line. Stripped like the
+/// other two.
+const INTER_DISPLAY: &[u8] = include_bytes!("../assets/fonts/InterDisplay-Bold.ttf");
 
 /// The family the headings are set in. egui has no notion of weight, so the
 /// semibold cut is a family of its own.
 pub fn semibold() -> egui::FontFamily {
     egui::FontFamily::Name("semibold".into())
+}
+
+/// The family [`Role::Hero`] is set in.
+pub fn display() -> egui::FontFamily {
+    egui::FontFamily::Name("display".into())
 }
 
 /// The family the subtitle preview is drawn in: the face the chosen subtitle
@@ -238,6 +260,10 @@ fn font_definitions(system: &SystemFonts) -> egui::FontDefinitions {
         "inter-semibold".into(),
         Arc::new(egui::FontData::from_static(INTER_SEMIBOLD)),
     );
+    fonts.font_data.insert(
+        "inter-display".into(),
+        Arc::new(egui::FontData::from_static(INTER_DISPLAY)),
+    );
     fonts
         .families
         .entry(Proportional)
@@ -258,10 +284,13 @@ fn font_definitions(system: &SystemFonts) -> egui::FontDefinitions {
         .filter(|name| *name != "inter")
         .cloned()
         .collect();
-    let semibold_chain = std::iter::once("inter-semibold".to_owned())
-        .chain(fallbacks)
-        .collect();
-    fonts.families.insert(semibold(), semibold_chain);
+    let chain = |first: &str| {
+        std::iter::once(first.to_owned())
+            .chain(fallbacks.iter().cloned())
+            .collect()
+    };
+    fonts.families.insert(semibold(), chain("inter-semibold"));
+    fonts.families.insert(display(), chain("inter-display"));
     let mut subtitle_chain = fonts.families[&Proportional].clone();
     if let Some((_, face, _)) = &system.subtitle {
         let name = "system-subtitle".to_owned();
@@ -868,6 +897,43 @@ fn shadow(strength: f32, offset: [i8; 2], blur: u8, alpha: u8) -> egui::epaint::
     }
 }
 
+/// A soft highlight sweeping across a loading skeleton on a diagonal: what
+/// says the shape is waiting for something rather than empty.
+///
+/// The phase runs off the clock rather than per tile, so every skeleton on
+/// screen sweeps in step, as one surface. Asks for the next frame itself; a
+/// skeleton is only ever on screen for a moment.
+pub fn shimmer(painter: &egui::Painter, rect: Rect) {
+    let time = painter.ctx().input(|input| input.time);
+    let phase = (time / f64::from(motion::SHIMMER)).fract() as f32;
+    let span = rect.width() * 0.6;
+    let centre = rect.left() - span + phase * (rect.width() + 2.0 * span);
+    let skew = rect.height() * 0.4;
+    let highlight = if palette().light {
+        Color32::from_black_alpha(10)
+    } else {
+        Color32::from_white_alpha(12)
+    };
+    let mut mesh = egui::Mesh::default();
+    for (x, color) in [
+        (centre - span, Color32::TRANSPARENT),
+        (centre, highlight),
+        (centre + span, Color32::TRANSPARENT),
+    ] {
+        mesh.colored_vertex(egui::pos2(x + skew, rect.top()), color);
+        mesh.colored_vertex(egui::pos2(x - skew, rect.bottom()), color);
+    }
+    for quad in 0..2 {
+        let i = quad * 2;
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i + 1, i + 3, i + 2);
+    }
+    painter
+        .with_clip_rect(rect.intersect(painter.clip_rect()))
+        .add(mesh);
+    painter.ctx().request_repaint();
+}
+
 /// The hover and press film on its own, for a control whose fill was painted by
 /// somebody else — the selected tab, which sits on the pill.
 pub fn veil_over(
@@ -1169,7 +1235,11 @@ mod tests {
     fn the_bundled_inter_leaves_the_icon_codepoints_to_phosphor() {
         use skrifa::MetadataProvider as _;
 
-        for (name, bytes) in [("regular", INTER), ("semibold", INTER_SEMIBOLD)] {
+        for (name, bytes) in [
+            ("regular", INTER),
+            ("semibold", INTER_SEMIBOLD),
+            ("display", INTER_DISPLAY),
+        ] {
             let font = skrifa::FontRef::new(bytes).expect("bundled Inter parses");
             let shadowed: Vec<u32> = font
                 .charmap()

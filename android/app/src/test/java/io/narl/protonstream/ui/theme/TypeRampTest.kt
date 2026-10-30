@@ -22,10 +22,10 @@ import org.junit.Test
  */
 class TypeRampTest {
     /** `Role::size()`, in the order `theme.rs` declares it. */
-    private val ramp = listOf(26f, 20f, 18f, 17f, 15f, 14f, 13f, 12f, 11f)
+    private val ramp = listOf(34f, 26f, 20f, 18f, 17f, 15f, 14f, 13f, 12f, 11f)
 
     private val expected = mapOf(
-        "displayLarge" to 26f,
+        "displayLarge" to 34f,
         "displayMedium" to 26f,
         "displaySmall" to 20f,
         "headlineLarge" to 26f,
@@ -62,12 +62,14 @@ class TypeRampTest {
     /**
      * Leading is derived from the size, so the only thing worth asserting is
      * that it *was* derived — a style that kept Material's line height carries
-     * a number with no relation to its own size.
+     * a number with no relation to its own size. The hero line is the one set
+     * tighter.
      */
     @Test
     fun `line height follows the size it belongs to`() {
         styles().forEach { (name, style) ->
-            assertEquals(name, style.fontSize.value * 1.35f, style.lineHeight.value, 0.01f)
+            val leading = if (name == "displayLarge") HERO_LEADING else LEADING
+            assertEquals(name, style.fontSize.value * leading, style.lineHeight.value, 0.01f)
         }
     }
 

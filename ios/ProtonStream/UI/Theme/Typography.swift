@@ -3,9 +3,11 @@ import SwiftUI
 /// The type ramp, which is the desktop client's type ramp, under Material's
 /// names so a view ported from the Android client asks for the same style.
 ///
-/// Inter, Regular and SemiBold only, as on the desktop and on Android: a
-/// `Medium` role resolves to Regular. The rungs, largest first:
-/// 26 / 20 / 18 / 17 / 15 / 14 / 13 / 12 / 11. `TypeRampTests` pins them.
+/// Inter, Regular and SemiBold, as on the desktop and on Android: a `Medium`
+/// role resolves to Regular. The rungs, largest first:
+/// 34 / 26 / 20 / 18 / 17 / 15 / 14 / 13 / 12 / 11. The top one is the hero
+/// line — the banner's name and the title page's — in Inter Display Bold and
+/// set tighter. `TypeRampTests` pins them.
 enum TypeRole: CaseIterable {
     case displayLarge, displayMedium, displaySmall
     case headlineLarge, headlineMedium, headlineSmall
@@ -15,7 +17,8 @@ enum TypeRole: CaseIterable {
 
     var size: CGFloat {
         switch self {
-        case .displayLarge, .displayMedium, .headlineLarge, .headlineMedium: Ramp.display
+        case .displayLarge: Ramp.hero
+        case .displayMedium, .headlineLarge, .headlineMedium: Ramp.display
         case .displaySmall, .titleLarge: Ramp.title
         case .headlineSmall: Ramp.heading
         case .titleMedium: Ramp.section
@@ -29,7 +32,7 @@ enum TypeRole: CaseIterable {
 
     var semibold: Bool {
         switch self {
-        case .displayLarge, .displayMedium, .displaySmall, .headlineLarge, .headlineMedium, .headlineSmall, .titleLarge:
+        case .displayMedium, .displaySmall, .headlineLarge, .headlineMedium, .headlineSmall, .titleLarge:
             true
         default:
             false
@@ -39,6 +42,7 @@ enum TypeRole: CaseIterable {
     /// The Dynamic Type style each rung scales with.
     var relative: Font.TextStyle {
         switch size {
+        case Ramp.hero: .largeTitle
         case Ramp.display: .title
         case Ramp.title: .title2
         case Ramp.heading: .title3
@@ -53,10 +57,19 @@ enum TypeRole: CaseIterable {
 
     /// Line height is derived rather than named per style: 1.35 of the size,
     /// as on Android. Inter's own leading is about 1.21, so the rest is spacing.
-    var lineSpacing: CGFloat { size * (Ramp.lineHeight - 1.21) }
+    var lineSpacing: CGFloat {
+        size * ((self == .displayLarge ? Ramp.heroLineHeight : Ramp.lineHeight) - 1.21)
+    }
+
+    /// The PostScript name of the face this style is set in.
+    func face(semibold: Bool? = nil) -> String {
+        if self == .displayLarge, semibold == nil { return "InterDisplay-Bold" }
+        return (semibold ?? self.semibold) ? "Inter-SemiBold" : "Inter-Regular"
+    }
 }
 
 enum Ramp {
+    static let hero: CGFloat = 34
     static let display: CGFloat = 26
     static let title: CGFloat = 20
     static let heading: CGFloat = 18
@@ -67,11 +80,12 @@ enum Ramp {
     static let caption: CGFloat = 12
     static let micro: CGFloat = 11
     static let lineHeight: CGFloat = 1.35
+    static let heroLineHeight: CGFloat = 1.1
 }
 
 extension Font {
     static func inter(_ style: TypeRole, semibold: Bool? = nil) -> Font {
-        .custom((semibold ?? style.semibold) ? "Inter-SemiBold" : "Inter-Regular", size: style.size, relativeTo: style.relative)
+        .custom(style.face(semibold: semibold), size: style.size, relativeTo: style.relative)
     }
 
     static func inter(size: CGFloat, semibold: Bool = false) -> Font {

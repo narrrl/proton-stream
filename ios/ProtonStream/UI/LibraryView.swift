@@ -508,7 +508,7 @@ private struct FeaturedBanner: View {
                     // Always over the dark scrim above, so a logo made for dark
                     // art reads here whatever the theme.
                     RemoteLogo(title.logoUrl, title.displayName, maxWidth: 240, maxHeight: 72) {
-                        Text(title.displayName).textStyle(.headlineMedium).foregroundStyle(.white).lineLimit(2)
+                        Text(title.displayName).textStyle(.displayLarge).foregroundStyle(.white).lineLimit(2)
                     }
                     .padding(.bottom, 6)
                     Text(factLine).textStyle(.bodySmall).foregroundStyle(.white.opacity(0.8))

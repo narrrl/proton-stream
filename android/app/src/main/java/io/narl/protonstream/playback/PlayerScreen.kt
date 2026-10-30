@@ -84,6 +84,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -186,6 +189,7 @@ fun PlayerScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     val activity = context as? Activity
     val titleKey = title.key
     val episode = episodes.getOrNull(index)
@@ -506,6 +510,9 @@ fun PlayerScreen(
                             offset.x > size.width - third -> DOUBLE_TAP_SECONDS
                             else -> 0
                         }
+                        // Felt as well as seen: the bubble is under the thumb
+                        // that asked for it.
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         if (seconds == 0) {
                             host.setPaused(!current.paused)
                         } else {
@@ -542,12 +549,15 @@ fun PlayerScreen(
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
+            // A gradient rather than a band: dark where the text is, and gone
+            // by the time it reaches the picture, so the top of the frame is
+            // dimmed rather than cut off by a grey bar.
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
+                    .background(Brush.verticalGradient(listOf(Scrim.copy(alpha = 0.75f), Color.Transparent)))
                     .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 28.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onMinimize) {
@@ -632,7 +642,7 @@ fun PlayerScreen(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .padding(end = 16.dp, bottom = if (showControls) 132.dp else 24.dp),
+                    .padding(end = 16.dp, bottom = if (showControls) 160.dp else 24.dp),
             ) { Text(skip.label) }
         }
 
@@ -667,7 +677,7 @@ fun PlayerScreen(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(end = 16.dp, bottom = if (showControls) 132.dp else 24.dp),
+                .padding(end = 16.dp, bottom = if (showControls) 160.dp else 24.dp),
         )
 
         // Played to the end with nothing starting after it: the last episode,
@@ -874,9 +884,9 @@ private fun PlayerControls(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.68f))
+            .background(Brush.verticalGradient(listOf(Color.Transparent, Scrim.copy(alpha = 0.85f))))
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(start = 12.dp, end = 12.dp, top = 32.dp, bottom = 4.dp),
     ) {
         // Where the thumb is while a finger is on it. A seek per touch-move
         // aborts every outstanding prefetch, so a one-second drag used to issue
@@ -1460,3 +1470,9 @@ private fun formatTime(seconds: Double): String {
     return if (hours > 0) "%d:%02d:%02d".format(hours, (total % 3_600) / 60, total % 60)
     else "%d:%02d".format(total / 60, total % 60)
 }
+
+/**
+ * The player's scrims are black whatever the theme: what is under them is a
+ * video frame, not the page, and a light theme's scrim would wash it out.
+ */
+private val Scrim = Color.Black

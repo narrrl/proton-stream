@@ -264,10 +264,10 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(alpha, 128 / 255, accuracy: 0.001)
     }
 
-    /// Every style on one of the nine rungs, every rung used, and leading
+    /// Every style on one of the ten rungs, every rung used, and leading
     /// derived from the size — Android's `TypeRampTest`.
     func testEveryStyleIsOnTheDesktopRamp() {
-        let rungs: Set<CGFloat> = [26, 20, 18, 17, 15, 14, 13, 12, 11]
+        let rungs: Set<CGFloat> = [34, 26, 20, 18, 17, 15, 14, 13, 12, 11]
         let used = Set(TypeRole.allCases.map(\.size))
         XCTAssertEqual(used, rungs)
     }
@@ -275,8 +275,12 @@ final class ThemeTests: XCTestCase {
     func testOnlyHeadingsAreSemibold() {
         XCTAssertEqual(
             Set(TypeRole.allCases.filter(\.semibold)),
-            [.displayLarge, .displayMedium, .displaySmall, .headlineLarge, .headlineMedium, .headlineSmall, .titleLarge]
+            [.displayMedium, .displaySmall, .headlineLarge, .headlineMedium, .headlineSmall, .titleLarge]
         )
+    }
+
+    func testOnlyTheHeroLineIsSetInTheDisplayCut() {
+        XCTAssertEqual(TypeRole.allCases.filter { $0.face() == "InterDisplay-Bold" }, [.displayLarge])
     }
 
     func testAPaddedLogoIsBoundedByItsLetteringAndNotItsHaze() {

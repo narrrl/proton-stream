@@ -121,49 +121,46 @@ fn franchise_row(
     members: &[&Title],
     actions: &mut Vec<Action>,
 ) {
-    egui::ScrollArea::horizontal()
-        .id_salt(("franchise", &current.key))
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
-                for member in members {
-                    let here = member.key == current.key;
-                    let picture = art.poster(member);
-                    let found = art
-                        .metadata
-                        .get(&member.key)
-                        .and_then(|record| record.metadata.as_ref());
-                    let what = found
-                        .and_then(|found| found.details.as_ref())
-                        .and_then(|details| details.format_label())
-                        .unwrap_or(match member.kind {
-                            TitleKind::Series => "Series",
-                            TitleKind::Film => "Film",
-                        });
-                    let year = found
-                        .and_then(|found| found.year)
-                        .or(member.year)
-                        .map(|year| format!("  ·  {year}"))
-                        .unwrap_or_default();
-                    let response = ui::card(
-                        ui,
-                        Card {
-                            art: picture,
-                            name: art.name(member),
-                            subtitle: format!("{what}{year}"),
-                            progress: member.resume().and_then(|e| e.progress()).map(|v| v as f32),
-                            badge: here.then(|| "Here".to_owned()),
-                            width: 128.0,
-                            aspect: theme::POSTER_ASPECT,
-                        },
-                    );
-                    if !here && response.clicked() {
-                        actions.push(Action::Goto(Page::Title(member.key.clone())));
-                    }
+    ui::shelf(ui, ("franchise", &current.key), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
+            for member in members {
+                let here = member.key == current.key;
+                let picture = art.poster(member);
+                let found = art
+                    .metadata
+                    .get(&member.key)
+                    .and_then(|record| record.metadata.as_ref());
+                let what = found
+                    .and_then(|found| found.details.as_ref())
+                    .and_then(|details| details.format_label())
+                    .unwrap_or(match member.kind {
+                        TitleKind::Series => "Series",
+                        TitleKind::Film => "Film",
+                    });
+                let year = found
+                    .and_then(|found| found.year)
+                    .or(member.year)
+                    .map(|year| format!("  ·  {year}"))
+                    .unwrap_or_default();
+                let response = ui::card(
+                    ui,
+                    Card {
+                        art: picture,
+                        name: art.name(member),
+                        subtitle: format!("{what}{year}"),
+                        progress: member.resume().and_then(|e| e.progress()).map(|v| v as f32),
+                        badge: here.then(|| "Here".to_owned()),
+                        width: 128.0,
+                        aspect: theme::POSTER_ASPECT,
+                    },
+                );
+                if !here && response.clicked() {
+                    actions.push(Action::Goto(Page::Title(member.key.clone())));
                 }
-            });
+            }
         });
+    });
 }
 
 /// A title's poster, at the poster's own shape, with how far into it the
@@ -218,7 +215,7 @@ fn season_watched(ui: &mut egui::Ui, title: &Title, season: &Season, actions: &m
     } else {
         "Mark season watched"
     };
-    if ui.button(label).clicked() {
+    if ui::tonal_button(ui, label).clicked() {
         actions.push(Action::MarkEpisodes {
             key: title.key.clone(),
             links: season
@@ -324,7 +321,7 @@ fn header(
             // right of it rather than under it.
             ui.set_max_width(ui.available_width().min(820.0));
             if ui::logo_heading(ui, art, title, 120.0).is_none() {
-                ui.label(theme::Role::Display.rich(&shown).strong());
+                ui.label(theme::Role::Hero.rich(&shown).color(theme::text()));
             }
             // Whichever of the share's name and the provider's is not the one
             // shown. Worth showing rather than only replacing: a viewer should
@@ -348,6 +345,19 @@ fn header(
             }
             ui.add_space(theme::space::XS);
             ui.label(ui::muted(meta_line(title, found.as_ref())));
+            // What the files are, rather than what the title is: set apart
+            // from the line above as small outlined marks, the way a box
+            // prints them.
+            let quality = title.quality().badges();
+            if !quality.is_empty() {
+                ui.add_space(theme::space::XS);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme::space::XS;
+                    for badge in quality {
+                        ui::widgets::spec_badge(ui, badge);
+                    }
+                });
+            }
             ui.add_space(theme::space::L);
 
             ui.horizontal(|ui| {
@@ -374,8 +384,7 @@ fn header(
                     }
                     // Beside the button it is the alternative to.
                     if resuming
-                        && ui
-                            .button("Start over")
+                        && ui::tonal_button(ui, "Start over")
                             .on_hover_text("Play from the beginning")
                             .clicked()
                     {
@@ -388,15 +397,13 @@ fn header(
                     let title_keys: Vec<_> = title.episodes().map(key_of).collect();
                     let all_offline = title_keys.iter().all(|key| offline.files.contains(key));
                     if all_offline {
-                        if ui
-                            .button("Delete show")
+                        if ui::tonal_button(ui, "Delete show")
                             .on_hover_text("Delete the offline copies; keep the online source")
                             .clicked()
                         {
                             actions.push(Action::DeleteOffline(title_keys, title.name.clone()));
                         }
-                    } else if ui
-                        .button("Download show")
+                    } else if ui::tonal_button(ui, "Download show")
                         .on_hover_text("Download every episode for disconnected playback")
                         .clicked()
                     {
@@ -431,13 +438,15 @@ fn header(
                 // wrongly. Offered whether or not anything matched: the two
                 // cases it exists for are a title with no poster at all and a
                 // title wearing someone else's.
-                if ui
-                    .button(match &found {
+                if ui::tonal_button(
+                    ui,
+                    match &found {
                         Some(_) => "Change match",
                         None => "Match…",
-                    })
-                    .on_hover_text("Search the metadata provider and pick the entry yourself")
-                    .clicked()
+                    },
+                )
+                .on_hover_text("Search the metadata provider and pick the entry yourself")
+                .clicked()
                 {
                     actions.push(Action::OpenMatcher(title.key.clone()));
                 }
@@ -689,8 +698,6 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
             parts.push(format!("{total} on {}", found.provider.label()));
         }
     }
-    // Last: what the files are, rather than what the title is.
-    parts.extend(title.quality().badges().into_iter().map(str::to_owned));
     parts.join("  ·  ")
 }
 
@@ -753,7 +760,10 @@ fn episode_row(
                     job.append(
                         &format!("{numbering}   "),
                         0.0,
-                        egui::TextFormat::simple(egui::FontId::monospace(13.0), theme::muted()),
+                        egui::TextFormat::simple(
+                            egui::FontId::new(theme::Role::Label.size(), theme::semibold()),
+                            theme::muted(),
+                        ),
                     );
                 }
                 job.append(
@@ -906,12 +916,20 @@ pub(crate) fn still(
     painter.rect_filled(rect, radius, theme::card_hover());
     // Asked for only once the row is on screen: a season of twenty-five is
     // twenty-five requests, and most of them are never scrolled to.
-    if let Some(texture) = art.still(&title.key, episode) {
+    let texture = art.still(&title.key, episode);
+    // Faded in like a tile's art, so a season's stills settle rather than pop.
+    let art_in = ui.ctx().animate_bool_with_time(
+        response.id.with("art"),
+        texture.is_some(),
+        theme::motion::ARRIVE,
+    );
+    if let Some(texture) = texture {
         let tint = if watched {
             egui::Color32::from_gray(150)
         } else {
             egui::Color32::WHITE
-        };
+        }
+        .gamma_multiply(art_in);
         painter.add(
             egui::epaint::RectShape::filled(rect, radius, tint)
                 .with_texture(texture.id(), ui::cover_uv(texture.size_vec2(), rect.size())),

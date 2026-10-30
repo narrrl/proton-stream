@@ -31,6 +31,8 @@ targets:
         buildPhase: resources
       - path: ../android/app/src/main/res/font/inter_semibold.ttf
         buildPhase: resources
+      - path: ../android/app/src/main/res/font/inter_display_bold.ttf
+        buildPhase: resources
       - path: ../android/app/src/main/assets/licenses/GPL-3.0.txt
         buildPhase: resources
       - path: ../android/app/src/main/assets/licenses/Inter-OFL.txt
@@ -74,6 +76,7 @@ targets:
         UIAppFonts:
           - inter_regular.ttf
           - inter_semibold.ttf
+          - inter_display_bold.ttf
         # A share link handed over from elsewhere: protonstream://add?url=…,
         # or the link with its scheme swapped (IncomingShareLink.swift).
         CFBundleURLTypes:

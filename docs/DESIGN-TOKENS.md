@@ -20,12 +20,13 @@ is the contract, and each side's copy is asserted against it by a test.
 
 ## Type
 
-Nine rungs. The desktop names them; Android restates them because Material's own
+Ten rungs. The desktop names them; Android restates them because Material's own
 scale is a different one (`displayLarge` is 57sp, which is a size for a lock
 screen and not for anything in a library grid).
 
 | Role | Size | What it is |
 |---|---|---|
+| Hero | 34 | the banner's name and a title page's name, where no logo stands in |
 | Display | 26 | the name of the thing you are looking at, once per page |
 | Title | 20 | an empty state, or a page heading with no display line |
 | Heading | 18 | the brand in the nav bar; a dialog's heading |
@@ -39,8 +40,11 @@ screen and not for anything in a library grid).
 Weight and leading are each side's own. The desktop bundles Inter
 (`pstr-app/assets/fonts`, OFL) and sets Display, Title, Heading and Section in
 its semibold cut, which egui sees as a family of its own (`theme::semibold`);
-everything below Section is the regular cut. Compose derives line height as
-1.35 × size rather than naming it nine more times.
+everything below Section is the regular cut. Hero is set in Inter Display Bold,
+the optical size Inter draws for large text (`theme::display`); Android and iOS
+map it to `displayLarge`. Compose derives line height as 1.35 × size rather
+than naming it ten more times, except Hero at 1.1, where the text leading
+pushes a two-line name apart.
 
 Icons on the desktop come from the Phosphor icon font (`egui-phosphor`,
 regular weight), installed right behind Inter so an icon can sit inside an

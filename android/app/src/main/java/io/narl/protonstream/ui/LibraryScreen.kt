@@ -644,7 +644,7 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
             ) {
                 Text(
                     title.displayName,
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.displayLarge,
                     color = Color.White,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,

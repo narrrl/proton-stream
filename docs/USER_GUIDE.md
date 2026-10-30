@@ -22,6 +22,9 @@ show it once.
   genre with at least three titles.
 - **All titles** is the full grid. Choose a filter and a sort order above it.
 
+Rows that run past the window fade out at the edge. Point at a row to show the arrows at its
+ends, which move it along by a page.
+
 | Filters | Sort orders |
 |---|---|
 | All, Series, Films, Watching, Not started, Downloaded | A – Z, Recently watched, Recently added, Newest, Highest rated, Most popular |
@@ -78,7 +81,7 @@ Click a title to open its page. **Esc** goes back.
   it runs in the line under its name.
 - A title with no wide picture shows its poster blurred across the top of the page instead, and
   on the library's banner the poster itself beside it.
-- The line under the name also says what most of the files are, when their names say it: **4K**,
+- Small marks under the name say what most of the files are, when their names say it: **4K**,
   **1080p**, **HDR**, **10-bit** or **Dual audio**.
 
 An episode counts as watched once you have seen 90% of it.

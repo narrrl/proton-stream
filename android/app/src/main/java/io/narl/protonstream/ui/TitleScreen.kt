@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -207,7 +208,7 @@ internal fun TitleScreen(
             item(key = "heading") {
                 Column(Modifier.padding(horizontal = side + 16.dp)) {
                     val heading = @Composable {
-                        Text(title.displayName, style = MaterialTheme.typography.headlineMedium)
+                        Text(title.displayName, style = MaterialTheme.typography.displayLarge)
                     }
                     // A light page keeps the name: a clear logo is lettering
                     // made for dark art, white as often as not.
@@ -237,7 +238,7 @@ internal fun TitleScreen(
                             title.runtime?.takeIf { title.kind == TitleType.FILM }?.let(::formatRuntime),
                             title.rating?.let { "★ %.1f".format(it) },
                             "${title.watchedCount} of ${title.episodeCount} watched".takeIf { title.episodeCount > 1uL },
-                        ).plus(title.quality).joinToString("  ·  "),
+                        ).joinToString("  ·  "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
@@ -255,6 +256,12 @@ internal fun TitleScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 2.dp),
                         )
+                    }
+                    // What the files are, rather than what the title is.
+                    if (title.quality.isNotEmpty()) {
+                        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            title.quality.forEach { SpecBadge(it) }
+                        }
                     }
                     // The one thing the page is for, full width and naming what it
                     // will play: "Resume" alone left the viewer guessing which
@@ -323,12 +330,21 @@ internal fun TitleScreen(
                     // Genres as chips, then the provider's tags quieter after
                     // them: a tag is its community describing it, not what it
                     // is filed as.
-                    if (title.genres.isNotEmpty() || title.tags.isNotEmpty()) {
+                    if (title.genres.isNotEmpty()) {
+                        FlowRow(
+                            Modifier.padding(top = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            title.genres.forEach { GenreChip(it) }
+                        }
+                    }
+                    if (title.tags.isNotEmpty()) {
                         Text(
-                            (title.genres + title.tags.take(4)).joinToString("  ·  "),
+                            title.tags.take(4).joinToString("  ·  "),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 10.dp),
+                            modifier = Modifier.padding(top = 8.dp),
                         )
                     }
                     // Said plainly, because it changes what a re-match will do: a

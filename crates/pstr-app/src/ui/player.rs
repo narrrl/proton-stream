@@ -707,13 +707,8 @@ fn chrome(
             .max_rect(top.shrink2(Vec2::new(18.0, 14.0)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
         |ui| {
-            if ui
-                .add(
-                    egui::Button::new(theme::Role::Label.rich("Library"))
-                        .fill(Color32::from_black_alpha(160))
-                        .corner_radius(CornerRadius::same(theme::radius::MD))
-                        .min_size(Vec2::new(96.0, 32.0)),
-                )
+            let library = format!("{}  Library", egui_phosphor::regular::CARET_LEFT);
+            if ui::glass_button(ui, &library)
                 .on_hover_text("Keep playing, and go back to the library (Esc)")
                 .clicked()
             {
@@ -736,69 +731,41 @@ fn chrome(
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
-                if ui
-                    .add(
-                        egui::Button::new(theme::Role::Subhead.rich(if fullscreen {
-                            egui_phosphor::regular::CORNERS_IN
-                        } else {
-                            egui_phosphor::regular::CORNERS_OUT
-                        }))
-                        .fill(Color32::from_black_alpha(160))
-                        .corner_radius(CornerRadius::same(theme::radius::MD))
-                        .min_size(Vec2::new(38.0, 32.0)),
-                    )
-                    .hint(if fullscreen {
-                        "Leave fullscreen (F)"
+                if ui::glass_button(
+                    ui,
+                    if fullscreen {
+                        egui_phosphor::regular::CORNERS_IN
                     } else {
-                        "Fullscreen (F)"
-                    })
-                    .clicked()
+                        egui_phosphor::regular::CORNERS_OUT
+                    },
+                )
+                .hint(if fullscreen {
+                    "Leave fullscreen (F)"
+                } else {
+                    "Fullscreen (F)"
+                })
+                .clicked()
                 {
                     actions.push(Action::ToggleFullscreen);
                 }
                 if let Some(open) = drawer {
                     ui.add_space(theme::space::S);
-                    let fill = if open {
-                        theme::accent()
+                    // In the accent while the drawer is out, so the button
+                    // that closes it is the one that says it is open.
+                    let icon = egui_phosphor::regular::LIST_BULLETS;
+                    let button = if open {
+                        ui::accent_button(ui, icon)
                     } else {
-                        Color32::from_black_alpha(160)
+                        ui::glass_button(ui, icon)
                     };
-                    let ink = if open {
-                        theme::on_accent()
-                    } else {
-                        Color32::WHITE
-                    };
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                theme::Role::Subhead
-                                    .rich(egui_phosphor::regular::LIST_BULLETS)
-                                    .color(ink),
-                            )
-                            .fill(fill)
-                            .corner_radius(CornerRadius::same(theme::radius::MD))
-                            .min_size(Vec2::new(38.0, 32.0)),
-                        )
-                        .hint("Episodes (E)")
-                        .clicked()
-                    {
+                    if button.hint("Episodes (E)").clicked() {
                         actions.push(Action::ToggleEpisodes);
                     }
                 }
                 // Esc leaves the page and keeps playing; this is the one-step
                 // way to be done with the episode.
                 ui.add_space(theme::space::S);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            theme::Role::Subhead
-                                .rich(egui_phosphor::regular::STOP)
-                                .color(Color32::WHITE),
-                        )
-                        .fill(Color32::from_black_alpha(160))
-                        .corner_radius(CornerRadius::same(theme::radius::MD))
-                        .min_size(Vec2::new(38.0, 32.0)),
-                    )
+                if ui::glass_button(ui, egui_phosphor::regular::STOP)
                     .hint("Stop")
                     .clicked()
                 {
@@ -1010,8 +977,9 @@ fn drawer_row(
                         .unwrap_or_else(|| episode.detail().to_owned());
                     if let Some(numbering) = episode.numbering() {
                         ui.label(
-                            egui::RichText::new(numbering)
-                                .monospace()
+                            theme::Role::Caption
+                                .rich(numbering)
+                                .family(theme::semibold())
                                 .color(theme::muted()),
                         );
                     }

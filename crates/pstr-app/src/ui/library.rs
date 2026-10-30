@@ -277,7 +277,8 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
                     }
                     ui.add_space(theme::space::S);
                 }
-                if ui.button("More info").clicked() {
+                let more = format!("{}  More info", egui_phosphor::regular::INFO);
+                if ui::tonal_button(ui, &more).clicked() {
                     actions.push(Action::Goto(Page::Title(title.key.clone())));
                 }
             });
@@ -303,15 +304,17 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             ui.label(ui::muted(facts.join("  ·  ")));
             ui.add_space(theme::space::XXS);
             if ui::logo_heading(ui, art, title, 110.0).is_none() {
-                ui.add(
-                    egui::Label::new(
-                        theme::Role::Display
-                            .rich(art.name(title))
-                            .strong()
-                            .color(theme::text()),
-                    )
-                    .truncate(),
+                // Two lines before it gives up: a long romanised name cut to
+                // one at this size kept barely more than its first word.
+                let mut job = egui::text::LayoutJob::simple(
+                    art.name(title).to_owned(),
+                    theme::Role::Hero.font(),
+                    theme::text(),
+                    ui.available_width().min(640.0),
                 );
+                job.wrap.max_rows = 2;
+                job.wrap.overflow_character = Some('…');
+                ui.label(job);
             }
         },
     );
@@ -382,36 +385,33 @@ fn shelf_row(
     actions: &mut Vec<Action>,
 ) {
     let (width, aspect) = tile_shape(tiles);
-    egui::ScrollArea::horizontal()
-        .id_salt(("shelf", label))
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
-                for title in titles {
-                    let picture = match tiles {
-                        Tiles::Posters => art.poster(title),
-                        Tiles::Stills => art.of(title),
-                    };
-                    let response = ui::card(
-                        ui,
-                        Card {
-                            art: picture,
-                            name: art.name(title),
-                            subtitle: subtitle(title),
-                            progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
-                            badge: None,
-                            width,
-                            aspect,
-                        },
-                    );
-                    tile_menu(&response, title, false, actions);
-                    if response.clicked() {
-                        actions.push(Action::Goto(Page::Title(title.key.clone())));
-                    }
+    ui::shelf(ui, ("shelf", label), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
+            for title in titles {
+                let picture = match tiles {
+                    Tiles::Posters => art.poster(title),
+                    Tiles::Stills => art.of(title),
+                };
+                let response = ui::card(
+                    ui,
+                    Card {
+                        art: picture,
+                        name: art.name(title),
+                        subtitle: subtitle(title),
+                        progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
+                        badge: None,
+                        width,
+                        aspect,
+                    },
+                );
+                tile_menu(&response, title, false, actions);
+                if response.clicked() {
+                    actions.push(Action::Goto(Page::Title(title.key.clone())));
                 }
-            });
+            }
         });
+    });
 }
 
 /// The minimum width and the picture's shape of a tile.
@@ -429,48 +429,45 @@ fn continue_row(
     titles: &[&Title],
     actions: &mut Vec<Action>,
 ) {
-    egui::ScrollArea::horizontal()
-        .id_salt("continue")
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for title in titles {
-                    let Some(episode) = title.continue_with() else {
-                        continue;
-                    };
-                    let remaining = match episode.resume_at() {
-                        Some(at) => episode
-                            .watch
-                            .and_then(|watch| watch.duration_secs)
-                            .map(|duration| format!("{} left", ui::format_time(duration - at)))
-                            .unwrap_or_else(|| episode.label()),
-                        None => format!("Next: {}", episode.label()),
-                    };
+    ui::shelf(ui, "continue", |ui| {
+        ui.horizontal(|ui| {
+            for title in titles {
+                let Some(episode) = title.continue_with() else {
+                    continue;
+                };
+                let remaining = match episode.resume_at() {
+                    Some(at) => episode
+                        .watch
+                        .and_then(|watch| watch.duration_secs)
+                        .map(|duration| format!("{} left", ui::format_time(duration - at)))
+                        .unwrap_or_else(|| episode.label()),
+                    None => format!("Next: {}", episode.label()),
+                };
 
-                    let picture = art.of(title);
-                    let response = ui::card(
-                        ui,
-                        Card {
-                            art: picture,
-                            name: art.name(title),
-                            subtitle: remaining,
-                            progress: episode.progress().map(|value| value as f32),
-                            badge: episode.numbering(),
-                            // A shelf that scrolls sideways has no right edge
-                            // to reach, so nothing to flex to. Always a
-                            // still: it is a frame from where they stopped.
-                            width: theme::CARD_WIDTH,
-                            aspect: theme::CARD_ASPECT,
-                        },
-                    );
-                    tile_menu(&response, title, true, actions);
+                let picture = art.of(title);
+                let response = ui::card(
+                    ui,
+                    Card {
+                        art: picture,
+                        name: art.name(title),
+                        subtitle: remaining,
+                        progress: episode.progress().map(|value| value as f32),
+                        badge: episode.numbering(),
+                        // A shelf that scrolls sideways has no right edge
+                        // to reach, so nothing to flex to. Always a
+                        // still: it is a frame from where they stopped.
+                        width: theme::CARD_WIDTH,
+                        aspect: theme::CARD_ASPECT,
+                    },
+                );
+                tile_menu(&response, title, true, actions);
 
-                    if response.clicked() {
-                        actions.push(Action::Goto(Page::Title(title.key.clone())));
-                    }
+                if response.clicked() {
+                    actions.push(Action::Goto(Page::Title(title.key.clone())));
                 }
-            });
+            }
         });
+    });
 }
 
 /// Every title, wrapped to the window.
@@ -669,6 +666,7 @@ fn placeholder(ui: &mut egui::Ui) {
                     egui::CornerRadius::same(theme::radius::MD),
                     theme::card(),
                 );
+                theme::shimmer(ui.painter(), image);
             }
         });
         ui.add_space(theme::CARD_GAP);

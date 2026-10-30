@@ -150,10 +150,10 @@ struct TitleView: View {
             // A light page keeps the name: a clear logo is lettering made for
             // dark art, white as often as not.
             if scheme.light {
-                Text(title.displayName).textStyle(.headlineMedium).foregroundStyle(scheme.onSurface)
+                Text(title.displayName).textStyle(.displayLarge).foregroundStyle(scheme.onSurface)
             } else {
                 RemoteLogo(title.logoUrl, title.displayName, maxWidth: 280, maxHeight: 88) {
-                    Text(title.displayName).textStyle(.headlineMedium).foregroundStyle(scheme.onSurface)
+                    Text(title.displayName).textStyle(.displayLarge).foregroundStyle(scheme.onSurface)
                 }
                 .padding(.bottom, 4)
             }
@@ -178,6 +178,13 @@ struct TitleView: View {
             let facts = makers.compactMap { $0 }.joined(separator: "  ·  ")
             if !facts.isEmpty {
                 Text(facts).textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 2)
+            }
+            // What the files are, rather than what the title is.
+            if !title.quality.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(title.quality, id: \.self) { SpecBadge(text: $0) }
+                }
+                .padding(.top, 8)
             }
             // The one thing the page is for, full width and naming what it will
             // play: "Resume" alone left the viewer guessing which episode.
@@ -213,9 +220,17 @@ struct TitleView: View {
                     .padding(.top, 12)
                     .onTapGesture { overviewOpen.toggle() }
             }
-            if !title.genres.isEmpty || !title.tags.isEmpty {
-                Text((title.genres + title.tags.prefix(4)).joined(separator: "  ·  "))
-                    .textStyle(.labelMedium).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 10)
+            // Genres as chips, then the provider's tags quieter after them: a
+            // tag is its community describing it, not what it is filed as.
+            if !title.genres.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(title.genres, id: \.self) { GenreChip(text: $0) }
+                }
+                .padding(.top, 12)
+            }
+            if !title.tags.isEmpty {
+                Text(title.tags.prefix(4).joined(separator: "  ·  "))
+                    .textStyle(.labelMedium).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 8)
             }
             // Said plainly, because it changes what a re-match will do.
             if title.manualMatch {
@@ -231,7 +246,7 @@ struct TitleView: View {
         // A series' running time is its episodes', which each row says.
         let runtime: String? = title.kind == .film ? title.runtime.map(formatRuntime) : nil
         let parts: [String?] = [title.formatLabel, title.seasonLabel ?? year, runtime, rating, watched]
-        return (parts.compactMap { $0 } + title.quality).joined(separator: "  ·  ")
+        return parts.compactMap { $0 }.joined(separator: "  ·  ")
     }
 
     private func playLabel(playlist: [EpisodeRecord], upNext: EpisodeRecord?) -> String {

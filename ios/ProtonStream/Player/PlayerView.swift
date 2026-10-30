@@ -123,7 +123,7 @@ struct PlayerView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.trailing, 16)
-                .padding(.bottom, showControls ? 132 : 24)
+                .padding(.bottom, showControls ? 160 : 24)
 
                 // Only while nothing else explains the still picture: an error
                 // is the more useful thing to say.
@@ -224,8 +224,15 @@ struct PlayerView: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(scheme.scrim.opacity(0.45).ignoresSafeArea(edges: [.top, .horizontal]))
+        .padding(.top, 4)
+        .padding(.bottom, 28)
+        // A gradient rather than a band: dark where the text is, and gone by
+        // the time it reaches the picture. Black whatever the theme, since
+        // what is under it is a video frame.
+        .background(
+            LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea(edges: [.top, .horizontal])
+        )
     }
 
     /// Show or hide the controls; shown and playing, they hide themselves.
@@ -242,6 +249,8 @@ struct PlayerView: View {
     private func doubleTap(at x: CGFloat, width: CGFloat) {
         let third = width / 3
         let seconds = x < third ? -doubleTapSeconds : x > width - third ? doubleTapSeconds : 0
+        // Felt as well as seen: the bubble is under the thumb that asked for it.
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if seconds == 0 {
             host.setPaused(!player.paused)
         } else {
@@ -355,8 +364,12 @@ private struct PlayerControls: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(scheme.scrim.opacity(0.68).ignoresSafeArea(edges: [.bottom, .horizontal]))
+        .padding(.top, 32)
+        .padding(.bottom, 4)
+        .background(
+            LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea(edges: [.bottom, .horizontal])
+        )
     }
 
     private func toggleMute() {
