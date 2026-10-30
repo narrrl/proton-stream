@@ -18,6 +18,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -322,4 +329,26 @@ internal fun SpecBadge(text: String) {
             .border(1.dp, ink.copy(alpha = 0.7f), MaterialTheme.shapes.extraSmall)
             .padding(horizontal = 5.dp, vertical = 1.dp),
     )
+}
+
+/**
+ * My List's button: a plus to put the title on it, a tick once it is, which
+ * takes it off again. [compact] is the icon alone, for the banner's row, where
+ * a third labelled button does not fit a phone.
+ */
+@Composable
+internal fun ListButton(onList: Boolean, onSet: (Boolean) -> Unit, compact: Boolean = false) {
+    val icon = if (onList) Icons.Default.Check else Icons.Default.Add
+    val label = if (onList) "Remove from My List" else "Add to My List"
+    if (compact) {
+        FilledTonalIconButton(onClick = { onSet(!onList) }, shape = MaterialTheme.shapes.small) {
+            Icon(icon, contentDescription = label)
+        }
+    } else {
+        TonalButton(onClick = { onSet(!onList) }, modifier = Modifier.semantics { contentDescription = label }) {
+            Icon(icon, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text("My List")
+        }
+    }
 }

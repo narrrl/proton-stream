@@ -1,6 +1,6 @@
 //! The rest of what makes the app look the same on every device: the shares,
-//! the settings, the hand-picked metadata matches and the per-show track
-//! choices. Synced next to watch history by [`crate::sync`], in the same file.
+//! the settings, the hand-picked metadata matches, the per-show track choices
+//! and My List. Synced next to watch history by [`crate::sync`], in the same file.
 //!
 //! ## Registers
 //!
@@ -8,8 +8,8 @@
 //! `settings/playback`, `tracks/<title>`, …), its latest value, and when it
 //! last changed. Merging is the same rule as watch history — the newer
 //! `updated_at` wins, per key — so it is idempotent and order-free across any
-//! number of devices. A removed share is a register with no value, so a
-//! removal travels like any other change.
+//! number of devices. A removed share, or a title taken off My List, is a
+//! register with no value, so a removal travels like any other change.
 //!
 //! ## Noticing changes
 //!
@@ -56,6 +56,7 @@ use crate::shares::{AccountFolder, Share, ShareSecrets, ShareStore};
 const SHARE: &str = "share/";
 const TRACKS: &str = "tracks/";
 const MATCH: &str = "match/";
+const LIST: &str = "list/";
 
 /// The settings files that travel, by register, and the fields in each that
 /// stay on the device that wrote them.
@@ -98,6 +99,12 @@ struct SyncedShare {
     folder: Option<AccountFolder>,
 }
 
+/// A title on My List.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct SyncedListEntry {
+    added_at: i64,
+}
+
 /// A match the viewer picked by hand. Automatic ones are not synced: every
 /// device with enrichment on finds them again, and they expire anyway.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,6 +130,8 @@ pub struct ProfileChanges {
     pub settings: bool,
     /// Hand-picked matches and per-show track choices taken.
     pub titles: usize,
+    /// Whether My List changed.
+    pub list: bool,
 }
 
 impl ProfileChanges {
@@ -154,6 +163,8 @@ struct Observed {
     /// Whether the share list itself could be read. Without it, a share
     /// missing from `values` says nothing about whether it was removed.
     shares_listed: bool,
+    /// The same for My List.
+    list_read: bool,
 }
 
 fn state_file(dirs: &AppDirs) -> PathBuf {
@@ -248,6 +259,18 @@ impl Profile<'_> {
             }
         }
 
+        match crate::mylist::load(self.dirs()) {
+            Ok(list) => {
+                observed.list_read = true;
+                for (title, added_at) in list.entries() {
+                    if let Ok(value) = serde_json::to_value(SyncedListEntry { added_at }) {
+                        observed.values.insert(format!("{LIST}{title}"), value);
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(%error, "My List was not synced"),
+        }
+
         let catalog = self.catalog.lock();
         if let Ok(tracks) = catalog.all_title_track_prefs() {
             for (title, prefs) in tracks {
@@ -317,6 +340,19 @@ impl Profile<'_> {
                     manual: true,
                 })?;
                 changes.titles += 1;
+            }
+            return Ok(());
+        }
+        if let Some(title) = key.strip_prefix(LIST) {
+            let added_at = value
+                .map(parse::<SyncedListEntry>)
+                .transpose()?
+                .map(|entry| entry.added_at);
+            let mut list = crate::mylist::load(self.dirs())?;
+            if list.added_at(title) != added_at {
+                list.set(title, added_at);
+                crate::mylist::save(self.dirs(), &list)?;
+                changes.list = true;
             }
             return Ok(());
         }
@@ -428,9 +464,10 @@ impl Profile<'_> {
 /// Record what changed on this device since the last sync, stamped `now`.
 fn stamp(registers: &mut Registers, observed: Observed, now: i64) {
     for (key, register) in registers.iter_mut() {
+        let removable = (key.starts_with(SHARE) && observed.shares_listed)
+            || (key.starts_with(LIST) && observed.list_read);
         if register.value.is_some()
-            && key.starts_with(SHARE)
-            && observed.shares_listed
+            && removable
             && !observed.values.contains_key(key)
             && !observed.unknown.contains(key)
         {
@@ -786,6 +823,58 @@ pub(crate) mod tests {
         assert_eq!(
             catalog.title_track_prefs("one piece").unwrap(),
             Some(tracks)
+        );
+    }
+
+    #[test]
+    fn a_title_put_on_my_list_on_one_device_is_on_the_list_of_another() {
+        let laptop = Device::new("laptop");
+        let phone = Device::new("phone");
+        laptop.sync(&[], 1);
+        let mut list = crate::mylist::MyList::default();
+        list.add("frieren", 5);
+        crate::mylist::save(&laptop.store.dirs, &list).unwrap();
+        let (sent, _) = laptop.sync(&[], 10);
+
+        let (_, changes) = phone.sync(&[&sent], 20);
+
+        assert!(changes.list);
+        let taken = crate::mylist::load(&phone.store.dirs).unwrap();
+        assert_eq!(taken.added_at("frieren"), Some(5));
+    }
+
+    #[test]
+    fn a_title_taken_off_my_list_on_one_device_leaves_every_list() {
+        let laptop = Device::new("laptop");
+        let phone = Device::new("phone");
+        let mut list = crate::mylist::MyList::default();
+        list.add("frieren", 5);
+        list.add("one piece", 6);
+        crate::mylist::save(&laptop.store.dirs, &list).unwrap();
+        let (sent, _) = laptop.sync(&[], 10);
+        let (phone_sent, _) = phone.sync(&[&sent], 20);
+
+        let mut list = crate::mylist::load(&phone.store.dirs).unwrap();
+        list.remove("frieren");
+        crate::mylist::save(&phone.store.dirs, &list).unwrap();
+        let (phone_sent, _) = phone.sync(&[&sent, &phone_sent], 30);
+        let (sent, changes) = laptop.sync(&[&phone_sent], 40);
+
+        assert!(changes.list);
+        let left = crate::mylist::load(&laptop.store.dirs).unwrap();
+        assert!(!left.contains("frieren"));
+        assert!(left.contains("one piece"));
+
+        // Put back later, it is back everywhere: the removal is older.
+        let mut list = left;
+        list.add("frieren", 50);
+        crate::mylist::save(&laptop.store.dirs, &list).unwrap();
+        let (sent, _) = laptop.sync(&[&sent], 50);
+        phone.sync(&[&sent], 60);
+        assert!(
+            crate::mylist::load(&phone.store.dirs)
+                .unwrap()
+                .contains("frieren")
         );
     }
 

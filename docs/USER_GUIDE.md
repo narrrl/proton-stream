@@ -14,16 +14,22 @@ The library shows every title from every share in one place. Two shares that hol
 show it once.
 
 - **The banner** across the top shows the title you watched last first, with **Resume**, how far
-  into it you are and **More info**. It then turns through up to four more titles that have a wide
+  into it you are, **More info** and **My List**. It then turns through up to four more titles that have a wide
   picture, a different set each day, moving on every eight seconds. It holds still while the
   pointer is over it; on a phone, swipe it or tap a dot under it to move on yourself. Its shading
   takes on the colours of the picture behind it, and so does the top of a title's page.
 - **Continue watching** has the episode you stopped in for each show, or the next one when you
   finished an episode. To take a show off this row, right-click it and choose **Remove from
   Continue watching**.
+- **New episodes** has the shows you are watching that got episodes since you last watched them.
+  Their tiles say how many, for example **3 new**.
+- **My List** has the titles you put aside to watch, the last one added first.
+- **Recently added** has the titles that arrived in the last two weeks and that you have not
+  started. Their tiles say **New**. What was already there when you added a share is not new.
 - **Shelves** such as **Airing now**, **Directed by Satoshi Kon** or **From MADHOUSE** appear when
   posters and descriptions are on. The app shows at most four, and only for a director, studio or
-  genre with at least three titles.
+  genre with at least three titles. On a shelf, a show that is still airing says when its next
+  episode is out, for example **Ep 8 · in 2 d**.
 - **All titles** is the full grid. Choose a filter and a sort order above it.
 
 Rows that run past the window fade out at the edge. Point at a row to show the arrows at its
@@ -31,7 +37,12 @@ ends, which move it along by a page.
 
 | Filters | Sort orders |
 |---|---|
-| All, Series, Films, Watching, Not started, Downloaded | A – Z, Recently watched, Recently added, Newest, Highest rated, Most popular |
+| All, My List, Series, Films, Watching, Not started, Downloaded | A – Z, Recently watched, Recently added, Newest, Highest rated, Most popular |
+
+**My List** is a list of titles to watch later. Add a title with **My List** on its page or on
+the banner, or right-click its tile and choose **Add to My List**. Choose the button again, or
+**Remove from My List**, to take it off. When you are signed in, the list syncs to your other
+devices ([Account and sync](ACCOUNT_AND_SYNC.md)).
 
 **Group franchises** folds a series, its sequels and its films into one tile with a **+N** badge.
 It is on by default, and needs posters and descriptions to know what belongs together.

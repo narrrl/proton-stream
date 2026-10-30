@@ -1,5 +1,7 @@
 //! The library page: what to watch, as a wall of stills.
 
+use std::collections::HashSet;
+
 use pstr_core::appearance::Tiles;
 use pstr_core::library::{Library, Title, TitleKind};
 
@@ -66,7 +68,7 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if !featured.is_empty() {
-                hero(ui, art, &featured, actions);
+                hero(ui, art, &featured, &view.listed, actions);
                 ui.add_space(theme::space::L);
             }
             if !searching && offer_metadata {
@@ -77,7 +79,7 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
                 let resumable = pick(&view.resumable);
                 if !resumable.is_empty() {
                     ui::section(ui, "Continue watching");
-                    continue_row(ui, art, &resumable, actions);
+                    continue_row(ui, art, &resumable, view, actions);
                     ui.add_space(theme::space::XL);
                 }
                 // Only over the whole library: under a filter, a shelf of
@@ -86,7 +88,7 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
                 if view.filter == Filter::All {
                     for (label, indices) in &view.shelves {
                         ui::section(ui, label);
-                        shelf_row(ui, art, label, &pick(indices), tiles, actions);
+                        shelf_row(ui, art, label, &pick(indices), view, tiles, actions);
                         ui.add_space(theme::space::XL);
                     }
                 }
@@ -201,7 +203,13 @@ struct Turn {
 ///
 /// Edge to edge rather than inside the page's margin, and square: a banner
 /// in the margin with rounded corners read as one more card.
-fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut Vec<Action>) {
+fn hero(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    titles: &[&Title],
+    listed: &HashSet<String>,
+    actions: &mut Vec<Action>,
+) {
     let height = (ui.ctx().content_rect().height() * 0.5).clamp(280.0, 520.0);
     let (column, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
@@ -315,7 +323,7 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut V
             .layout(egui::Layout::bottom_up(egui::Align::Min)),
         |ui| {
             ui.multiply_opacity(arriving);
-            hero_text(ui, art, title, actions);
+            hero_text(ui, art, title, listed.contains(&title.key), actions);
         },
     );
 
@@ -413,7 +421,13 @@ fn backdrop(
 
 /// What the banner says about one title, from the bottom up: how far into it
 /// the viewer is, the buttons, the synopsis, the facts and the name.
-fn hero_text(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<Action>) {
+fn hero_text(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    title: &Title,
+    on_list: bool,
+    actions: &mut Vec<Action>,
+) {
     let found = art
         .metadata
         .get(&title.key)
@@ -448,6 +462,8 @@ fn hero_text(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut 
         if ui::tonal_button(ui, &more).clicked() {
             actions.push(Action::Goto(Page::Title(title.key.clone())));
         }
+        ui.add_space(theme::space::S);
+        ui::list_button(ui, &title.key, on_list, actions);
     });
     ui.add_space(theme::space::L);
     if let Some(overview) = found.as_ref().and_then(|found| found.overview.as_deref()) {
@@ -614,10 +630,12 @@ fn shelf_row(
     art: &mut Art<'_>,
     label: &str,
     titles: &[&Title],
+    view: &LibraryView,
     tiles: Tiles,
     actions: &mut Vec<Action>,
 ) {
     let (width, aspect) = tile_shape(tiles);
+    let now = crate::engine::unix_now();
     ui::shelf(ui, ("shelf", label), |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
@@ -633,18 +651,35 @@ fn shelf_row(
                         name: art.name(title),
                         subtitle: subtitle(title),
                         progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
-                        badge: None,
+                        badge: view
+                            .badges
+                            .get(&title.key)
+                            .cloned()
+                            .or_else(|| countdown(art, title, now)),
                         width,
                         aspect,
                     },
                 );
-                tile_menu(&response, title, false, actions);
+                tile_menu(&response, title, false, view, actions);
                 if response.clicked() {
                     actions.push(Action::Goto(Page::Title(title.key.clone())));
                 }
             }
         });
     });
+}
+
+/// `Ep 8 · in 2 d` on a show whose next episode is still to air.
+fn countdown(art: &Art<'_>, title: &Title, now: i64) -> Option<String> {
+    let (episode, at) = art
+        .metadata
+        .get(&title.key)?
+        .metadata
+        .as_ref()?
+        .details
+        .as_ref()?
+        .next_airing(now)?;
+    Some(pstr_core::news::countdown(episode, at, now))
 }
 
 /// The minimum width and the picture's shape of a tile.
@@ -660,6 +695,7 @@ fn continue_row(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
     titles: &[&Title],
+    view: &LibraryView,
     actions: &mut Vec<Action>,
 ) {
     ui::shelf(ui, "continue", |ui| {
@@ -693,7 +729,7 @@ fn continue_row(
                         aspect: theme::CARD_ASPECT,
                     },
                 );
-                tile_menu(&response, title, true, actions);
+                tile_menu(&response, title, true, view, actions);
 
                 if response.clicked() {
                     actions.push(Action::Goto(Page::Title(title.key.clone())));
@@ -758,13 +794,18 @@ fn grid(
                         progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
                         // What a film is says itself in the subtitle below the
                         // card; a second `Film` over the poster is noise. A
-                        // folded franchise says how much is under it.
-                        badge: folded.map(|more| format!("+{more}")),
+                        // folded franchise says how much is under it, unless
+                        // something new arrived in it.
+                        badge: view
+                            .badges
+                            .get(&title.key)
+                            .cloned()
+                            .or_else(|| folded.map(|more| format!("+{more}"))),
                         width: grid.width,
                         aspect,
                     },
                 );
-                tile_menu(&response, title, false, actions);
+                tile_menu(&response, title, false, view, actions);
 
                 if response.clicked() {
                     actions.push(Action::Goto(Page::Title(title.key.clone())));
@@ -783,6 +824,7 @@ fn tile_menu(
     response: &egui::Response,
     title: &Title,
     continuing: bool,
+    view: &LibraryView,
     actions: &mut Vec<Action>,
 ) {
     response.context_menu(|ui| {
@@ -798,6 +840,20 @@ fn tile_menu(
         }
         if ui.button("Open").clicked() {
             actions.push(Action::Goto(Page::Title(title.key.clone())));
+        }
+        let on_list = view.listed.contains(&title.key);
+        if ui
+            .button(if on_list {
+                "Remove from My List"
+            } else {
+                "Add to My List"
+            })
+            .clicked()
+        {
+            actions.push(Action::SetOnList {
+                key: title.key.clone(),
+                on: !on_list,
+            });
         }
         ui.separator();
 

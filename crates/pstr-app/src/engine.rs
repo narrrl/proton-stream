@@ -33,6 +33,7 @@ use pstr_core::catalog::{
 use pstr_core::config::AppDirs;
 use pstr_core::library::{Library, Title, TitleKind};
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, ProviderId};
+use pstr_core::mylist::MyList;
 use pstr_core::prefs::PlaybackPrefs;
 use pstr_core::profile::ProfileChanges;
 use pstr_core::proton_drive_rs::ThumbnailType;
@@ -221,6 +222,12 @@ pub enum Event {
     /// The catalog was re-read: the library, and when each title last
     /// gained a file.
     LibraryLoaded(Library, HashMap<String, i64>),
+    /// When each file first appeared in a crawl, for the New badges; see
+    /// [`pstr_core::catalog::Catalog::first_seen`]. Sent just before
+    /// [`Event::LibraryLoaded`].
+    FirstSeen(HashMap<(String, String), i64>),
+    /// My List changed on another device.
+    MyList(MyList),
     /// A crawl finished for one share.
     Crawled {
         share_id: String,
@@ -415,6 +422,9 @@ pub struct Engine {
     /// Which theme the window wears. Kept beside the playback preferences for
     /// the same reason: it is read from the UI and written to disk off it.
     appearance: Arc<Mutex<Appearance>>,
+    /// My List, read once at launch. `None` when the file would not parse: it
+    /// is then never written over, and changing the list is refused.
+    my_list: Arc<Mutex<Option<MyList>>>,
     /// Preloaded so clicking Play never runs SQLite on egui's thread.
     track_prefs: Arc<Mutex<HashMap<String, TitleTrackPrefs>>>,
     downloads: Arc<Mutex<Downloads>>,
@@ -522,6 +532,10 @@ impl Engine {
             Appearance::default()
         });
 
+        let my_list = pstr_core::mylist::load(&dirs)
+            .inspect_err(|error| tracing::warn!("read My List: {error}"))
+            .ok();
+
         // The TMDB key, which every provider looks for, comes out of the OS
         // credential store, and that can be a D-Bus round trip to a keyring
         // that has to unlock first — not something to hold the first frame
@@ -560,6 +574,7 @@ impl Engine {
             enrichment_settled: Arc::new(tokio::sync::watch::channel(!deferred).0),
             prefs: Arc::new(Mutex::new(prefs)),
             appearance: Arc::new(Mutex::new(appearance)),
+            my_list: Arc::new(Mutex::new(my_list)),
             track_prefs: Arc::new(Mutex::new(track_prefs)),
             downloads: Arc::new(Mutex::new(Downloads::default())),
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
@@ -622,6 +637,43 @@ impl Engine {
     /// Which theme the window wears.
     pub fn appearance(&self) -> Appearance {
         *self.appearance.lock()
+    }
+
+    /// My List as it stands.
+    pub fn my_list(&self) -> MyList {
+        self.my_list.lock().clone().unwrap_or_default()
+    }
+
+    /// Put a title on My List or take it off, write the list, and return it
+    /// as it now is.
+    pub fn set_on_list(&self, key: &str, on: bool) -> MyList {
+        let mut guard = self.my_list.lock();
+        let Some(list) = guard.as_mut() else {
+            self.emit(Event::Error(
+                "My List could not be read, so it was left as it is.".to_owned(),
+            ));
+            return MyList::default();
+        };
+        if on {
+            list.add(key, unix_now());
+        } else {
+            list.remove(key);
+        }
+        let saved = list.clone();
+        drop(guard);
+        let engine = self.clone();
+        self.runtime.spawn_blocking(move || {
+            // Whatever the list is by now, under the lock: two clicks in a row
+            // must not land on disk in the wrong order.
+            let guard = engine.my_list.lock();
+            if let Some(list) = guard.as_ref()
+                && let Err(error) = pstr_core::mylist::save(&engine.dirs, list)
+            {
+                drop(guard);
+                engine.fail("save My List", error);
+            }
+        });
+        saved
     }
 
     /// Change the theme and write it.
@@ -1024,6 +1076,15 @@ impl Engine {
                 Err(error) => tracing::warn!("reread the metadata settings: {error}"),
             }
         }
+        if profile.list {
+            match pstr_core::mylist::load(&self.dirs) {
+                Ok(list) => {
+                    *self.my_list.lock() = Some(list.clone());
+                    self.emit(Event::MyList(list));
+                }
+                Err(error) => tracing::warn!("reread My List: {error}"),
+            }
+        }
         if profile.titles > 0 {
             match self.catalog.lock().all_title_track_prefs() {
                 Ok(prefs) => *self.track_prefs.lock() = prefs,
@@ -1289,6 +1350,7 @@ impl Engine {
                     let library = Library::build(files, &watch);
                     let targets = download_targets(&library);
                     let added = library.added_at(&first_seen);
+                    engine.emit(Event::FirstSeen(first_seen));
                     engine.emit(Event::LibraryLoaded(library, added));
                     engine.refresh_offline(Some(targets));
                 }

@@ -78,7 +78,7 @@ struct SettingsStore {
         nonmutating set { defaults.set(newValue, forKey: Key.newEpisodeNotifications) }
     }
 
-    static let filters: [LibraryFilter] = [.all, .series, .films, .watching, .unwatched, .downloaded]
+    static let filters: [LibraryFilter] = [.all, .myList, .series, .films, .watching, .unwatched, .downloaded]
     private static let sorts: [LibrarySort] = [.name, .recent, .added, .release, .rating, .popularity]
 
     private func bool(_ key: String, default value: Bool) -> Bool {

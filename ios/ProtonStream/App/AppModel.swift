@@ -480,7 +480,7 @@ final class AppModel {
         if report.settingsChanged {
             await AppearanceState.shared.reload()
         }
-        if report.applied > 0 || report.titles > 0 || report.settingsChanged || !report.sharesRemoved.isEmpty {
+        if report.applied > 0 || report.titles > 0 || report.settingsChanged || report.listChanged || !report.sharesRemoved.isEmpty {
             await reloadNow()
         }
         // A crawl takes longer than the grace iOS gives a backgrounded app.
@@ -531,6 +531,20 @@ final class AppModel {
             } catch {
                 reportError(error)
             }
+        }
+    }
+
+    // MARK: - My List
+
+    /// Put a title on My List, or take it off.
+    func setOnList(_ title: TitleRecord, _ on: Bool) {
+        Task {
+            do {
+                try await run { try $0.setOnList(key: title.key, on: on) }
+            } catch {
+                reportError(error)
+            }
+            reload()
         }
     }
 

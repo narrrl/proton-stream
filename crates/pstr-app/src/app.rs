@@ -13,6 +13,7 @@ use pstr_core::appearance::Appearance;
 use pstr_core::config::AppDirs;
 use pstr_core::library::Library;
 use pstr_core::metadata::{EpisodeGuide, MetadataConfig, MetadataRecord, TitleNames};
+use pstr_core::mylist::MyList;
 
 use crate::engine::{
     AccountStatus, DownloadItem, DownloadKey, Engine, Event, ImageCache, describe_failures,
@@ -293,6 +294,11 @@ pub enum Action {
     SetShelf(Filter, Sort),
     /// Fold each franchise into one tile, or show every title.
     SetGrouped(bool),
+    /// Put a title on My List, or take it off.
+    SetOnList {
+        key: String,
+        on: bool,
+    },
     /// Open or close the list of keyboard shortcuts.
     ToggleShortcuts,
     /// One page back: a title to the library, the library to nowhere.
@@ -410,6 +416,10 @@ pub struct LibraryView {
     pub history: Vec<ui::history::Entry>,
     /// The "Continue watching" shelf, most recent first, as indices.
     pub resumable: Vec<usize>,
+    /// What each tile says about what arrived — `New`, `3 new` — by key.
+    pub badges: HashMap<String, String>,
+    /// The keys on My List.
+    pub listed: std::collections::HashSet<String>,
     /// The library or what is known about it changed under the lists.
     stale: bool,
     /// Only watch state changed: the shelves and franchises still stand,
@@ -445,6 +455,8 @@ impl Default for LibraryView {
             shelves: Vec::new(),
             history: Vec::new(),
             resumable: Vec::new(),
+            badges: HashMap::new(),
+            listed: std::collections::HashSet::new(),
             stale: false,
             progressed: false,
         }
@@ -462,6 +474,10 @@ pub struct ViewInputs<'a> {
     pub added: &'a HashMap<String, i64>,
     /// The files kept on this computer, for the Downloaded filter.
     pub offline: &'a std::collections::HashSet<DownloadKey>,
+    pub list: &'a MyList,
+    /// When each file first appeared in a crawl, for what is new.
+    pub first_seen: &'a HashMap<(String, String), i64>,
+    pub now: i64,
 }
 
 /// How many shelves the library shows above the grid.
@@ -481,6 +497,7 @@ impl LibraryView {
         if !self.stale && self.progressed && unchanged && !watch_shapes_grid {
             self.history = ui::history::entries(library);
             self.resumable = Self::resumable(library);
+            self.badges = Self::badges(library, &inputs);
             self.progressed = false;
             return;
         }
@@ -508,28 +525,44 @@ impl LibraryView {
                 .enumerate()
                 .map(|(at, title)| (title.key.as_str(), at))
                 .collect();
-            self.shelves = pstr_core::shelves::pick(&library.titles, metadata, SHELVES)
-                .into_iter()
-                .map(|shelf| {
-                    let indices = shelf
-                        .keys
-                        .iter()
-                        .filter_map(|key| index.get(key.as_str()).copied())
-                        .collect();
-                    (shelf.label, indices)
-                })
+            self.listed = inputs
+                .list
+                .entries()
+                .map(|(key, _)| key.to_owned())
                 .collect();
+            self.shelves = pstr_core::shelves::home(
+                &library.titles,
+                metadata,
+                inputs.list,
+                inputs.first_seen,
+                inputs.now,
+                SHELVES,
+            )
+            .into_iter()
+            .map(|shelf| {
+                let indices = shelf
+                    .keys
+                    .iter()
+                    .filter_map(|key| index.get(key.as_str()).copied())
+                    .collect();
+                (shelf.label, indices)
+            })
+            .collect();
         }
 
         let titles: Vec<&Title> = pstr_core::browse::search(library, metadata, inputs.query)
             .into_iter()
             .filter(|title| {
-                self.filter.admits(title, |node| {
-                    inputs.offline.contains(&DownloadKey {
-                        share_id: node.share_id.clone(),
-                        link_id: node.link_id.clone(),
-                    })
-                })
+                self.filter.admits(
+                    title,
+                    |node| {
+                        inputs.offline.contains(&DownloadKey {
+                            share_id: node.share_id.clone(),
+                            link_id: node.link_id.clone(),
+                        })
+                    },
+                    inputs.list,
+                )
             })
             .collect();
         let tiles = pstr_core::browse::arrange(
@@ -564,10 +597,18 @@ impl LibraryView {
         if self.stale || self.progressed {
             self.history = ui::history::entries(library);
             self.resumable = Self::resumable(library);
+            self.badges = Self::badges(library, &inputs);
         }
         self.query = inputs.query.to_owned();
         self.stale = false;
         self.progressed = false;
+    }
+
+    fn badges(library: &Library, inputs: &ViewInputs<'_>) -> HashMap<String, String> {
+        pstr_core::news::badges(&library.titles, inputs.first_seen, inputs.now)
+            .into_iter()
+            .map(|(key, badge)| (key, badge.label()))
+            .collect()
     }
 
     /// The "Continue watching" shelf, as indices into the library.
@@ -628,6 +669,9 @@ pub struct App {
     pub metadata: HashMap<String, MetadataRecord>,
     /// When each title last gained a file, by key — for "Recently added".
     pub added: HashMap<String, i64>,
+    /// When each file first appeared in a crawl, for the New badges.
+    first_seen: HashMap<(String, String), i64>,
+    my_list: MyList,
     /// What they said about the episodes under those titles.
     pub episodes: HashMap<String, EpisodeGuide>,
     pub settings: MetadataConfig,
@@ -723,6 +767,7 @@ impl App {
         let window = crate::window::WindowMemory::new(dirs.window_file());
         let notifier = crate::notify::Notifier::new(&dirs.cache);
         let (engine, events) = Engine::new(runtime, dirs, cc.egui_ctx.clone())?;
+        let my_list = engine.my_list();
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, engine.appearance());
         cc.egui_ctx.set_zoom_factor(engine.desktop_prefs().zoom());
@@ -752,6 +797,8 @@ impl App {
             posters: ImageCache::default(),
             metadata: HashMap::new(),
             added: HashMap::new(),
+            first_seen: HashMap::new(),
+            my_list,
             episodes: HashMap::new(),
             settings,
             api_key: String::new(),
@@ -885,6 +932,11 @@ impl App {
                 Event::ConnectFailed(error) => {
                     self.connecting = false;
                     self.note(ctx, format!("could not open the shares: {error}"), true);
+                }
+                Event::FirstSeen(first_seen) => self.first_seen = first_seen,
+                Event::MyList(list) => {
+                    self.my_list = list;
+                    self.view.stale = true;
                 }
                 Event::LibraryLoaded(library, added) => {
                     self.library = library;
@@ -1685,6 +1737,10 @@ impl App {
                 self.view.grouped = grouped;
                 self.remember_arrangement();
             }
+            Action::SetOnList { key, on } => {
+                self.my_list = self.engine.set_on_list(&key, on);
+                self.view.stale = true;
+            }
             Action::Back => match self.page {
                 Page::Title(_) => self.page = Page::Library,
                 // Back out of a search before out of anything else: it is the
@@ -2391,6 +2447,9 @@ impl eframe::App for App {
                     names: self.engine.appearance().names,
                     added: &self.added,
                     offline: &self.offline_files,
+                    list: &self.my_list,
+                    first_seen: &self.first_seen,
+                    now: crate::engine::unix_now(),
                 },
             );
 
@@ -2519,7 +2578,10 @@ impl eframe::App for App {
                             &mut art,
                             library,
                             key,
-                            view.franchises.get(key.as_str()).map(Vec::as_slice),
+                            ui::title::Context {
+                                franchise: view.franchises.get(key.as_str()).map(Vec::as_slice),
+                                on_list: view.listed.contains(key.as_str()),
+                            },
                             ui::title::OfflineView {
                                 downloads,
                                 files: offline_files,

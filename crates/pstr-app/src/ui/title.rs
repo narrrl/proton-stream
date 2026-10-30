@@ -16,15 +16,23 @@ pub struct OfflineView<'a> {
     pub files: &'a std::collections::HashSet<DownloadKey>,
 }
 
+/// Where the title stands beyond its own files.
+pub struct Context<'a> {
+    /// The keys of its whole franchise in release order, if it has one.
+    pub franchise: Option<&'a [String]>,
+    pub on_list: bool,
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
     library: &Library,
     key: &str,
-    franchise: Option<&[String]>,
+    context: Context<'_>,
     offline: OfflineView<'_>,
     actions: &mut Vec<Action>,
 ) {
+    let Context { franchise, on_list } = context;
     let Some(title) = library.get(key) else {
         // The catalog was replaced under the page — a recrawl that dropped this
         // title. Nothing to show, so go back rather than draw an empty shell.
@@ -40,7 +48,7 @@ pub fn show(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            header(ui, art, title, &offline, actions);
+            header(ui, art, title, on_list, &offline, actions);
             ui.add_space(theme::space::XL);
 
             if let Some(keys) = franchise {
@@ -289,6 +297,7 @@ fn header(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
     title: &Title,
+    on_list: bool,
     offline: &OfflineView<'_>,
     actions: &mut Vec<Action>,
 ) {
@@ -425,6 +434,7 @@ fn header(
                             None,
                         )));
                     }
+                    ui::list_button(ui, &title.key, on_list, actions);
                     let title_keys: Vec<_> = title.episodes().map(key_of).collect();
                     let all_offline = title_keys.iter().all(|key| offline.files.contains(key));
                     if all_offline {

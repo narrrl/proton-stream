@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use crate::catalog::CatalogNode;
 use crate::library::{Library, Title, TitleKind, sort_name};
 use crate::metadata::{MetadataRecord, TitleNames};
+use crate::mylist::MyList;
 
 /// What order a grid is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -66,11 +67,14 @@ pub enum Filter {
     Unwatched,
     /// With at least one episode kept on this device.
     Downloaded,
+    /// On My List.
+    MyList,
 }
 
 impl Filter {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::All,
+        Self::MyList,
         Self::Series,
         Self::Films,
         Self::Watching,
@@ -86,12 +90,18 @@ impl Filter {
             Self::Watching => "Watching",
             Self::Unwatched => "Not started",
             Self::Downloaded => "Downloaded",
+            Self::MyList => "My List",
         }
     }
 
     /// Whether the grid shows `title`. `offline` says whether a file is kept
     /// on this device, which only the front end knows.
-    pub fn admits(self, title: &Title, offline: impl Fn(&CatalogNode) -> bool) -> bool {
+    pub fn admits(
+        self,
+        title: &Title,
+        offline: impl Fn(&CatalogNode) -> bool,
+        list: &MyList,
+    ) -> bool {
         let watched = title.watched_count();
         match self {
             Self::All => true,
@@ -102,6 +112,7 @@ impl Filter {
             }
             Self::Unwatched => watched == 0 && title.resume().is_none(),
             Self::Downloaded => title.episodes().any(|episode| offline(&episode.node)),
+            Self::MyList => list.contains(&title.key),
         }
     }
 }
@@ -455,12 +466,18 @@ mod tests {
         let film = title("f", "Film", TitleKind::Film);
         let series = title("s", "Series", TitleKind::Series);
         let none = |_: &CatalogNode| false;
-        assert!(Filter::All.admits(&film, none) && Filter::All.admits(&series, none));
-        assert!(Filter::Films.admits(&film, none) && !Filter::Films.admits(&series, none));
-        assert!(Filter::Series.admits(&series, none) && !Filter::Series.admits(&film, none));
+        let list = MyList::default();
+        assert!(Filter::All.admits(&film, none, &list) && Filter::All.admits(&series, none, &list));
+        assert!(
+            Filter::Films.admits(&film, none, &list) && !Filter::Films.admits(&series, none, &list)
+        );
+        assert!(
+            Filter::Series.admits(&series, none, &list)
+                && !Filter::Series.admits(&film, none, &list)
+        );
         // Nothing watched of either: not started, and not being watched.
-        assert!(Filter::Unwatched.admits(&film, none));
-        assert!(!Filter::Watching.admits(&film, none));
+        assert!(Filter::Unwatched.admits(&film, none, &list));
+        assert!(!Filter::Watching.admits(&film, none, &list));
     }
 
     #[test]
@@ -486,7 +503,18 @@ mod tests {
         let library = Library::build(vec![node("a", 1), node("b", 2)], &HashMap::new());
         let show = &library.titles[0];
 
-        assert!(Filter::Downloaded.admits(show, |node| node.link_id == "b"));
-        assert!(!Filter::Downloaded.admits(show, |_| false));
+        let list = MyList::default();
+        assert!(Filter::Downloaded.admits(show, |node| node.link_id == "b", &list));
+        assert!(!Filter::Downloaded.admits(show, |_| false, &list));
+    }
+
+    #[test]
+    fn the_my_list_filter_admits_only_what_is_on_the_list() {
+        let film = title("f", "Film", TitleKind::Film);
+        let series = title("s", "Series", TitleKind::Series);
+        let mut list = MyList::default();
+        list.add("s", 1);
+        assert!(Filter::MyList.admits(&series, |_| false, &list));
+        assert!(!Filter::MyList.admits(&film, |_| false, &list));
     }
 }

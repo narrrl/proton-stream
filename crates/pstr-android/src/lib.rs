@@ -246,6 +246,9 @@ pub struct SyncRecord {
     pub settings_changed: bool,
     /// Hand-picked matches and per-show track choices taken.
     pub titles: u32,
+    /// Whether My List changed: reload the library.
+    #[uniffi(default = false)]
+    pub list_changed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -357,6 +360,7 @@ pub enum TitleNamesChoice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum LibraryFilter {
     All,
+    MyList,
     Series,
     Films,
     Watching,
@@ -478,6 +482,13 @@ pub fn picture_mood(pixels: Vec<u32>) -> Option<u32> {
 /// The page colour `background` tinted by a picture's [`picture_mood`], for
 /// the veils over that picture. All `0xAARRGGBB`; see
 /// `pstr_core::appearance::mood_veil`.
+/// What an airing show's tile says about its next episode, `Ep 8 · in 2 d`;
+/// see `pstr_core::news::countdown`.
+#[uniffi::export]
+pub fn airing_countdown(episode: u32, at: i64, now: i64) -> String {
+    pstr_core::news::countdown(episode, at, now)
+}
+
 #[uniffi::export]
 pub fn mood_veil(background: u32, mood: u32, light: bool) -> u32 {
     let rgb = |argb: u32| {
@@ -624,6 +635,12 @@ pub struct TitleRecord {
     /// shared `TitleDetails::status_label`.
     #[uniffi(default = None)]
     pub status: Option<String>,
+    /// On My List.
+    #[uniffi(default = false)]
+    pub on_list: bool,
+    /// `New`, or `3 new` on a show being watched; see `pstr_core::news`.
+    #[uniffi(default = None)]
+    pub badge: Option<String>,
 }
 
 /// Playback preferences that outlive one file, one title and one launch.
@@ -1328,6 +1345,7 @@ impl AndroidEngine {
                         shares_removed: profile.shares_removed,
                         settings_changed: profile.settings,
                         titles: u32::try_from(profile.titles).unwrap_or(u32::MAX),
+                        list_changed: profile.list,
                     }))
                 }
                 Err(error) if error.is_signed_out() => {
@@ -1655,11 +1673,15 @@ impl AndroidEngine {
                 pstr_core::browse::search(&cached.library, &cached.metadata, &query)
                     .into_iter()
                     .filter(|title| {
-                        filter.admits(title, |node| {
-                            cached
-                                .offline
-                                .contains(&(node.share_id.clone(), node.link_id.clone()))
-                        })
+                        filter.admits(
+                            title,
+                            |node| {
+                                cached
+                                    .offline
+                                    .contains(&(node.share_id.clone(), node.link_id.clone()))
+                            },
+                            &cached.list,
+                        )
                     })
                     .collect();
             let tiles = pstr_core::browse::arrange(
@@ -1675,13 +1697,20 @@ impl AndroidEngine {
             // Shelves are the whole library's, and only when it is shown
             // whole.
             let shelves = if query.trim().is_empty() && filter == Filter::All {
-                pstr_core::shelves::pick(&cached.library.titles, &cached.metadata, SHELVES)
-                    .into_iter()
-                    .map(|shelf| ShelfRecord {
-                        label: shelf.label,
-                        keys: shelf.keys,
-                    })
-                    .collect()
+                pstr_core::shelves::home(
+                    &cached.library.titles,
+                    &cached.metadata,
+                    &cached.list,
+                    &cached.first_seen,
+                    now(),
+                    SHELVES,
+                )
+                .into_iter()
+                .map(|shelf| ShelfRecord {
+                    label: shelf.label,
+                    keys: shelf.keys,
+                })
+                .collect()
             } else {
                 Vec::new()
             };
@@ -1696,6 +1725,18 @@ impl AndroidEngine {
                 shelves,
             }
         })
+    }
+
+    /// Put a title on My List or take it off. Refused when the list on disk
+    /// would not parse, rather than writing an empty one over it.
+    pub fn set_on_list(&self, key: String, on: bool) -> Result<(), BridgeError> {
+        let mut list = pstr_core::mylist::load(&self.dirs).map_err(BridgeError::from_display)?;
+        if on {
+            list.add(&key, now());
+        } else {
+            list.remove(&key);
+        }
+        pstr_core::mylist::save(&self.dirs, &list).map_err(BridgeError::from_display)
     }
 
     pub fn metadata_settings(&self) -> Result<MetadataSettingsRecord, BridgeError> {
@@ -2480,11 +2521,15 @@ impl AndroidEngine {
         let names = pstr_core::appearance::load(&self.dirs)
             .unwrap_or_default()
             .names;
+        // Read each time like the appearance: it is one small file, and the
+        // phone's list changes without the catalog being written.
+        let list = pstr_core::mylist::load(&self.dirs).unwrap_or_default();
         let catalog = self.catalog.lock();
         let writes = catalog.writes();
         if let Some(cached) = self.library_cache.lock().as_ref()
             && cached.writes == writes
             && cached.names == names
+            && cached.list == list
         {
             return Ok(read(cached));
         }
@@ -2518,6 +2563,7 @@ impl AndroidEngine {
             })
             .collect();
         let now = now();
+        let badges = pstr_core::news::badges(&library.titles, &first_seen, now);
         let titles: Vec<TitleRecord> = library
             .titles
             .iter()
@@ -2531,6 +2577,8 @@ impl AndroidEngine {
                 record.display_name =
                     pstr_core::browse::display_name(title, &metadata, names).to_owned();
                 record.franchise = franchises.get(&title.key).cloned().unwrap_or_default();
+                record.on_list = list.contains(&title.key);
+                record.badge = badges.get(&title.key).map(|badge| badge.label());
                 if let Some(details) = metadata
                     .get(&title.key)
                     .and_then(|record| record.metadata.as_ref())
@@ -2547,6 +2595,7 @@ impl AndroidEngine {
         let cached = CachedLibrary {
             writes,
             names,
+            list,
             library,
             metadata,
             added,
@@ -3425,6 +3474,7 @@ fn normalized_language(language: Option<String>) -> Option<String> {
 struct CachedLibrary {
     writes: u64,
     names: TitleNames,
+    list: pstr_core::mylist::MyList,
     library: Library,
     metadata: HashMap<String, MetadataRecord>,
     /// When each title last gained a file.
@@ -3535,6 +3585,7 @@ fn filter_choice(filter: LibraryFilter) -> Filter {
         LibraryFilter::Watching => Filter::Watching,
         LibraryFilter::Unwatched => Filter::Unwatched,
         LibraryFilter::Downloaded => Filter::Downloaded,
+        LibraryFilter::MyList => Filter::MyList,
     }
 }
 
@@ -3693,6 +3744,8 @@ fn title_record(
             .map(str::to_owned),
         next_episode: None,
         next_airing_at: None,
+        on_list: false,
+        badge: None,
         franchise: Vec::new(),
         logo_url: metadata.and_then(|found| found.logo_url.clone()),
         runtime: details.and_then(|details| details.runtime),
@@ -4344,6 +4397,36 @@ mod tests {
         engine.set_appearance(appearance).expect("store");
         let titles = engine.library(Some("frieren".into())).expect("library");
         assert_eq!(titles[0].display_name, "Sousou no Frieren");
+
+        // My List: the record says so straight away, the filter narrows to
+        // it, and it is a row above the grid.
+        engine
+            .set_on_list("sousou no frieren".into(), true)
+            .expect("list");
+        let titles = engine.library(Some("frieren".into())).expect("library");
+        assert!(titles[0].on_list);
+        let listed = engine
+            .arrangement(
+                None,
+                super::LibraryFilter::MyList,
+                super::LibrarySort::Name,
+                false,
+            )
+            .expect("arrange");
+        assert_eq!(listed.tiles.len(), 1);
+        let whole = engine
+            .arrangement(
+                None,
+                super::LibraryFilter::All,
+                super::LibrarySort::Name,
+                true,
+            )
+            .expect("arrange");
+        assert_eq!(whole.shelves[0].label, "My List");
+        engine
+            .set_on_list("sousou no frieren".into(), false)
+            .expect("list");
+        assert!(!engine.library(None).expect("library")[0].on_list);
 
         let _ = std::fs::remove_dir_all(root);
     }

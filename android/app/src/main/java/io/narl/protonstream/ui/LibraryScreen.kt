@@ -47,6 +47,7 @@ import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.QuietButton
 import java.time.LocalDate
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
@@ -116,6 +117,7 @@ import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TitleType
+import uniffi.pstr_android.airingCountdown
 
 /**
  * How many shows the continue-watching shelf holds.
@@ -145,6 +147,7 @@ internal fun LibraryFilter.label(): String = when (this) {
     LibraryFilter.WATCHING -> "Watching"
     LibraryFilter.UNWATCHED -> "Not started"
     LibraryFilter.DOWNLOADED -> "Downloaded"
+    LibraryFilter.MY_LIST -> "My List"
 }
 
 /** The offer of posters and synopses, and its two answers. */
@@ -190,6 +193,7 @@ internal fun LibraryScreen(
     onAddShare: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onFilter: (LibraryFilter) -> Unit = {},
+    onSetOnList: (TitleRecord, Boolean) -> Unit = { _, _ -> },
 ) {
     val download = rememberDownload()
     val context = LocalContext.current
@@ -293,6 +297,7 @@ internal fun LibraryScreen(
                         },
                         featured = if (overBanner) featured else emptyList(),
                         grid = grid,
+                        onSetOnList = onSetOnList,
                     )
                 }
             }
@@ -307,6 +312,10 @@ internal fun LibraryScreen(
                 onResume(title, nextUpIndex(playlist, title.continueIndex))
             }
             MenuRow(Icons.Default.Info, "Open") { onTitle(title) }
+            MenuRow(
+                if (title.onList) Icons.Default.Check else Icons.Default.Add,
+                if (title.onList) "Remove from My List" else "Add to My List",
+            ) { onSetOnList(title, !title.onList) }
             MenuRow(Icons.Default.Download, "Download all") { download(playlist, title.displayName) }
             MenuRow(
                 if (allWatched) Icons.Outlined.CheckCircle else Icons.Default.CheckCircle,
@@ -493,6 +502,7 @@ private fun LibraryGrid(
     metadataOffer: MetadataOffer? = null,
     featured: List<TitleRecord> = emptyList(),
     grid: LazyGridState = rememberLazyGridState(),
+    onSetOnList: (TitleRecord, Boolean) -> Unit = { _, _ -> },
 ) {
     // The arrangement names titles by key; before it has arrived, the titles
     // as they came are the grid.
@@ -525,6 +535,7 @@ private fun LibraryGrid(
                     resumable,
                     onPlay = onResume,
                     onOpen = onTitle,
+                    onSetOnList = onSetOnList,
                     modifier = Modifier.bleed(16.dp),
                 )
             }
@@ -574,6 +585,9 @@ private fun LibraryGrid(
                                     onLongClick = { onTitleMenu(title) },
                                     modifier = Modifier.width(SHELF_TILE_WIDTH),
                                     shared = false,
+                                    // On a shelf, an airing show says when its
+                                    // next episode is out.
+                                    badge = title.badge ?: title.countdown(),
                                 )
                             }
                         }
@@ -729,6 +743,7 @@ private fun FeaturedBanner(
     resumable: List<Resumable>,
     onPlay: (TitleRecord, Int) -> Unit,
     onOpen: (TitleRecord) -> Unit,
+    onSetOnList: (TitleRecord, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val pager = rememberPagerState { titles.size }
@@ -750,6 +765,7 @@ private fun FeaturedBanner(
                 resumable.firstOrNull { it.title.key == title.key },
                 onPlay = { onPlay(title, it) },
                 onOpen = { onOpen(title) },
+                onSetOnList = { onSetOnList(title, it) },
             )
         }
         if (titles.size > 1) {
@@ -780,7 +796,13 @@ private fun FeaturedBanner(
 
 /** One title on the banner: its art, its veil, and what it is, from the bottom up. */
 @Composable
-private fun FeaturedPage(title: TitleRecord, resume: Resumable?, onPlay: (Int) -> Unit, onOpen: () -> Unit) {
+private fun FeaturedPage(
+    title: TitleRecord,
+    resume: Resumable?,
+    onPlay: (Int) -> Unit,
+    onOpen: () -> Unit,
+    onSetOnList: (Boolean) -> Unit,
+) {
     val playlist = remember(title) { title.seasons.flatMap(SeasonRecord::episodes) }
     var mood by remember(title.key) { mutableStateOf<Color?>(null) }
     val background = MaterialTheme.colorScheme.background
@@ -846,6 +868,7 @@ private fun FeaturedPage(title: TitleRecord, resume: Resumable?, onPlay: (Int) -
                     Spacer(Modifier.width(6.dp))
                     Text("More info")
                 }
+                ListButton(title.onList, onSetOnList, compact = true)
             }
             val episode = resume?.episode
             val progress = episode?.progress?.takeIf { episode.resumeAt != null }
@@ -943,6 +966,7 @@ private fun PosterTile(
     modifier: Modifier = Modifier,
     folded: Int = 0,
     shared: Boolean = true,
+    badge: String? = title.badge,
 ) {
     Column(
         modifier
@@ -974,6 +998,20 @@ private fun PosterTile(
                         .background(Color.Black.copy(alpha = 0.7f))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                         .semantics { contentDescription = "and $folded more" },
+                )
+            }
+            if (badge != null) {
+                Text(
+                    badge,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }
         }
@@ -1016,4 +1054,11 @@ private fun EpisodeRecord.timeLeft(): String? {
     val fraction = progress?.takeIf { it > 0.0 && it < 1.0 } ?: return null
     val minutes = ((at / fraction - at) / 60).toInt()
     return if (minutes < 1) "under a minute left" else "$minutes min left"
+}
+
+/** `Ep 8 · in 2 d` for a show whose next episode is still to air. */
+internal fun TitleRecord.countdown(now: Long = System.currentTimeMillis() / 1000): String? {
+    val at = nextAiringAt?.takeIf { it > now } ?: return null
+    val episode = nextEpisode ?: return null
+    return airingCountdown(episode, at, now)
 }

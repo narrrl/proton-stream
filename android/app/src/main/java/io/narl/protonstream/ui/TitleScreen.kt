@@ -50,6 +50,9 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material.icons.filled.Pause
@@ -119,6 +122,7 @@ internal fun TitleScreen(
     /** Every title of its franchise, in release order, this one included. */
     franchise: List<TitleRecord> = emptyList(),
     onOpenTitle: (TitleRecord) -> Unit = {},
+    onSetOnList: (TitleRecord, Boolean) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val download = rememberDownload()
@@ -311,6 +315,13 @@ internal fun TitleScreen(
                     // three button styles used to wrap over three lines and bury
                     // the episodes under them.
                     Row(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                        TitleAction(
+                            if (title.onList) Icons.Default.Check else Icons.Default.Add,
+                            "My List",
+                            Modifier.weight(1f).semantics {
+                                stateDescription = if (title.onList) "On My List" else "Not on My List"
+                            },
+                        ) { onSetOnList(title, !title.onList) }
                         // Only where it would do something different: an unstarted
                         // show already starts at the beginning.
                         if (upNext?.resumeAt != null || title.watchedCount > 0uL) {

@@ -135,6 +135,38 @@ pub fn pick(
     picked
 }
 
+/// Every row above the library grid, in the order all three apps show them:
+/// new episodes of what is being watched, My List, what was recently added,
+/// then up to `limit` [`pick`]ed shelves.
+pub fn home(
+    titles: &[Title],
+    metadata: &HashMap<String, MetadataRecord>,
+    list: &crate::mylist::MyList,
+    first_seen: &HashMap<(String, String), i64>,
+    now: i64,
+    limit: usize,
+) -> Vec<Shelf> {
+    let news = crate::news::rows(titles, first_seen, now);
+    let present: std::collections::HashSet<&str> =
+        titles.iter().map(|title| title.key.as_str()).collect();
+    let keys: Vec<String> = list
+        .newest_first()
+        .into_iter()
+        .filter(|key| present.contains(key))
+        .map(str::to_owned)
+        .collect();
+    let mine = (!keys.is_empty()).then(|| Shelf {
+        label: "My List".into(),
+        keys,
+    });
+    news.episodes
+        .into_iter()
+        .chain(mine)
+        .chain(news.added)
+        .chain(pick(titles, metadata, limit))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +290,18 @@ mod tests {
         assert_eq!(shelves.len(), 1);
         assert_eq!(shelves[0].label, "Airing now");
         assert_eq!(shelves[0].keys, vec!["a"]);
+    }
+
+    #[test]
+    fn my_list_is_a_row_of_what_the_library_holds_newest_first() {
+        let titles = vec![title("a"), title("b")];
+        let mut list = crate::mylist::MyList::default();
+        list.add("a", 1);
+        list.add("b", 3);
+        list.add("gone", 5);
+        let rows = home(&titles, &HashMap::new(), &list, &HashMap::new(), 10, 4);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "My List");
+        assert_eq!(rows[0].keys, ["b", "a"]);
     }
 }

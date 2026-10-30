@@ -251,6 +251,10 @@ struct TitleView: View {
             .disabled(playlist.isEmpty)
             .padding(.top, 16)
             HStack(spacing: 0) {
+                TitleAction(icon: title.onList ? "checkmark" : "plus", label: "My List") {
+                    model.setOnList(title, !title.onList)
+                }
+                .accessibilityValue(title.onList ? "On My List" : "Not on My List")
                 // Only where it would do something different: an unstarted show
                 // already starts at the beginning.
                 if upNext?.resumeAt != nil || title.watchedCount > 0 {

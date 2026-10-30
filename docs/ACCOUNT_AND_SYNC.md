@@ -4,8 +4,8 @@ Signing in to Proton is optional. Without it, the app plays public share links a
 everything on one device. Signing in adds two things:
 
 - **Folders of your own Drive** as shares, with no link to copy.
-- **Sync** of your place in every episode, your shares and your settings, across every device
-  you sign in on.
+- **Sync** of your place in every episode, your shares, your settings and My List, across every
+  device you sign in on.
 
 ## Signing in
 
@@ -51,6 +51,8 @@ When you are signed in, each device keeps a small file in your Drive. You find t
   your Drive)
 - Settings: playback, appearance and posters and descriptions, including a TMDB key
 - Matches you picked by hand, and your audio and subtitle choice for each show
+- My List: a title you add on one device is on the list of every other, and one you remove is
+  removed from all of them
 
 **What stays on each device:** volume and mute, the streaming cache size, text size, Wi-Fi only,
 background audio, hardware decoding, window size, and the library's filter and sort order.
@@ -60,7 +62,7 @@ and when it closes. **Sync now** runs it at once. Android also syncs in the back
 after you leave the app.
 
 **How conflicts are settled:** each device writes only its own file, and reads everyone else's.
-For each episode and each setting, the newest change wins. A device that signs in for the first
+For each episode, each setting and each title on My List, the newest change wins. A device that signs in for the first
 time takes the others' state and does not overwrite it with its own defaults.
 
 A device that has not synced for 90 days has its file moved to the Drive trash.

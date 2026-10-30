@@ -148,6 +148,9 @@ struct LibraryView: View {
                     onResume(title, nextUpIndex(playlist, continueIndex: title.continueIndex))
                 }
                 MenuRow("info.circle", "Open") { onTitle(title) }
+                MenuRow(title.onList ? "checkmark" : "plus", title.onList ? "Remove from My List" : "Add to My List") {
+                    model.setOnList(title, !title.onList)
+                }
                 MenuRow("arrow.down.circle", "Download all") { pendingDownload = download(playlist, title.displayName) }
                 MenuRow(allWatched ? "checkmark.circle" : "checkmark.circle.fill", allWatched ? "Mark unwatched" : "Mark watched") {
                     model.setTitleWatched(title, !allWatched)
@@ -267,7 +270,9 @@ struct LibraryView: View {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 LazyHStack(alignment: .top, spacing: 12) {
                                     ForEach(shelf.titles, id: \.key) { title in
-                                        PosterTile(title: title)
+                                        // On a shelf, an airing show says when its
+                                        // next episode is out.
+                                        PosterTile(title: title, badge: title.badge ?? title.countdown())
                                             .frame(width: 112)
                                             .tapAndHold { onTitle(title) } onHold: { longPressed { menuFor = title } }
                                     }
@@ -479,6 +484,7 @@ extension LibraryFilter {
         case .watching: "Watching"
         case .unwatched: "Not started"
         case .downloaded: "Downloaded"
+        case .myList: "My List"
         }
     }
 }
@@ -596,6 +602,7 @@ private struct FeaturedPage: View {
     let onPlay: (Int) -> Void
     let onOpen: () -> Void
     @Environment(\.scheme) private var scheme
+    @Environment(AppModel.self) private var model
     @State private var mood: UInt32?
 
     var body: some View {
@@ -637,6 +644,13 @@ private struct FeaturedPage: View {
                     }
                     .buttonStyle(.accent)
                     Button(action: onOpen) { Label("More info", systemImage: "info.circle") }.buttonStyle(.tonal)
+                    // The icon alone: a third labelled button does not fit a
+                    // phone's row.
+                    Button { model.setOnList(title, !title.onList) } label: {
+                        Image(systemName: title.onList ? "checkmark" : "plus")
+                    }
+                    .buttonStyle(.tonal)
+                    .accessibilityLabel(title.onList ? "Remove from My List" : "Add to My List")
                 }
                 .padding(.top, 12)
                 if let episode = resume?.episode, episode.resumeAt != nil, let progress = episode.progress {
@@ -705,7 +719,15 @@ private struct ContinueCard: View {
 struct PosterTile: View {
     let title: TitleRecord
     var folded = 0
+    /// `New`, `3 new`, or an airing show's countdown, at the top left.
+    var badge: String?
     @Environment(\.scheme) private var scheme
+
+    init(title: TitleRecord, folded: Int = 0, badge: String? = nil) {
+        self.title = title
+        self.folded = folded
+        self.badge = badge ?? title.badge
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -724,6 +746,16 @@ struct PosterTile: View {
                             .accessibilityLabel("and \(folded) more")
                     }
                 }
+                .overlay(alignment: .topLeading) {
+                    if let badge {
+                        Text(badge)
+                            .textStyle(.labelSmall, semibold: true)
+                            .foregroundStyle(scheme.onPrimary)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(scheme.primary, in: RoundedRectangle(cornerRadius: Corner.standard))
+                            .padding(6)
+                    }
+                }
             Text(title.displayName).textStyle(.bodyMedium, semibold: true).foregroundStyle(scheme.onSurface)
                 .lineLimit(2).padding(.top, 6)
             // Two lines, not one: at a large text size "2023 · 7 episodes"
@@ -736,6 +768,12 @@ struct PosterTile: View {
 }
 
 extension TitleRecord {
+    /// `Ep 8 · in 2 d` for a show whose next episode is still to air.
+    func countdown(now: Int64 = Int64(Date().timeIntervalSince1970)) -> String? {
+        guard let at = nextAiringAt, at > now, let episode = nextEpisode else { return nil }
+        return airingCountdown(episode: episode, at: at, now: now)
+    }
+
     /// "2023 · 11 episodes", or "1988 · Film" — never "1 episodes".
     var caption: String {
         let count: String

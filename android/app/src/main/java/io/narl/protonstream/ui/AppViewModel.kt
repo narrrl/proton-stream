@@ -591,7 +591,9 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             }
         }
         if (report.settingsChanged) AppearanceState.reload()
-        if (report.applied > 0u || report.titles > 0u || report.settingsChanged || report.sharesRemoved.isNotEmpty()) {
+        if (report.applied > 0u || report.titles > 0u || report.settingsChanged || report.listChanged ||
+            report.sharesRemoved.isNotEmpty()
+        ) {
             reloadNow()
         }
         if (report.sharesAdded.isNotEmpty()) {
@@ -625,7 +627,17 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
      * title's positions are what this throws away, and a mis-tap on a tile's
      * menu should not cost them.
      */
-    fun setTitleWatched(title: TitleRecord, watched: Boolean) =
+    /** Put a title on My List, or take it off. */
+    fun setOnList(title: TitleRecord, on: Boolean) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { NativeRuntime.engine().setOnList(title.key, on) }
+            }.onFailure(::reportError)
+            reload()
+        }
+    }
+
+        fun setTitleWatched(title: TitleRecord, watched: Boolean) =
         markEpisodes(title.seasons.flatMap { it.episodes }, watched, title.displayName)
 
     /**

@@ -23,6 +23,7 @@ use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Vec2};
 use pstr_core::library::{Episode, Title};
 use pstr_core::metadata::{ArtShape, EpisodeGuide, EpisodeMetadata, MetadataRecord, TitleNames};
 
+use crate::app::Action;
 use crate::engine::{Engine, ImageCache, WIDE_MAX_EDGE, thumbnail_key};
 use crate::theme;
 use widgets::Named;
@@ -373,6 +374,27 @@ pub fn accent_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 /// than as a second, unrelated kind of control.
 pub fn tonal_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     filled(ui, text, Fill::Tonal, Vec2::new(0.0, 0.0))
+}
+
+/// My List's button: `+ My List` to put the title on it, `✓ My List` once it
+/// is, which takes it off again.
+pub fn list_button(ui: &mut egui::Ui, key: &str, on_list: bool, actions: &mut Vec<Action>) {
+    let label = if on_list {
+        format!("{}  My List", egui_phosphor::regular::CHECK)
+    } else {
+        format!("{}  My List", egui_phosphor::regular::PLUS)
+    };
+    let response = tonal_button(ui, &label).on_hover_text(if on_list {
+        "On My List. Click to take it off"
+    } else {
+        "Put it on My List, to find it again on every device"
+    });
+    if response.clicked() {
+        actions.push(Action::SetOnList {
+            key: key.to_owned(),
+            on: !on_list,
+        });
+    }
 }
 
 /// A button laid over the picture: dark glass and white ink, whatever the

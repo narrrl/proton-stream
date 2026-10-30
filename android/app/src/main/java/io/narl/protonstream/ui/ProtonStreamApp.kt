@@ -234,6 +234,7 @@ fun ProtonStreamApp(
                                 },
                                 onOpenSettings = { destination = Destination.Settings },
                                 onFilter = model::filter,
+                                onSetOnList = model::setOnList,
                                 )
                         }
                         val titlePane = @Composable { selected: TitleRecord ->
@@ -255,6 +256,7 @@ fun ProtonStreamApp(
                                     state.titles.firstOrNull { it.key == key }
                                 },
                                 onOpenTitle = { selectedTitleKey = it.key },
+                                onSetOnList = model::setOnList,
                                 )
                         }
                         if (maxWidth >= TWO_PANE_WIDTH) {
