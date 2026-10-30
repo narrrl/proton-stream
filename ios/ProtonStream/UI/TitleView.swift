@@ -16,6 +16,10 @@ struct TitleView: View {
     /// Every title of its franchise, in release order, this one included.
     var franchise: [TitleRecord] = []
     var onOpenTitle: (TitleRecord) -> Void = { _ in }
+    /// The titles most like it, best first.
+    var moreLike: [TitleRecord] = []
+    /// Open every title sharing a genre, studio or director.
+    var onBrowse: (BrowseFacet) -> Void = { _ in }
 
     @Environment(AppModel.self) private var model
     @Environment(\.scheme) private var scheme
@@ -38,13 +42,17 @@ struct TitleView: View {
         onPlay: @escaping ([EpisodeRecord], Int) -> Void,
         onBack: @escaping () -> Void,
         franchise: [TitleRecord] = [],
-        onOpenTitle: @escaping (TitleRecord) -> Void = { _ in }
+        onOpenTitle: @escaping (TitleRecord) -> Void = { _ in },
+        moreLike: [TitleRecord] = [],
+        onBrowse: @escaping (BrowseFacet) -> Void = { _ in }
     ) {
         self.title = title
         self.onPlay = onPlay
         self.onBack = onBack
         self.franchise = franchise
         self.onOpenTitle = onOpenTitle
+        self.moreLike = moreLike
+        self.onBrowse = onBrowse
         // One season on screen at a time, opened on the one Play would land in.
         let playlist = title.playlist
         let nextUp = nextUpIndex(playlist, continueIndex: title.continueIndex)
@@ -71,7 +79,7 @@ struct TitleView: View {
                     heading(playlist: playlist, nextUp: nextUp, upNext: upNext)
                         .padding(.horizontal, side + 16)
                     if franchise.count > 1 {
-                        franchiseRow(side: side)
+                        coverRow("In this franchise", franchise, side: side)
                     }
                     seasonChips(season: season, side: side)
                     if let season {
@@ -90,6 +98,11 @@ struct TitleView: View {
                             )
                             .padding(.horizontal, side)
                         }
+                    }
+                    // Under the episodes rather than over them: where to go
+                    // once this one is done, not what the page is for.
+                    if !moreLike.isEmpty {
+                        coverRow("More like this", moreLike, side: side)
                     }
                 }
                 .padding(.bottom, 24)
@@ -223,15 +236,6 @@ struct TitleView: View {
             }
             Text(factLine)
                 .textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 6)
-            // Who made it.
-            let makers: [String?] = [
-                title.studios.isEmpty ? nil : title.studios.prefix(2).joined(separator: ", "),
-                title.directors.first.map { "dir. \($0)" },
-            ]
-            let facts = makers.compactMap { $0 }.joined(separator: "  ·  ")
-            if !facts.isEmpty {
-                Text(facts).textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 2)
-            }
             // Where the title stands, then what the files are rather than
             // what the title is.
             let status = statusText(title)
@@ -284,9 +288,32 @@ struct TitleView: View {
             // tag is its community describing it, not what it is filed as.
             if !title.genres.isEmpty {
                 FlowLayout(spacing: 6) {
-                    ForEach(title.genres, id: \.self) { GenreChip(text: $0) }
+                    ForEach(title.genres, id: \.self) { genre in
+                        GenreChip(text: genre) { onBrowse(.genre(name: genre)) }
+                    }
                 }
                 .padding(.top, 12)
+            }
+            // Who made it, as chips that open everything else by them: the
+            // desktop's credits row.
+            let studios = Array(title.studios.prefix(2))
+            let director = Array(title.directors.prefix(1))
+            if !studios.isEmpty || !director.isEmpty {
+                FlowLayout(spacing: 6) {
+                    if !studios.isEmpty {
+                        Text("Studio").textStyle(.labelMedium).foregroundStyle(scheme.onSurfaceVariant)
+                        ForEach(studios, id: \.self) { name in
+                            GenreChip(text: name) { onBrowse(.studio(name: name)) }
+                        }
+                    }
+                    if !director.isEmpty {
+                        Text("Director").textStyle(.labelMedium).foregroundStyle(scheme.onSurfaceVariant)
+                        ForEach(director, id: \.self) { name in
+                            GenreChip(text: name) { onBrowse(.person(name: name)) }
+                        }
+                    }
+                }
+                .padding(.top, 8)
             }
             if !title.tags.isEmpty {
                 Text(title.tags.prefix(4).joined(separator: "  ·  "))
@@ -317,13 +344,15 @@ struct TitleView: View {
         return "Play \(upNext.label)"
     }
 
-    private func franchiseRow(side: CGFloat) -> some View {
+    /// A row of covers: the franchise, with this title marked, or the titles
+    /// like it.
+    private func coverRow(_ heading: String, _ members: [TitleRecord], side: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("In this franchise").textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
+            Text(heading).textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
                 .padding(.horizontal, side + 16)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) {
-                    ForEach(franchise, id: \.key) { member in
+                    ForEach(members, id: \.key) { member in
                         FranchiseTile(title: member, here: member.key == title.key)
                             .tapAndHold { if member.key != title.key { onOpenTitle(member) } }
                     }

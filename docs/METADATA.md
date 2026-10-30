@@ -148,8 +148,19 @@ titles are one director's, and that is not a shelf — and a genre only under 40
 of the library. Four at most, over the unfiltered library. Here: *Directed by
 Satoshi Kon*, *From MADHOUSE*, *From MAPPA*, *From Production I.G*.
 
-**The title page** adds the season, studios, director and next airing episode
-to its line of facts, and the tags beside the genres.
+**The title page** adds the season and next airing episode to its line of
+facts, the tags beside the genres, and the studios and director as chips of
+their own. Each genre, studio and director chip opens a page of every title
+carrying it (`pstr_core::discover::Facet`).
+
+**More like this.** `pstr_core::discover::more_like` scores every other title
+by what it shares with this one — a director 4, a studio 3, a genre 2, one of
+the first eight tags 1, the format 1 on top of anything else — and offers those
+scoring 4 or more: a director, or two genres, but never one genre alone. The
+title's own franchise is left out and each other franchise offers only its best
+match. The same scoring, seeded by the title most recently watched to the end
+and limited to titles not started, is the library's *Because you watched* row.
+No request: it reads only what the match already stored.
 
 **Android.** The same, through the bridge: `AndroidEngine::arrangement`
 returns the grid's tiles and the shelves as keys into `library`'s titles, and

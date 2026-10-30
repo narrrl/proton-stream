@@ -50,6 +50,7 @@ impl FrameTimer {
                 Page::Library => "library",
                 Page::History => "history",
                 Page::Title(_) => "title",
+                Page::Browse { .. } => "browse",
                 Page::Shares => "shares",
                 Page::Downloads => "downloads",
                 Page::Settings => "settings",
@@ -97,6 +98,12 @@ pub enum Page {
     History,
     /// One title, by [`pstr_core::library::Title::key`].
     Title(String),
+    /// The titles a genre, studio or person chip stands for, with the title
+    /// it was opened from, for the way back.
+    Browse {
+        facet: pstr_core::discover::Facet,
+        from: Option<String>,
+    },
     Shares,
     Downloads,
     /// How the app looks, how it plays, and what it looks up.
@@ -420,6 +427,9 @@ pub struct LibraryView {
     pub badges: HashMap<String, String>,
     /// The keys on My List.
     pub listed: std::collections::HashSet<String>,
+    /// "More like this" for the title page open, worked out once per title:
+    /// its key, and the keys of the titles like it.
+    pub similar: Option<(String, Vec<String>)>,
     /// The library or what is known about it changed under the lists.
     stale: bool,
     /// Only watch state changed: the shelves and franchises still stand,
@@ -457,6 +467,7 @@ impl Default for LibraryView {
             resumable: Vec::new(),
             badges: HashMap::new(),
             listed: std::collections::HashSet::new(),
+            similar: None,
             stale: false,
             progressed: false,
         }
@@ -483,6 +494,9 @@ pub struct ViewInputs<'a> {
 /// How many shelves the library shows above the grid.
 const SHELVES: usize = 4;
 
+/// How many titles a title page's "More like this" row offers.
+const SIMILAR: usize = 12;
+
 impl LibraryView {
     fn refresh(&mut self, library: &Library, inputs: ViewInputs<'_>) {
         use pstr_core::library::Title;
@@ -506,6 +520,7 @@ impl LibraryView {
         }
         let metadata = inputs.metadata;
         if self.stale {
+            self.similar = None;
             let all: Vec<&Title> = library.titles.iter().collect();
             self.franchises = pstr_core::franchise::group(&all, metadata)
                 .into_iter()
@@ -533,6 +548,7 @@ impl LibraryView {
             self.shelves = pstr_core::shelves::home(
                 &library.titles,
                 metadata,
+                inputs.names,
                 inputs.list,
                 inputs.first_seen,
                 inputs.now,
@@ -1722,7 +1738,10 @@ impl App {
             }
             Action::WatchToEnd => self.up_next.dismissed = true,
             Action::FocusSearch => {
-                if !matches!(self.page, Page::Library | Page::Title(_)) {
+                if !matches!(
+                    self.page,
+                    Page::Library | Page::Title(_) | Page::Browse { .. }
+                ) {
                     self.page = Page::Library;
                 }
                 self.focus_search = true;
@@ -1741,8 +1760,11 @@ impl App {
                 self.my_list = self.engine.set_on_list(&key, on);
                 self.view.stale = true;
             }
-            Action::Back => match self.page {
+            Action::Back => match &self.page {
                 Page::Title(_) => self.page = Page::Library,
+                Page::Browse { from, .. } => {
+                    self.page = from.clone().map_or(Page::Library, Page::Title)
+                }
                 // Back out of a search before out of anything else: it is the
                 // last thing the viewer did.
                 Page::Library if !self.search.is_empty() => self.search.clear(),
@@ -2131,7 +2153,10 @@ impl App {
             );
             ui.add_space(theme::space::L);
 
-            let on_library = matches!(self.page, Page::Library | Page::Title(_));
+            let on_library = matches!(
+                self.page,
+                Page::Library | Page::Title(_) | Page::Browse { .. }
+            );
             let active = self
                 .downloads
                 .iter()
@@ -2452,6 +2477,18 @@ impl eframe::App for App {
                     now: crate::engine::unix_now(),
                 },
             );
+            // After the refresh, which forgets it when the library changed.
+            if let Page::Title(key) = &self.page
+                && self.view.similar.as_ref().is_none_or(|(of, _)| of != key)
+            {
+                let keys = pstr_core::discover::more_like(
+                    key,
+                    &self.library.titles,
+                    &self.metadata,
+                    SIMILAR,
+                );
+                self.view.similar = Some((key.clone(), keys));
+            }
 
             let crawl = self.crawling.then(|| crawl_label(&self.crawl_progress));
             let App {
@@ -2580,12 +2617,30 @@ impl eframe::App for App {
                             key,
                             ui::title::Context {
                                 franchise: view.franchises.get(key.as_str()).map(Vec::as_slice),
+                                similar: view
+                                    .similar
+                                    .as_ref()
+                                    .filter(|(of, _)| of == key)
+                                    .map(|(_, keys)| keys.as_slice())
+                                    .unwrap_or_default(),
                                 on_list: view.listed.contains(key.as_str()),
                             },
                             ui::title::OfflineView {
                                 downloads,
                                 files: offline_files,
                             },
+                            &mut actions,
+                        ),
+                        Page::Browse { facet, from } => ui::library::browse(
+                            ui,
+                            &mut art,
+                            library,
+                            ui::library::Browsing {
+                                facet,
+                                from: from.as_deref(),
+                            },
+                            view,
+                            engine.appearance().tiles,
                             &mut actions,
                         ),
                         Page::Shares => ui::shares::show(
@@ -2939,7 +2994,9 @@ fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>)
         }
         if input.consume_key(Modifiers::ALT, Key::ArrowLeft)
             || input.pointer.button_pressed(egui::PointerButton::Extra1)
-            || (!typing && matches!(page, Page::Title(_)) && input.key_pressed(Key::Escape))
+            || (!typing
+                && matches!(page, Page::Title(_) | Page::Browse { .. })
+                && input.key_pressed(Key::Escape))
             || (!typing && *page == Page::Library && input.key_pressed(Key::Backspace))
         {
             actions.push(Action::Back);

@@ -11,6 +11,7 @@ pub mod browse;
 pub mod catalog;
 pub mod chapters;
 pub mod config;
+pub mod discover;
 pub mod error;
 pub mod franchise;
 pub mod language;

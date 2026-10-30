@@ -420,19 +420,33 @@ struct StatusChip: View {
     }
 }
 
-/// Something the title is filed under — a genre — as a small rounded label.
-/// Android's `GenreChip`.
+/// Something the title is filed under — a genre, a studio — as a small rounded
+/// label, which opens every title sharing it when given an action. Android's
+/// `GenreChip`.
 struct GenreChip: View {
     @Environment(\.scheme) private var scheme
     let text: String
+    var action: (() -> Void)?
+
+    init(text: String, action: (() -> Void)? = nil) {
+        self.text = text
+        self.action = action
+    }
 
     var body: some View {
-        Text(text)
+        let label = Text(text)
             .textStyle(.labelMedium)
             .foregroundStyle(scheme.onSurface)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 12))
+        if let action {
+            Button(action: action) { label }
+                .buttonStyle(.plain)
+                .accessibilityHint("Browse \(text)")
+        } else {
+            label
+        }
     }
 }
 

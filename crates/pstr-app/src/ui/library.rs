@@ -123,7 +123,51 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
                 return;
             }
 
-            grid(ui, art, &matches, view, tiles, actions);
+            grid(ui, art, &matches, view, tiles, true, actions);
+        });
+}
+
+/// What a chip on a title page opened.
+pub struct Browsing<'a> {
+    pub facet: &'a pstr_core::discover::Facet,
+    /// The title it was opened from, which is where back goes.
+    pub from: Option<&'a str>,
+}
+
+/// Every title sharing a genre, a studio or a director, as the library grid.
+pub fn browse(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    library: &Library,
+    browsing: Browsing<'_>,
+    view: &LibraryView,
+    tiles: Tiles,
+    actions: &mut Vec<Action>,
+) {
+    let Browsing { facet, from } = browsing;
+    let back = from
+        .and_then(|key| library.get(key))
+        .map_or("Library", |title| art.name(title))
+        .to_owned();
+    if ui::title::back_link(ui, &back).clicked() {
+        actions.push(Action::Back);
+    }
+    ui.add_space(theme::space::S);
+    let keys = facet.titles(&library.titles, art.metadata);
+    let titles: Vec<&Title> = keys.iter().filter_map(|key| library.get(key)).collect();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.label(ui::muted(facet.kind()));
+            ui.label(theme::Role::Display.rich(facet.name()).color(theme::text()));
+            ui.label(ui::muted(plural(titles.len(), "title")));
+            ui.add_space(theme::space::L);
+            if titles.is_empty() {
+                // A recrawl or a new match took the last one away.
+                ui.label(ui::muted("Nothing in the library has this any more."));
+                return;
+            }
+            grid(ui, art, &titles, view, tiles, false, actions);
         });
 }
 
@@ -740,12 +784,15 @@ fn continue_row(
 }
 
 /// Every title, wrapped to the window.
+/// `titles` as a wall of tiles. `folding` says they are the library grid's
+/// own, whose folded franchises `view` counts.
 fn grid(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
     titles: &[&Title],
     view: &LibraryView,
     tiles: Tiles,
+    folding: bool,
     actions: &mut Vec<Action>,
 ) {
     let (minimum, aspect) = tile_shape(tiles);
@@ -780,6 +827,7 @@ fn grid(
                 let folded = view
                     .matches
                     .get(row * grid.columns + column)
+                    .filter(|_| folding)
                     .and_then(|index| view.folded.get(index))
                     .copied();
                 let response = ui::card(

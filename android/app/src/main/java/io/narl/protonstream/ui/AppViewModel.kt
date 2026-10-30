@@ -28,6 +28,7 @@ import io.narl.protonstream.native.NativeRuntime
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.AppearanceState
 import uniffi.pstr_android.ArrangementRecord
+import uniffi.pstr_android.BrowseFacet
 import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.ShareRecord
@@ -636,6 +637,16 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             reload()
         }
     }
+
+    /** The keys of the titles most like [key], best first; none if the engine cannot say. */
+    suspend fun moreLike(key: String): List<String> =
+        runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().moreLike(key) } }.getOrDefault(emptyList())
+
+    /** The keys of every title [facet] stands for, in library order. */
+    suspend fun browse(facet: BrowseFacet): List<String> =
+        runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().browse(facet) } }
+            .onFailure(::reportError)
+            .getOrDefault(emptyList())
 
         fun setTitleWatched(title: TitleRecord, watched: Boolean) =
         markEpisodes(title.seasons.flatMap { it.episodes }, watched, title.displayName)

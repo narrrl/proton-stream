@@ -111,6 +111,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import uniffi.pstr_android.BrowseFacet
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
@@ -118,6 +119,7 @@ import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TitleType
 import uniffi.pstr_android.airingCountdown
+import uniffi.pstr_android.facetKind
 
 /**
  * How many shows the continue-watching shelf holds.
@@ -1062,3 +1064,72 @@ internal fun TitleRecord.countdown(now: Long = System.currentTimeMillis() / 1000
     val episode = nextEpisode ?: return null
     return airingCountdown(episode, at, now)
 }
+
+/**
+ * Every title sharing a genre, a studio or a director: what a chip on a title
+ * page opens. The desktop's `library::browse`.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun BrowseScreen(
+    facet: BrowseFacet,
+    titles: List<TitleRecord>,
+    onBack: () -> Unit,
+    onTitle: (TitleRecord) -> Unit,
+    padding: PaddingValues,
+) {
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+            },
+            title = {
+                Column {
+                    Text(
+                        facetKind(facet),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(facet.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            },
+            colors = pageBarColors(),
+        )
+        if (titles.isEmpty()) {
+            // A recrawl or a new match took the last one away.
+            Box(Modifier.padding(padding)) {
+                EmptyState(facet.label, "Nothing in the library has this any more.")
+            }
+            return@Column
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(108.dp),
+            modifier = Modifier.fillMaxSize().padding(padding),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        ) {
+            item(key = "count", span = { GridItemSpan(maxLineSpan) }) {
+                Text(
+                    if (titles.size == 1) "1 title" else "${titles.size} titles",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            items(titles, key = { it.key }) { title ->
+                PosterTile(title, onClick = { onTitle(title) }, onLongClick = { onTitle(title) }, shared = false)
+            }
+        }
+    }
+}
+
+/** The name a [BrowseFacet] stands for: the chip's text and its page's heading. */
+internal val BrowseFacet.label: String
+    get() = when (this) {
+        is BrowseFacet.Genre -> name
+        is BrowseFacet.Studio -> name
+        is BrowseFacet.Person -> name
+    }

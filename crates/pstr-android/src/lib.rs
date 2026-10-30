@@ -356,6 +356,26 @@ pub enum TitleNamesChoice {
     Romaji,
 }
 
+/// What a genre, studio or director chip opens: the shared
+/// `pstr_core::discover::Facet`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum BrowseFacet {
+    Genre { name: String },
+    Studio { name: String },
+    Person { name: String },
+}
+
+impl BrowseFacet {
+    fn core(&self) -> pstr_core::discover::Facet {
+        use pstr_core::discover::Facet;
+        match self {
+            Self::Genre { name } => Facet::Genre(name.clone()),
+            Self::Studio { name } => Facet::Studio(name.clone()),
+            Self::Person { name } => Facet::Person(name.clone()),
+        }
+    }
+}
+
 /// The shared `pstr_core::browse::Filter`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum LibraryFilter {
@@ -479,9 +499,6 @@ pub fn picture_mood(pixels: Vec<u32>) -> Option<u32> {
     .map(pstr_core::appearance::Rgb::argb)
 }
 
-/// The page colour `background` tinted by a picture's [`picture_mood`], for
-/// the veils over that picture. All `0xAARRGGBB`; see
-/// `pstr_core::appearance::mood_veil`.
 /// What an airing show's tile says about its next episode, `Ep 8 · in 2 d`;
 /// see `pstr_core::news::countdown`.
 #[uniffi::export]
@@ -489,6 +506,16 @@ pub fn airing_countdown(episode: u32, at: i64, now: i64) -> String {
     pstr_core::news::countdown(episode, at, now)
 }
 
+/// What kind of thing a [`BrowseFacet`] names — `Genre`, `Studio`,
+/// `Director` — for over the heading of its page.
+#[uniffi::export]
+pub fn facet_kind(facet: BrowseFacet) -> String {
+    facet.core().kind().to_owned()
+}
+
+/// The page colour `background` tinted by a picture's [`picture_mood`], for
+/// the veils over that picture. All `0xAARRGGBB`; see
+/// `pstr_core::appearance::mood_veil`.
 #[uniffi::export]
 pub fn mood_veil(background: u32, mood: u32, light: bool) -> u32 {
     let rgb = |argb: u32| {
@@ -1700,6 +1727,7 @@ impl AndroidEngine {
                 pstr_core::shelves::home(
                     &cached.library.titles,
                     &cached.metadata,
+                    cached.names,
                     &cached.list,
                     &cached.first_seen,
                     now(),
@@ -1725,6 +1753,21 @@ impl AndroidEngine {
                 shelves,
             }
         })
+    }
+
+    /// The keys of the titles most like `key`, best first: a title page's
+    /// "More like this" row. Worked out on asking rather than for every
+    /// record, since it compares the title with the whole library.
+    pub fn more_like(&self, key: String) -> Result<Vec<String>, BridgeError> {
+        self.with_library(|cached| {
+            pstr_core::discover::more_like(&key, &cached.library.titles, &cached.metadata, SIMILAR)
+        })
+    }
+
+    /// The keys of every title `facet` stands for, in library order.
+    pub fn browse(&self, facet: BrowseFacet) -> Result<Vec<String>, BridgeError> {
+        let facet = facet.core();
+        self.with_library(|cached| facet.titles(&cached.library.titles, &cached.metadata))
     }
 
     /// Put a title on My List or take it off. Refused when the list on disk
@@ -3604,6 +3647,9 @@ fn sort_choice(sort: LibrarySort) -> Sort {
 /// desktop's four, because on a phone each is a screen's height.
 const SHELVES: usize = 3;
 
+/// How many titles a title page's "More like this" row offers.
+const SIMILAR: usize = 12;
+
 fn appearance_choice(record: AppearanceRecord) -> Appearance {
     Appearance {
         flavor: match record.flavor {
@@ -4427,6 +4473,19 @@ mod tests {
             .set_on_list("sousou no frieren".into(), false)
             .expect("list");
         assert!(!engine.library(None).expect("library")[0].on_list);
+
+        // The film is Frieren's own franchise, so nothing else is like it.
+        assert!(
+            engine
+                .more_like("sousou no frieren".into())
+                .expect("similar")
+                .is_empty()
+        );
+        let genre = super::BrowseFacet::Genre {
+            name: "Drama".into(),
+        };
+        assert!(engine.browse(genre.clone()).expect("browse").is_empty());
+        assert_eq!(super::facet_kind(genre), "Genre");
 
         let _ = std::fs::remove_dir_all(root);
     }

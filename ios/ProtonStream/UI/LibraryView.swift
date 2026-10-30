@@ -801,3 +801,48 @@ extension EpisodeRecord {
 extension TitleRecord: Identifiable {
     public var id: String { key }
 }
+
+/// Every title sharing a genre, a studio or a director: what a chip on a title
+/// page opens. Android's `BrowseScreen`, the desktop's `library::browse`.
+struct BrowseView: View {
+    let facet: BrowseFacet
+    let titles: [TitleRecord]
+    let onBack: () -> Void
+    let onTitle: (TitleRecord) -> Void
+    @Environment(\.scheme) private var scheme
+
+    var body: some View {
+        TabPage(facet.label, leading: {
+            IconButton("chevron.backward", "Back", tint: scheme.onSurface, action: onBack)
+        }) {
+            if titles.isEmpty {
+                // A recrawl or a new match took the last one away.
+                EmptyState(facet.label, "Nothing in the library has this any more.")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("\(facetKind(facet: facet)) · \(titles.count == 1 ? "1 title" : "\(titles.count) titles")")
+                            .textStyle(.bodyMedium)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 12, alignment: .top)], spacing: 16) {
+                            ForEach(titles, id: \.key) { title in
+                                PosterTile(title: title)
+                                    .tapAndHold { onTitle(title) }
+                            }
+                        }
+                    }
+                    .padding(EdgeInsets(top: 8, leading: 16, bottom: 24, trailing: 16))
+                }
+            }
+        }
+    }
+}
+
+extension BrowseFacet {
+    /// The name it stands for: the chip's text and its page's heading.
+    var label: String {
+        switch self {
+        case .genre(let name), .studio(let name), .person(let name): name
+        }
+    }
+}

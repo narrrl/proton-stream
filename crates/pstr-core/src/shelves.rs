@@ -135,12 +135,17 @@ pub fn pick(
     picked
 }
 
+/// How many titles the "Because you watched" row offers.
+const BECAUSE: usize = 12;
+
 /// Every row above the library grid, in the order all three apps show them:
 /// new episodes of what is being watched, My List, what was recently added,
-/// then up to `limit` [`pick`]ed shelves.
+/// what is like the last thing finished, then up to `limit` [`pick`]ed
+/// shelves.
 pub fn home(
     titles: &[Title],
     metadata: &HashMap<String, MetadataRecord>,
+    names: crate::metadata::TitleNames,
     list: &crate::mylist::MyList,
     first_seen: &HashMap<(String, String), i64>,
     now: i64,
@@ -163,6 +168,9 @@ pub fn home(
         .into_iter()
         .chain(mine)
         .chain(news.added)
+        .chain(crate::discover::because_you_watched(
+            titles, metadata, names, BECAUSE,
+        ))
         .chain(pick(titles, metadata, limit))
         .collect()
 }
@@ -299,7 +307,15 @@ mod tests {
         list.add("a", 1);
         list.add("b", 3);
         list.add("gone", 5);
-        let rows = home(&titles, &HashMap::new(), &list, &HashMap::new(), 10, 4);
+        let rows = home(
+            &titles,
+            &HashMap::new(),
+            Default::default(),
+            &list,
+            &HashMap::new(),
+            10,
+            4,
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "My List");
         assert_eq!(rows[0].keys, ["b", "a"]);

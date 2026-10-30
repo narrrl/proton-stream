@@ -20,6 +20,8 @@ pub struct OfflineView<'a> {
 pub struct Context<'a> {
     /// The keys of its whole franchise in release order, if it has one.
     pub franchise: Option<&'a [String]>,
+    /// The keys of the titles most like it, best first.
+    pub similar: &'a [String],
     pub on_list: bool,
 }
 
@@ -32,7 +34,11 @@ pub fn show(
     offline: OfflineView<'_>,
     actions: &mut Vec<Action>,
 ) {
-    let Context { franchise, on_list } = context;
+    let Context {
+        franchise,
+        similar,
+        on_list,
+    } = context;
     let Some(title) = library.get(key) else {
         // The catalog was replaced under the page — a recrawl that dropped this
         // title. Nothing to show, so go back rather than draw an empty shell.
@@ -40,7 +46,7 @@ pub fn show(
         return;
     };
 
-    if back_link(ui).clicked() {
+    if back_link(ui, "Library").clicked() {
         actions.push(Action::Goto(Page::Library));
     }
     ui.add_space(theme::space::S);
@@ -55,7 +61,14 @@ pub fn show(
                 let members: Vec<&Title> = keys.iter().filter_map(|key| library.get(key)).collect();
                 if members.len() > 1 {
                     ui::section(ui, "In this franchise");
-                    franchise_row(ui, art, title, &members, actions);
+                    cover_row(
+                        ui,
+                        art,
+                        ("franchise", &title.key),
+                        Some(title),
+                        &members,
+                        actions,
+                    );
                     ui.add_space(theme::space::XL);
                 }
             }
@@ -137,23 +150,35 @@ pub fn show(
                 episode_row(ui, art, title, season, episode, &offline, actions);
             }
             ui.add_space(theme::space::L);
+
+            // Under the episodes rather than over them: it is where to go
+            // once this one is done, not what the page is for.
+            let similar: Vec<&Title> = similar.iter().filter_map(|key| library.get(key)).collect();
+            if !similar.is_empty() {
+                ui.add_space(theme::space::L);
+                ui::section(ui, "More like this");
+                cover_row(ui, art, ("similar", &title.key), None, &similar, actions);
+                ui.add_space(theme::space::L);
+            }
         });
 }
 
-/// Every title of the franchise, in release order, as covers — this one
-/// marked rather than left out, so the row says where it sits in the story.
-fn franchise_row(
+/// A row of covers: every title of the franchise in release order, with
+/// `current` marked rather than left out, so the row says where it sits in
+/// the story — or, with no `current`, the titles like this one.
+fn cover_row(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
-    current: &Title,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    current: Option<&Title>,
     members: &[&Title],
     actions: &mut Vec<Action>,
 ) {
-    ui::shelf(ui, ("franchise", &current.key), |ui| {
+    ui::shelf(ui, id, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = theme::CARD_GAP;
             for member in members {
-                let here = member.key == current.key;
+                let here = current.is_some_and(|current| member.key == current.key);
                 let picture = art.poster(member);
                 let found = art
                     .metadata
@@ -217,9 +242,10 @@ fn poster(ui: &mut egui::Ui, texture: &egui::TextureHandle, progress: Option<f64
 }
 
 /// "← Library", as a link rather than a button: it is navigation, and a
-/// filled button beside the page's real actions competed with them.
-fn back_link(ui: &mut egui::Ui) -> egui::Response {
-    let text = theme::Role::Label.rich(format!("{}  Library", egui_phosphor::regular::ARROW_LEFT));
+/// filled button beside the page's real actions competed with them. `to`
+/// names where it goes.
+pub(crate) fn back_link(ui: &mut egui::Ui, to: &str) -> egui::Response {
+    let text = theme::Role::Label.rich(format!("{}  {to}", egui_phosphor::regular::ARROW_LEFT));
     let response = ui.add(egui::Label::new(text.color(theme::muted())).sense(egui::Sense::click()));
     if response.hovered() {
         ui.painter().hline(
@@ -495,7 +521,7 @@ fn header(
 
             if let Some(found) = &found {
                 ui.add_space(theme::space::L);
-                description(ui, found);
+                description(ui, found, &title.key, actions);
             }
         });
     });
@@ -610,22 +636,68 @@ fn band(
 }
 
 /// What the provider had to say. Only ever drawn under a match.
-fn description(ui: &mut egui::Ui, found: &TitleMetadata) {
-    let tags = found
-        .details
-        .as_ref()
+///
+/// Its genres, studios and director are chips that open every title in the
+/// library sharing them.
+fn description(ui: &mut egui::Ui, found: &TitleMetadata, key: &str, actions: &mut Vec<Action>) {
+    use pstr_core::discover::Facet;
+    let browse = |facet: Facet| {
+        Action::Goto(Page::Browse {
+            facet,
+            from: Some(key.to_owned()),
+        })
+    };
+    let details = found.details.as_ref();
+    let tags = details
         .map(|details| details.tags.as_slice())
         .unwrap_or_default();
     if !found.genres.is_empty() || !tags.is_empty() {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             for genre in &found.genres {
-                ui::widgets::chip(ui, genre);
+                if ui::widgets::link_chip(ui, genre)
+                    .on_hover_text(format!("Every {genre} title"))
+                    .clicked()
+                {
+                    actions.push(browse(Facet::Genre(genre.clone())));
+                }
             }
             // After the genres and quieter than them: a tag is the
             // provider's community describing it, not what it is filed as.
             for tag in tags.iter().take(5) {
                 ui.label(ui::muted(tag));
+            }
+        });
+        ui.add_space(theme::space::M);
+    }
+    // Who made it, out of the grey line and onto chips, so the names lead
+    // somewhere.
+    let studios = details
+        .map(|details| &details.studios[..details.studios.len().min(2)])
+        .unwrap_or_default();
+    let directors = details
+        .map(|details| &details.directors[..details.directors.len().min(1)])
+        .unwrap_or_default();
+    if !studios.is_empty() || !directors.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (label, names, facet) in [
+                ("Studio", studios, Facet::Studio as fn(String) -> Facet),
+                ("Director", directors, Facet::Person),
+            ] {
+                if names.is_empty() {
+                    continue;
+                }
+                ui.label(ui::muted(label));
+                for name in names {
+                    if ui::widgets::link_chip(ui, name)
+                        .on_hover_text(format!("Everything in the library by {name}"))
+                        .clicked()
+                    {
+                        actions.push(browse(facet(name.clone())));
+                    }
+                }
+                ui.add_space(theme::space::S);
             }
         });
         ui.add_space(theme::space::M);
@@ -711,14 +783,11 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
         parts.push(format!("{watched} watched"));
     }
 
-    if let Some(details) = found.and_then(|found| found.details.as_ref()) {
-        if let Some(season) = details.season_label() {
-            parts.push(season);
-        }
-        parts.extend(details.studios.iter().take(2).cloned());
-        if let Some(director) = details.directors.first() {
-            parts.push(format!("dir. {director}"));
-        }
+    if let Some(season) = found
+        .and_then(|found| found.details.as_ref())
+        .and_then(|details| details.season_label())
+    {
+        parts.push(season);
     }
     if let Some(found) = found {
         if let Some(rating) = found.rating {

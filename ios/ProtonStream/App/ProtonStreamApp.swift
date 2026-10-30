@@ -89,6 +89,13 @@ struct RootView: View {
     @SceneStorage("selectedTitle") private var selectedTitleKey: String?
     @State private var incomingLink: String?
     @State private var host = PlayerHost.shared
+    /// What a genre, studio or director chip opened, over the library pane,
+    /// and the title it was opened from, which is where back goes.
+    @State private var browsing: BrowseFacet?
+    @State private var browseFrom: String?
+    @State private var browsed: [String] = []
+    /// "More like this" for the open title.
+    @State private var similar: [String] = []
 
     var body: some View {
         GeometryReader { geometry in
@@ -175,6 +182,7 @@ struct RootView: View {
     private func select(_ target: Destination) {
         destination = target
         selectedTitleKey = nil
+        browsing = nil
     }
 
     private func play(_ title: TitleRecord, _ index: Int) {
@@ -209,22 +217,45 @@ struct RootView: View {
     /// tap rather than back and in again.
     @ViewBuilder private func libraryPage(width: CGFloat) -> some View {
         let selected = selectedTitleKey.flatMap { key in model.titles.first { $0.key == key } }
-        let library = LibraryView(
-            onResume: play,
-            onTitle: { title in withAnimation(.easeOut(duration: 0.25)) { selectedTitleKey = title.key } },
-            // The form as a pasted link opens it, only with nothing in it.
-            onAddShare: {
-                incomingLink = ""
-                destination = .shares
-            },
-            onOpenSettings: { select(.settings) }
-        )
-        if width >= twoPaneWidth {
+        let twoPane = width >= twoPaneWidth
+        let open = { (title: TitleRecord) in withAnimation(.easeOut(duration: 0.25)) { selectedTitleKey = title.key } }
+        let library = Group {
+            if let browsing {
+                BrowseView(
+                    facet: browsing,
+                    titles: browsed.compactMap { key in model.titles.first { $0.key == key } },
+                    onBack: {
+                        self.browsing = nil
+                        if let browseFrom { selectedTitleKey = browseFrom }
+                    },
+                    onTitle: open
+                )
+            } else {
+                LibraryView(
+                    onResume: play,
+                    onTitle: open,
+                    // The form as a pasted link opens it, only with nothing in it.
+                    onAddShare: {
+                        incomingLink = ""
+                        destination = .shares
+                    },
+                    onOpenSettings: { select(.settings) }
+                )
+            }
+        }
+        .task(id: [browsing.map { "\($0)" } ?? "", "\(model.titles.count)"]) {
+            if let browsing {
+                browsed = await model.browse(browsing)
+            } else {
+                browsed = []
+            }
+        }
+        if twoPane {
             HStack(spacing: 0) {
                 library.frame(width: width * 0.45)
                 Rectangle().fill(scheme.outlineVariant).frame(width: 1).ignoresSafeArea()
                 Group {
-                    if let selected { titlePane(selected) } else { EmptyState("Choose a title", "Its seasons and episodes open here.") }
+                    if let selected { titlePane(selected, twoPane: true) } else { EmptyState("Choose a title", "Its seasons and episodes open here.") }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -237,7 +268,7 @@ struct RootView: View {
                     .allowsHitTesting(selected == nil)
                     .accessibilityHidden(selected != nil)
                 if let selected {
-                    titlePane(selected)
+                    titlePane(selected, twoPane: false)
                         .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .opacity.combined(with: .scale(scale: 0.9))))
                         .zIndex(1)
                 }
@@ -245,15 +276,26 @@ struct RootView: View {
         }
     }
 
-    private func titlePane(_ selected: TitleRecord) -> some View {
+    private func titlePane(_ selected: TitleRecord, twoPane: Bool) -> some View {
         TitleView(
             title: selected,
             onPlay: { _, index in host.play(selected, at: index) },
             onBack: { withAnimation(.easeOut(duration: 0.25)) { selectedTitleKey = nil } },
             franchise: selected.franchise.compactMap { key in model.titles.first { $0.key == key } },
-            onOpenTitle: { selectedTitleKey = $0.key }
+            onOpenTitle: { selectedTitleKey = $0.key },
+            moreLike: similar.compactMap { key in model.titles.first { $0.key == key } },
+            onBrowse: { facet in
+                browsing = facet
+                browseFrom = selected.key
+                // On a phone the list is under the title; the page it opens
+                // is the library pane's.
+                if !twoPane { withAnimation(.easeOut(duration: 0.25)) { selectedTitleKey = nil } }
+            }
         )
         .id(selected.key)
+        .task(id: [selected.key, "\(model.titles.count)"]) {
+            similar = await model.moreLike(selected.key)
+        }
     }
 }
 

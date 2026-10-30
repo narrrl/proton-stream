@@ -26,6 +26,8 @@ show it once.
 - **My List** has the titles you put aside to watch, the last one added first.
 - **Recently added** has the titles that arrived in the last two weeks and that you have not
   started. Their tiles say **New**. What was already there when you added a share is not new.
+- **Because you watched Frieren** has titles like the last one you watched to the end, that you
+  have not started. It needs posters and descriptions.
 - **Shelves** such as **Airing now**, **Directed by Satoshi Kon** or **From MADHOUSE** appear when
   posters and descriptions are on. The app shows at most four, and only for a director, studio or
   genre with at least three titles. On a shelf, a show that is still airing says when its next
@@ -98,6 +100,11 @@ top.
   its picture. Right-click an episode and choose **Mark
   watched up to here** to tick it and every episode before it.
 - **In this franchise** lists the other parts of the series, when posters and descriptions are on.
+- **More like this**, under the episodes, lists titles in your library that share the most with
+  this one: its director, studio, genres, tags and format. It leaves out the title's own
+  franchise, and shows one title from each other franchise. It needs posters and descriptions.
+- The genre chips under the description open a page with every title of that genre in your
+  library. So do the **Studio** and **Director** chips. Back, or **Esc**, returns to the title.
 - With posters and descriptions on, a show's logo takes the place of its name at the top of the
   page and on the library's banner, and each episode says how long it runs. A film says how long
   it runs in the line under its name.

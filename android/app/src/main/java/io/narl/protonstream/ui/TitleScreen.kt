@@ -91,6 +91,7 @@ import io.narl.protonstream.ui.theme.QuietButton
 import io.narl.protonstream.ui.theme.TonalButton
 import io.narl.protonstream.ui.theme.solid
 import androidx.compose.foundation.border
+import uniffi.pstr_android.BrowseFacet
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TitleType
 import uniffi.pstr_android.EpisodeRecord
@@ -123,6 +124,10 @@ internal fun TitleScreen(
     franchise: List<TitleRecord> = emptyList(),
     onOpenTitle: (TitleRecord) -> Unit = {},
     onSetOnList: (TitleRecord, Boolean) -> Unit = { _, _ -> },
+    /** The titles most like it, best first. */
+    moreLike: List<TitleRecord> = emptyList(),
+    /** Open every title sharing a genre, studio or director. */
+    onBrowse: (BrowseFacet) -> Unit = {},
 ) {
     val context = LocalContext.current
     val download = rememberDownload()
@@ -260,19 +265,6 @@ internal fun TitleScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
                     )
-                    // Who made it — the desktop's line of facts, on a line of
-                    // its own so neither wraps.
-                    listOfNotNull(
-                        title.studios.takeIf { it.isNotEmpty() }?.take(2)?.joinToString(", "),
-                        title.directors.firstOrNull()?.let { "dir. $it" },
-                    ).joinToString("  ·  ").takeIf(String::isNotEmpty)?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
-                    }
                     // Where the title stands, then what the files are rather
                     // than what the title is.
                     val status = statusText(title)
@@ -368,7 +360,31 @@ internal fun TitleScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            title.genres.forEach { GenreChip(it) }
+                            title.genres.forEach { genre -> GenreChip(genre) { onBrowse(BrowseFacet.Genre(genre)) } }
+                        }
+                    }
+                    // Who made it, as chips that open everything else by them:
+                    // the desktop's credits row.
+                    val studios = title.studios.take(2)
+                    val director = title.directors.take(1)
+                    if (studios.isNotEmpty() || director.isNotEmpty()) {
+                        FlowRow(
+                            Modifier.padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            itemVerticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            listOf(
+                                Triple("Studio", studios) { name: String -> BrowseFacet.Studio(name) },
+                                Triple("Director", director) { name: String -> BrowseFacet.Person(name) },
+                            ).filter { it.second.isNotEmpty() }.forEach { (label, names, facet) ->
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                names.forEach { name -> GenreChip(name) { onBrowse(facet(name)) } }
+                            }
                         }
                     }
                     if (title.tags.isNotEmpty()) {
@@ -476,6 +492,27 @@ internal fun TitleScreen(
                     }
                 }
             }
+            // Under the episodes rather than over them: where to go once this
+            // one is done, not what the page is for.
+            if (moreLike.isNotEmpty()) {
+                item(key = "more-like-this") {
+                    Column(Modifier.padding(top = 16.dp)) {
+                        Text(
+                            "More like this",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = side + 16.dp),
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(start = side + 16.dp, end = side + 16.dp, top = 10.dp),
+                        ) {
+                            items(moreLike, key = { it.key }) { other ->
+                                FranchiseTile(other, here = false) { onOpenTitle(other) }
+                            }
+                        }
+                    }
+                }
+            }
         }
         TitleBar(title.displayName, list, with(LocalDensity.current) { backdropHeight.toPx() }, onBack)
     }
@@ -546,8 +583,9 @@ private fun TitleBar(name: String, list: LazyListState, backdrop: Float, onBack:
 private val TITLE_BAR = 56.dp
 
 /**
- * One part of the franchise: its cover, what it is and when. This title's own
- * is marked rather than left out, so the row says where it sits in the story.
+ * One part of the franchise, or one title like this one: its cover, what it is
+ * and when. In the franchise row this title's own is marked rather than left
+ * out, so the row says where it sits in the story.
  */
 @Composable
 private fun FranchiseTile(title: TitleRecord, here: Boolean, onClick: () -> Unit) {

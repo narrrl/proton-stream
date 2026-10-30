@@ -6,6 +6,8 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
@@ -277,13 +279,15 @@ internal fun EpisodeRecord.heading(position: Int): String {
  * The desktop's `widgets::chip`.
  */
 @Composable
-internal fun GenreChip(text: String) {
+internal fun GenreChip(text: String, onClick: (() -> Unit)? = null) {
     Text(
         text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .then(if (onClick != null) Modifier.clickable(onClickLabel = "Browse $text", onClick = onClick) else Modifier)
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
 }

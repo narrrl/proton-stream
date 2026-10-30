@@ -447,3 +447,29 @@ pub fn chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
         })
         .response
 }
+
+/// A [`chip`] that opens something: lighter under the pointer, with a ring
+/// when keyboard focus is on it.
+pub fn link_chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let mut prepared = egui::Frame::new()
+        .corner_radius(CornerRadius::same(theme::radius::LG))
+        .inner_margin(egui::Margin::symmetric(9, 3))
+        .begin(ui);
+    prepared
+        .content_ui
+        .label(theme::Role::Caption.rich(text).color(theme::text()));
+    let response = prepared
+        .allocate_space(ui)
+        .interact(egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    prepared.frame.fill = if response.hovered() {
+        theme::card_hover()
+    } else {
+        theme::card_hover().gamma_multiply(0.8)
+    };
+    if response.has_focus() {
+        prepared.frame.stroke = egui::Stroke::new(1.5, theme::accent());
+    }
+    prepared.paint(ui);
+    response
+}

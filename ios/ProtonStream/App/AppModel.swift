@@ -548,6 +548,22 @@ final class AppModel {
         }
     }
 
+    /// The keys of the titles most like `key`, best first; none if the engine
+    /// cannot say.
+    func moreLike(_ key: String) async -> [String] {
+        (try? await run { try $0.moreLike(key: key) }) ?? []
+    }
+
+    /// The keys of every title `facet` stands for, in library order.
+    func browse(_ facet: BrowseFacet) async -> [String] {
+        do {
+            return try await run { try $0.browse(facet: facet) }
+        } catch {
+            reportError(error)
+            return []
+        }
+    }
+
     // MARK: - Watch state
 
     /// Every episode of a title watched or unwatched, with an Undo: a whole

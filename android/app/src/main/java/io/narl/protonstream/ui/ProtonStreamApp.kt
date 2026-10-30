@@ -62,6 +62,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -78,6 +79,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.WorkManager
 import io.narl.protonstream.ui.theme.QuietButton
 import io.narl.protonstream.ui.theme.accentNavigationColors
+import uniffi.pstr_android.BrowseFacet
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.SeasonRecord
@@ -135,6 +137,28 @@ fun ProtonStreamApp(
     // into the video they had just left.
     var playerMinimized by rememberSaveable { mutableStateOf(false) }
     var addingShare by remember { mutableStateOf(false) }
+    // What a genre, studio or director chip opened, over the library pane.
+    // As its two parts, which survive process recreation where the record
+    // would not.
+    var browseKind by rememberSaveable { mutableStateOf<String?>(null) }
+    var browseName by rememberSaveable { mutableStateOf("") }
+    // The title it was opened from, which is where back goes, as on the
+    // desktop.
+    var browseFrom by rememberSaveable { mutableStateOf<String?>(null) }
+    val browsing = when (browseKind) {
+        "genre" -> BrowseFacet.Genre(browseName)
+        "studio" -> BrowseFacet.Studio(browseName)
+        "person" -> BrowseFacet.Person(browseName)
+        else -> null
+    }
+    val browse = { facet: BrowseFacet ->
+        browseKind = when (facet) {
+            is BrowseFacet.Genre -> "genre"
+            is BrowseFacet.Studio -> "studio"
+            is BrowseFacet.Person -> "person"
+        }
+        browseName = facet.label
+    }
 
     val selectedTitle = state.titles.firstOrNull { it.key == selectedTitleKey }
     val playing = playingTitleKey
@@ -172,7 +196,7 @@ fun ProtonStreamApp(
             Destination.entries.forEach { item ->
                 item(
                     selected = destination == item,
-                    onClick = { destination = item; selectedTitleKey = null },
+                    onClick = { destination = item; selectedTitleKey = null; browseKind = null },
                     icon = { Icon(item.icon, contentDescription = item.label) },
                     label = { Text(item.label) },
                     colors = navigation,
@@ -211,8 +235,23 @@ fun ProtonStreamApp(
                     // library stays in view while a title is open, so moving
                     // between titles is one tap rather than back and in again.
                     Destination.Library -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                        val twoPane = maxWidth >= TWO_PANE_WIDTH
+                        val browsed by produceState(emptyList<String>(), browsing, state.titles) {
+                            value = browsing?.let { model.browse(it) }.orEmpty()
+                        }
                         val libraryPane = @Composable {
-                                LibraryScreen(
+                            browsing?.let { facet ->
+                                BrowseScreen(
+                                    facet,
+                                    browsed.mapNotNull { key -> state.titles.firstOrNull { it.key == key } },
+                                    onBack = {
+                                        browseKind = null
+                                        browseFrom?.let { selectedTitleKey = it }
+                                    },
+                                    onTitle = { selectedTitleKey = it.key },
+                                    padding = body,
+                                )
+                            } ?: LibraryScreen(
                                 state,
                                 model::search,
                                 { title, index ->
@@ -238,6 +277,9 @@ fun ProtonStreamApp(
                                 )
                         }
                         val titlePane = @Composable { selected: TitleRecord ->
+                                val similar by produceState(emptyList<String>(), selected.key, state.titles) {
+                                    value = model.moreLike(selected.key)
+                                }
                                 TitleScreen(
                                 selected,
                                 playerHost != null,
@@ -257,9 +299,17 @@ fun ProtonStreamApp(
                                 },
                                 onOpenTitle = { selectedTitleKey = it.key },
                                 onSetOnList = model::setOnList,
+                                moreLike = similar.mapNotNull { key -> state.titles.firstOrNull { it.key == key } },
+                                onBrowse = { facet ->
+                                    browse(facet)
+                                    browseFrom = selected.key
+                                    // On a phone the list is under the title;
+                                    // the page it opens is the library pane's.
+                                    if (!twoPane) selectedTitleKey = null
+                                },
                                 )
                         }
-                        if (maxWidth >= TWO_PANE_WIDTH) {
+                        if (twoPane) {
                             Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.weight(0.45f)) { libraryPane() }
                                 VerticalDivider()
