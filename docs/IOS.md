@@ -90,6 +90,10 @@ Each of these is the platform's doing, not a choice to diverge.
   a tap that missed. `PressableStyle` and `tapAndHold` (`UI/Theme/Accent.swift`)
   stand in for the ripple, and a settings page goes back by an edge strip of its
   own, as a title page does, where Android has the system back.
+- **No zoom into a title page.** iOS 18's `.navigationTransition(.zoom)` only
+  runs inside a `NavigationStack`, and the title page is shown over the library
+  by hand, so it keeps its slide in from the edge — Android's shared poster has
+  no counterpart here.
 - **Nothing is backed up**, as on Android (`allowBackup="false"`). The share
   secrets are this-device-only Keychain items, so a restored share list would
   arrive without them, and a restored `sync.json` would give two devices one sync

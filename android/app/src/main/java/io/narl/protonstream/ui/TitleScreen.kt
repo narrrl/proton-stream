@@ -5,6 +5,12 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalDensity
 import kotlin.coroutines.cancellation.CancellationException
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -174,8 +180,12 @@ internal fun TitleScreen(
     ) {
         val side = ((maxWidth - READABLE_WIDTH) / 2).coerceAtLeast(0.dp)
         val backdropHeight = minOf(maxWidth * 9f / 16f, maxHeight * 0.55f)
+        val list = rememberLazyListState()
+        var mood by remember(title.key) { mutableStateOf<Color?>(null) }
+        val veil = moodVeil(mood)
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            state = list,
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -183,26 +193,27 @@ internal fun TitleScreen(
                 // Edge to edge, fading into the page: the art is the first thing
                 // the page says, and a framed thumbnail with a margin round it read
                 // as one card among the many below it.
-                Box(Modifier.sharedArt(title.key).fillMaxWidth().height(backdropHeight)) {
-                    Backdrop(title, Modifier.fillMaxSize())
+                Box(Modifier.sharedArt(title.key).fillMaxWidth().height(backdropHeight).clipToBounds()) {
+                    // At half the speed of the page, so the picture stays
+                    // behind the page rather than being part of it.
+                    Backdrop(
+                        title,
+                        Modifier.fillMaxSize().graphicsLayer {
+                            translationY = if (list.firstVisibleItemIndex == 0) list.firstVisibleItemScrollOffset * PARALLAX else 0f
+                        },
+                        onMood = { mood = it },
+                    )
                     Box(
                         Modifier.fillMaxSize().background(
                             Brush.verticalGradient(
-                                0.45f to Color.Transparent,
+                                0.4f to Color.Transparent,
+                                // The picture's own colour on the way into the
+                                // page, as on the library's banner.
+                                0.75f to veil.copy(alpha = 0.55f),
                                 1f to MaterialTheme.colorScheme.background,
                             ),
                         ),
                     )
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier
-                            .statusBarsPadding()
-                            .padding(8.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.4f)),
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to library", tint = Color.White)
-                    }
                 }
             }
             item(key = "heading") {
@@ -439,6 +450,7 @@ internal fun TitleScreen(
                 }
             }
         }
+        TitleBar(title.displayName, list, with(LocalDensity.current) { backdropHeight.toPx() }, onBack)
     }
     if (showMatch) {
         ChangeMatchDialog(
@@ -449,6 +461,62 @@ internal fun TitleScreen(
         )
     }
 }
+
+/** How fast the backdrop moves against the page scrolling over it. */
+private const val PARALLAX = 0.5f
+
+/**
+ * The bar over the title page: only the back button while the backdrop is on
+ * screen, then — once the backdrop has scrolled away — a solid bar with the
+ * title's name, so the page still says whose episodes these are.
+ */
+@Composable
+private fun TitleBar(name: String, list: LazyListState, backdrop: Float, onBack: () -> Unit) {
+    val reach = with(LocalDensity.current) { TITLE_BAR.toPx() }
+    val solid by remember(list, backdrop) {
+        derivedStateOf {
+            if (list.firstVisibleItemIndex > 0) {
+                1f
+            } else {
+                ((list.firstVisibleItemScrollOffset - (backdrop - 2 * reach)) / reach).coerceIn(0f, 1f)
+            }
+        }
+    }
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(scheme.surfaceContainer.copy(alpha = solid))
+            .statusBarsPadding()
+            .height(TITLE_BAR),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .padding(8.dp)
+                .clip(CircleShape)
+                // A disc behind the arrow over the picture, gone once the bar
+                // is there to sit on.
+                .background(Color.Black.copy(alpha = 0.4f * (1f - solid))),
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back to library",
+                tint = lerp(Color.White, scheme.onSurface, solid),
+            )
+        }
+        Text(
+            name,
+            style = MaterialTheme.typography.titleLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(end = 16.dp).graphicsLayer { alpha = solid },
+        )
+    }
+}
+
+private val TITLE_BAR = 56.dp
 
 /**
  * One part of the franchise: its cover, what it is and when. This title's own

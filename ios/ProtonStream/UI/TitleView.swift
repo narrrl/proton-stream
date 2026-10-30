@@ -3,6 +3,12 @@ import SwiftUI
 /// How wide the page's text and controls run on a window wider than a phone.
 private let readableWidth: CGFloat = 720
 
+/// How fast the backdrop moves against the page scrolling over it.
+private let parallax: CGFloat = 0.5
+
+/// The bar over the page — Android's `TITLE_BAR`.
+private let titleBarHeight: CGFloat = 56
+
 struct TitleView: View {
     let title: TitleRecord
     let onPlay: ([EpisodeRecord], Int) -> Void
@@ -22,6 +28,10 @@ struct TitleView: View {
     // gesture is dragged, and springs back if it is let go of — Android's
     // predictive back, so the viewer sees where back goes before committing.
     @State private var backProgress: CGFloat = 0
+    /// How far the backdrop has scrolled up, which is how solid the bar is.
+    @State private var scrolled: CGFloat = 0
+    /// The backdrop's colour, once it has arrived — see `pictureMood`.
+    @State private var mood: UInt32?
 
     init(
         title: TitleRecord,
@@ -57,7 +67,7 @@ struct TitleView: View {
             let backdropHeight = min(geometry.size.width * 9 / 16, geometry.size.height * 0.55)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    backdrop(height: backdropHeight + geometry.safeAreaInsets.top, top: geometry.safeAreaInsets.top)
+                    backdrop(height: backdropHeight + geometry.safeAreaInsets.top)
                     heading(playlist: playlist, nextUp: nextUp, upNext: upNext)
                         .padding(.horizontal, side + 16)
                     if franchise.count > 1 {
@@ -85,7 +95,11 @@ struct TitleView: View {
                 .padding(.bottom, 24)
             }
             .ignoresSafeArea(edges: .top)
+            .coordinateSpace(name: "title")
             .background(scheme.background)
+            .overlay(alignment: .top) {
+                titleBar(solid: min(max((scrolled - (backdropHeight - 2 * titleBarHeight)) / titleBarHeight, 0), 1))
+            }
         }
         .scaleEffect(1 - 0.1 * backProgress)
         .clipShape(RoundedRectangle(cornerRadius: 32 * backProgress))
@@ -110,6 +124,7 @@ struct TitleView: View {
         }
         .onChange(of: title.key) {
             overviewOpen = false
+            mood = nil
             let playlist = title.playlist
             let upNext = playlist.indices.contains(nextUpIndex(playlist, continueIndex: title.continueIndex)) ? playlist[nextUpIndex(playlist, continueIndex: title.continueIndex)] : nil
             seasonIndex = title.seasons.firstIndex { $0.episodes.contains { $0.linkId == upNext?.linkId } } ?? 0
@@ -117,32 +132,71 @@ struct TitleView: View {
     }
 
     /// Edge to edge, fading into the page: the art is the first thing the page
-    /// says.
-    private func backdrop(height: CGFloat, top: CGFloat) -> some View {
-        Backdrop(title: title)
+    /// says. It moves at half the speed of the page, so the picture stays
+    /// behind the page rather than being part of it.
+    private func backdrop(height: CGFloat) -> some View {
+        Backdrop(title: title) { mood = $0 }
             .frame(height: height)
             .frame(maxWidth: .infinity)
+            .visualEffect { content, proxy in
+                content.offset(y: max(-proxy.frame(in: .named("title")).minY, 0) * parallax)
+            }
             .clipped()
             .overlay {
                 LinearGradient(
-                    stops: [.init(color: .clear, location: 0.45), .init(color: scheme.background, location: 1)],
+                    stops: [
+                        .init(color: .clear, location: 0.4),
+                        // The picture's own colour on the way into the page,
+                        // as on the library's banner.
+                        .init(color: scheme.veil(mood).opacity(0.55), location: 0.75),
+                        .init(color: scheme.background, location: 1),
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
+                .animation(Motion.arrive, value: mood)
             }
-            .overlay(alignment: .topLeading) {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.backward")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(.black.opacity(0.4), in: Circle())
-                        .frame(width: 48, height: 48)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.onChange(of: geometry.frame(in: .named("title")).minY) { _, minY in
+                        scrolled = -minY
+                    }
                 }
-                .accessibilityLabel("Back to library")
-                .padding(8)
-                .padding(.top, top)
             }
+            // Scrolled far enough to leave the lazy stack: the bar is long
+            // since solid.
+            .onDisappear { scrolled = .greatestFiniteMagnitude }
+            .onAppear { scrolled = 0 }
+    }
+
+    /// The bar over the page: only the back button while the backdrop is on
+    /// screen, then a solid bar with the title's name once it has scrolled
+    /// away, so the page still says whose episodes these are.
+    private func titleBar(solid: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(solid > 0.5 ? scheme.onSurface : .white)
+                    .frame(width: 40, height: 40)
+                    // A disc behind the arrow over the picture, gone once the
+                    // bar is there to sit on.
+                    .background(.black.opacity(0.4 * (1 - solid)), in: Circle())
+                    .frame(width: 48, height: 48)
+            }
+            .accessibilityLabel("Back to library")
+            .padding(.horizontal, 8)
+            Text(title.displayName)
+                .textStyle(.titleLarge)
+                .foregroundStyle(scheme.onSurface)
+                .lineLimit(1)
+                .opacity(solid)
+                .padding(.trailing, 16)
+            Spacer(minLength: 0)
+        }
+        .frame(height: titleBarHeight)
+        .background(scheme.surfaceContainer.opacity(solid).ignoresSafeArea(edges: .top))
+        .animation(.easeOut(duration: 0.15), value: solid > 0.5)
     }
 
     @ViewBuilder private func heading(playlist: [EpisodeRecord], nextUp: Int, upNext: EpisodeRecord?) -> some View {

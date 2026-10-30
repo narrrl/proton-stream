@@ -67,7 +67,9 @@ containers.
 
 ## A title's page
 
-Click a title to open its page. **Esc** goes back.
+Click a title to open its page. **Esc** goes back. On a phone, the picture at the top slides
+away more slowly than the page, and once it has gone a bar with the title's name stays at the
+top.
 
 - **Resume S01E03 · 12:04** continues where you stopped. **Start over** plays the episode from
   the beginning.
