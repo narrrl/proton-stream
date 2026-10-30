@@ -29,6 +29,7 @@ import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.AppearanceState
 import uniffi.pstr_android.ArrangementRecord
 import uniffi.pstr_android.BrowseFacet
+import uniffi.pstr_android.SearchExtrasRecord
 import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.ShareRecord
@@ -52,7 +53,16 @@ data class AppUiState(
     /** A crawl is running, which the banner offers to stop. */
     val crawling: Boolean = false,
     val query: String = "",
+    /**
+     * The whole library, whatever is searched for: the grid narrows to the
+     * search through [arrangement], and a title opened from a search, or from
+     * an episode it found, stays one the app can show.
+     */
     val titles: List<TitleRecord> = emptyList(),
+    /** What the search found besides titles; null with no search. */
+    val searchExtras: SearchExtrasRecord? = null,
+    /** The last few searches on this device, newest first. */
+    val recentSearches: List<String> = emptyList(),
     /**
      * The grid: [titles] ordered, each franchise folded into one tile when
      * [grouped], and the shelves above it. Null until the bridge has answered,
@@ -170,6 +180,10 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             searchQuery.debounce(300).distinctUntilChanged().collect { reloadLibrary(it) }
         }
         viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().recentSearches() } }
+                .onSuccess { recent -> mutableState.update { it.copy(recentSearches = recent) } }
+        }
+        viewModelScope.launch {
             workManager.workInfosByTagFlow(DownloadCoordinator.TAG)
                 .map { work -> work.filter { it.state.isFinished }.map { it.id }.toSet() }
                 .distinctUntilChanged()
@@ -204,6 +218,32 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     fun search(query: String) {
         mutableState.update { it.copy(query = query) }
         searchQuery.value = query
+    }
+
+    /**
+     * Keep the search being shown as one to offer again: called when a viewer
+     * opens something it found. Nothing for an empty one.
+     */
+    fun rememberSearch() {
+        val query = mutableState.value.query.takeIf(String::isNotBlank) ?: return
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    NativeRuntime.engine().run {
+                        rememberSearch(query)
+                        recentSearches()
+                    }
+                }
+            }.onSuccess { recent -> mutableState.update { it.copy(recentSearches = recent) } }
+        }
+    }
+
+    fun forgetSearches() {
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().forgetSearches() } }
+                .onSuccess { mutableState.update { it.copy(recentSearches = emptyList()) } }
+                .onFailure(::reportError)
+        }
     }
 
     fun refresh() {
@@ -889,7 +929,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 val query = current.query.takeIf(String::isNotBlank)
                 Reloaded(
                     engine.shares(),
-                    engine.library(query),
+                    engine.library(null),
                     engine.arrangement(query, current.filter, current.sort, current.grouped),
                     engine.offlineFiles(),
                     engine.metadataSettings(),
@@ -918,10 +958,14 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             withContext(Dispatchers.IO) {
                 val engine = NativeRuntime.engine()
                 val search = query.takeIf(String::isNotBlank)
-                engine.library(search) to engine.arrangement(search, current.filter, current.sort, current.grouped)
+                Triple(
+                    engine.library(null),
+                    engine.arrangement(search, current.filter, current.sort, current.grouped),
+                    search?.let(engine::searchExtras),
+                )
             }
-        }.onSuccess { (titles, arrangement) ->
-            mutableState.update { it.copy(titles = titles, arrangement = arrangement) }
+        }.onSuccess { (titles, arrangement, extras) ->
+            mutableState.update { it.copy(titles = titles, arrangement = arrangement, searchExtras = extras) }
         }.onFailure { error -> mutableState.update { it.copy(message = error.message) } }
     }
 

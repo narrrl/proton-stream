@@ -255,11 +255,14 @@ fun ProtonStreamApp(
                                 state,
                                 model::search,
                                 { title, index ->
+                                    // A search that led somewhere is one
+                                    // worth offering again.
+                                    model.rememberSearch()
                                     playingTitleKey = title.key
                                     playingIndex = index
                                     playerMinimized = false
                                 },
-                                { selectedTitleKey = it.key },
+                                { model.rememberSearch(); selectedTitleKey = it.key },
                                 model::refresh,
                                 model::setTitleWatched,
                                 model::forgetPosition,
@@ -274,6 +277,12 @@ fun ProtonStreamApp(
                                 onOpenSettings = { destination = Destination.Settings },
                                 onFilter = model::filter,
                                 onSetOnList = model::setOnList,
+                                onBrowse = { facet ->
+                                    model.rememberSearch()
+                                    browse(facet)
+                                    browseFrom = null
+                                },
+                                onForgetSearches = model::forgetSearches,
                                 )
                         }
                         val titlePane = @Composable { selected: TitleRecord ->

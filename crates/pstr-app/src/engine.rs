@@ -425,6 +425,9 @@ pub struct Engine {
     /// My List, read once at launch. `None` when the file would not parse: it
     /// is then never written over, and changing the list is refused.
     my_list: Arc<Mutex<Option<MyList>>>,
+    /// The last few searches, newest first. `None`, and never written, when
+    /// the file would not parse.
+    recent: Arc<Mutex<Option<pstr_core::recent::RecentSearches>>>,
     /// Preloaded so clicking Play never runs SQLite on egui's thread.
     track_prefs: Arc<Mutex<HashMap<String, TitleTrackPrefs>>>,
     downloads: Arc<Mutex<Downloads>>,
@@ -535,6 +538,9 @@ impl Engine {
         let my_list = pstr_core::mylist::load(&dirs)
             .inspect_err(|error| tracing::warn!("read My List: {error}"))
             .ok();
+        let recent = pstr_core::recent::load(&dirs)
+            .inspect_err(|error| tracing::warn!("read recent searches: {error}"))
+            .ok();
 
         // The TMDB key, which every provider looks for, comes out of the OS
         // credential store, and that can be a D-Bus round trip to a keyring
@@ -575,6 +581,7 @@ impl Engine {
             prefs: Arc::new(Mutex::new(prefs)),
             appearance: Arc::new(Mutex::new(appearance)),
             my_list: Arc::new(Mutex::new(my_list)),
+            recent: Arc::new(Mutex::new(recent)),
             track_prefs: Arc::new(Mutex::new(track_prefs)),
             downloads: Arc::new(Mutex::new(Downloads::default())),
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
@@ -674,6 +681,38 @@ impl Engine {
             }
         });
         saved
+    }
+
+    /// The last few searches, newest first.
+    pub fn recent_searches(&self) -> Vec<String> {
+        self.recent
+            .lock()
+            .as_ref()
+            .map(|recent| recent.queries.clone())
+            .unwrap_or_default()
+    }
+
+    /// Put `query` at the front of the recent searches, or with `None`
+    /// forget them all, and write the list off the UI thread.
+    pub fn remember_search(&self, query: Option<&str>) {
+        let changed = match (self.recent.lock().as_mut(), query) {
+            (Some(recent), Some(query)) => recent.remember(query),
+            (Some(recent), None) => !std::mem::take(&mut recent.queries).is_empty(),
+            (None, _) => false,
+        };
+        if !changed {
+            return;
+        }
+        let engine = self.clone();
+        self.runtime.spawn_blocking(move || {
+            let guard = engine.recent.lock();
+            if let Some(recent) = guard.as_ref()
+                && let Err(error) = pstr_core::recent::save(&engine.dirs, recent)
+            {
+                drop(guard);
+                engine.fail("save recent searches", error);
+            }
+        });
     }
 
     /// Change the theme and write it.

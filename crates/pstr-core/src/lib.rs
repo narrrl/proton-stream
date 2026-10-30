@@ -22,6 +22,7 @@ pub mod naming;
 pub mod news;
 pub mod prefs;
 pub mod profile;
+pub mod recent;
 pub mod shares;
 pub mod shelves;
 pub mod subtitles;

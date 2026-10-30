@@ -365,6 +365,44 @@ pub enum BrowseFacet {
     Person { name: String },
 }
 
+/// One episode a search found by its provider name.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct EpisodeMatchRecord {
+    pub title_key: String,
+    pub link_id: String,
+    /// `S01E05`.
+    pub label: String,
+    pub name: String,
+}
+
+/// A genre, studio or person a search named, with how many titles carry it.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FacetCountRecord {
+    pub facet: BrowseFacet,
+    pub count: u32,
+}
+
+/// What a search found besides titles; the shared
+/// `pstr_core::discover::Found`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SearchExtrasRecord {
+    pub episodes: Vec<EpisodeMatchRecord>,
+    /// Directors and studios.
+    pub people: Vec<FacetCountRecord>,
+    pub genres: Vec<FacetCountRecord>,
+}
+
+impl From<pstr_core::discover::Facet> for BrowseFacet {
+    fn from(facet: pstr_core::discover::Facet) -> Self {
+        use pstr_core::discover::Facet;
+        match facet {
+            Facet::Genre(name) => Self::Genre { name },
+            Facet::Studio(name) => Self::Studio { name },
+            Facet::Person(name) => Self::Person { name },
+        }
+    }
+}
+
 impl BrowseFacet {
     fn core(&self) -> pstr_core::discover::Facet {
         use pstr_core::discover::Facet;
@@ -1764,6 +1802,65 @@ impl AndroidEngine {
         })
     }
 
+    /// What `search` finds besides titles: episodes by name, and the people,
+    /// studios and genres it names.
+    pub fn search_extras(&self, search: String) -> Result<SearchExtrasRecord, BridgeError> {
+        self.with_library(|cached| {
+            let found = pstr_core::discover::find(
+                &cached.library,
+                &cached.metadata,
+                &cached.guides,
+                &search,
+            );
+            let facets = |facets: Vec<(pstr_core::discover::Facet, usize)>| {
+                facets
+                    .into_iter()
+                    .map(|(facet, count)| FacetCountRecord {
+                        facet: BrowseFacet::from(facet),
+                        count: count as u32,
+                    })
+                    .collect()
+            };
+            SearchExtrasRecord {
+                episodes: found
+                    .episodes
+                    .into_iter()
+                    .map(|hit| EpisodeMatchRecord {
+                        title_key: hit.title_key,
+                        link_id: hit.link_id,
+                        label: hit.label,
+                        name: hit.name,
+                    })
+                    .collect(),
+                people: facets(found.people),
+                genres: facets(found.genres),
+            }
+        })
+    }
+
+    /// The last few searches on this device, newest first.
+    pub fn recent_searches(&self) -> Result<Vec<String>, BridgeError> {
+        pstr_core::recent::load(&self.dirs)
+            .map(|recent| recent.queries)
+            .map_err(BridgeError::from_display)
+    }
+
+    /// Put `query` at the front of the recent searches. Refused when the
+    /// file would not parse, rather than writing a new list over it.
+    pub fn remember_search(&self, query: String) -> Result<(), BridgeError> {
+        let mut recent = pstr_core::recent::load(&self.dirs).map_err(BridgeError::from_display)?;
+        if recent.remember(&query) {
+            pstr_core::recent::save(&self.dirs, &recent).map_err(BridgeError::from_display)?;
+        }
+        Ok(())
+    }
+
+    /// Forget every recent search.
+    pub fn forget_searches(&self) -> Result<(), BridgeError> {
+        pstr_core::recent::load(&self.dirs).map_err(BridgeError::from_display)?;
+        pstr_core::recent::save(&self.dirs, &Default::default()).map_err(BridgeError::from_display)
+    }
+
     /// The keys of every title `facet` stands for, in library order.
     pub fn browse(&self, facet: BrowseFacet) -> Result<Vec<String>, BridgeError> {
         let facet = facet.core();
@@ -2645,6 +2742,7 @@ impl AndroidEngine {
             titles,
             offline: offline.into_keys().collect(),
             first_seen,
+            guides,
         };
         let answer = read(&cached);
         *self.library_cache.lock() = Some(cached);
@@ -3527,6 +3625,9 @@ struct CachedLibrary {
     offline: HashSet<(String, String)>,
     /// When each file first appeared in a crawl; see [`Catalog::first_seen`].
     first_seen: HashMap<(String, String), i64>,
+    /// What the providers said about each title's episodes, for searching
+    /// them by name.
+    guides: HashMap<String, EpisodeGuide>,
 }
 
 /// The titles whose files first appeared at or after `since`, with how many
@@ -4486,6 +4587,23 @@ mod tests {
         };
         assert!(engine.browse(genre.clone()).expect("browse").is_empty());
         assert_eq!(super::facet_kind(genre), "Genre");
+
+        // Recent searches: newest first, and forgotten on asking.
+        engine.remember_search("frieren".into()).expect("remember");
+        engine.remember_search("abyss".into()).expect("remember");
+        assert_eq!(
+            engine.recent_searches().expect("recent"),
+            ["abyss", "frieren"]
+        );
+        engine.forget_searches().expect("forget");
+        assert!(engine.recent_searches().expect("recent").is_empty());
+        assert!(
+            engine
+                .search_extras("frieren".into())
+                .expect("extras")
+                .episodes
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

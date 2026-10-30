@@ -232,14 +232,26 @@ struct RootView: View {
                 )
             } else {
                 LibraryView(
-                    onResume: play,
-                    onTitle: open,
+                    // A search that led somewhere is one worth offering again.
+                    onResume: { title, index in
+                        model.rememberSearch()
+                        play(title, index)
+                    },
+                    onTitle: { title in
+                        model.rememberSearch()
+                        open(title)
+                    },
                     // The form as a pasted link opens it, only with nothing in it.
                     onAddShare: {
                         incomingLink = ""
                         destination = .shares
                     },
-                    onOpenSettings: { select(.settings) }
+                    onOpenSettings: { select(.settings) },
+                    onBrowse: { facet in
+                        model.rememberSearch()
+                        browsing = facet
+                        browseFrom = nil
+                    }
                 )
             }
         }

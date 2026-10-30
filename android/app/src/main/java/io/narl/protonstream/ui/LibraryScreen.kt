@@ -112,6 +112,12 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import uniffi.pstr_android.BrowseFacet
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.filled.History
+import uniffi.pstr_android.FacetCountRecord
+import uniffi.pstr_android.SearchExtrasRecord
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
@@ -196,6 +202,9 @@ internal fun LibraryScreen(
     onOpenSettings: () -> Unit = {},
     onFilter: (LibraryFilter) -> Unit = {},
     onSetOnList: (TitleRecord, Boolean) -> Unit = { _, _ -> },
+    /** Open every title sharing a genre, studio or director a search named. */
+    onBrowse: (BrowseFacet) -> Unit = {},
+    onForgetSearches: () -> Unit = {},
 ) {
     val download = rememberDownload()
     val context = LocalContext.current
@@ -266,9 +275,17 @@ internal fun LibraryScreen(
             ) {
                 when {
                     state.loading -> LibrarySkeleton()
-                    state.titles.isEmpty() && state.query.isNotBlank() -> EmptyState(
+                    // Empty and with the field open: the last few searches.
+                    searching && state.query.isBlank() && state.recentSearches.isNotEmpty() -> RecentSearches(
+                        state.recentSearches,
+                        onPick = onSearch,
+                        onForget = onForgetSearches,
+                    )
+                    state.query.isNotBlank() &&
+                        state.arrangement?.tiles?.isEmpty() == true &&
+                        state.searchExtras?.isEmpty() != false -> EmptyState(
                         "Nothing matches",
-                        "No title in the library is called “${state.query.trim()}”.",
+                        "Nothing in the library is called “${state.query.trim()}”.",
                     )
                     // A share just added: say it is being looked through, rather
                     // than offer to add the one that is already filling the page.
@@ -300,6 +317,7 @@ internal fun LibraryScreen(
                         featured = if (overBanner) featured else emptyList(),
                         grid = grid,
                         onSetOnList = onSetOnList,
+                        onBrowse = onBrowse,
                     )
                 }
             }
@@ -505,6 +523,7 @@ private fun LibraryGrid(
     featured: List<TitleRecord> = emptyList(),
     grid: LazyGridState = rememberLazyGridState(),
     onSetOnList: (TitleRecord, Boolean) -> Unit = { _, _ -> },
+    onBrowse: (BrowseFacet) -> Unit = {},
 ) {
     // The arrangement names titles by key; before it has arrived, the titles
     // as they came are the grid.
@@ -622,6 +641,38 @@ private fun LibraryGrid(
                 }
             }
         }
+        // What the search found besides titles, above the titles it found.
+        state.searchExtras?.takeIf { state.query.isNotBlank() }?.let { extras ->
+            facetChips("People and studios", extras.people, onBrowse)
+            facetChips("Genres", extras.genres, onBrowse)
+            if (extras.episodes.isNotEmpty()) {
+                item(key = "search-episodes", span = { GridItemSpan(maxLineSpan) }) {
+                    Column {
+                        Text("Episodes", style = MaterialTheme.typography.titleMedium)
+                        extras.episodes.forEach { hit ->
+                            val title = byKey[hit.titleKey] ?: return@forEach
+                            val playlist = title.seasons.flatMap(SeasonRecord::episodes)
+                            val index = playlist.indexOfFirst { it.linkId == hit.linkId }
+                            if (index < 0) return@forEach
+                            ListItem(
+                                headlineContent = { Text(hit.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                supportingContent = {
+                                    Text("${title.displayName} · ${hit.label}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                },
+                                leadingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                modifier = Modifier.clickable(onClickLabel = "Play") { onResume(title, index) },
+                            )
+                        }
+                    }
+                }
+            }
+            if (tiles.isNotEmpty() && !extras.isEmpty()) {
+                item(key = "search-titles", span = { GridItemSpan(maxLineSpan) }) {
+                    Text("Titles", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
         items(tiles, key = { it.title.key }) { tile ->
             PosterTile(
                 tile.title,
@@ -629,6 +680,55 @@ private fun LibraryGrid(
                 onLongClick = { onTitleMenu(tile.title) },
                 folded = tile.folded,
             )
+        }
+    }
+}
+
+/** Whether a search found nothing besides titles. */
+internal fun SearchExtrasRecord.isEmpty(): Boolean = episodes.isEmpty() && people.isEmpty() && genres.isEmpty()
+
+/** A row of the genres, studios or people a search named, each opening its page. */
+private fun LazyGridScope.facetChips(heading: String, facets: List<FacetCountRecord>, onBrowse: (BrowseFacet) -> Unit) {
+    if (facets.isEmpty()) return
+    item(key = "search-$heading", span = { GridItemSpan(maxLineSpan) }) {
+        Column {
+            Text(heading, style = MaterialTheme.typography.titleMedium)
+            FlowRow(
+                Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                facets.forEach { found ->
+                    GenreChip("${found.facet.label} · ${found.count}") { onBrowse(found.facet) }
+                }
+            }
+        }
+    }
+}
+
+/** The last few searches, under an empty search field. */
+@Composable
+private fun RecentSearches(recent: List<String>, onPick: (String) -> Unit, onForget: () -> Unit) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
+        item(key = "heading") {
+            Text(
+                "Recent searches",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+        items(recent, key = { it }) { query ->
+            ListItem(
+                headlineContent = { Text(query) },
+                leadingContent = { Icon(Icons.Default.History, contentDescription = null) },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.clickable { onPick(query) },
+            )
+        }
+        item(key = "forget") {
+            QuietButton(onClick = onForget, modifier = Modifier.padding(horizontal = 8.dp)) {
+                Text("Clear recent searches")
+            }
         }
     }
 }

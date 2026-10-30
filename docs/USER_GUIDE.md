@@ -50,7 +50,16 @@ devices ([Account and sync](ACCOUNT_AND_SYNC.md)).
 It is on by default, and needs posters and descriptions to know what belongs together.
 
 **Search** with **Ctrl+F** or **/**. It matches every name a title has: the English one, the
-romaji one and the name of its folder.
+romaji one and the name of its folder. With posters and descriptions on, it also finds:
+
+- **People and studios**: directors and studios whose names match. Choose one to see all their
+  titles.
+- **Genres** whose names match.
+- **Episodes** whose names match. Choose one to play it.
+
+The titles it finds come after these. Click the empty search box to see your last eight
+searches. A search is kept only when you open something it found. **Clear recent searches**
+removes the list. The list stays on this device and does not sync.
 
 **Refresh** (or **F5**) reads every share again. The app also does this by itself when a share
 has not been read for 6 hours.

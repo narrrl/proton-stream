@@ -47,7 +47,7 @@ player is handed an opaque token, not a link, so no secret ends up in its log or
 
 | What | Where on Linux |
 |---|---|
-| Settings and the share list (without secrets) | `~/.config/proton-stream/` |
+| Settings, the share list (without secrets), My List and your last eight searches (`recent-searches.json`) | `~/.config/proton-stream/` |
 | The library and watch history (`catalog.db`) and downloads (`offline/`) | `~/.local/share/proton-stream/` |
 | Streamed video (`blocks/`), thumbnails and posters | `~/.cache/proton-stream/` |
 
@@ -61,6 +61,9 @@ can play them. Empty the cache in **Settings → Storage**, and delete downloads
 
 The library database holds file names and your watch history, in plain text. It holds no
 secrets.
+
+Recent searches are saved only when you open something a search found, are never synced, and
+**Clear recent searches** under the empty search box deletes them.
 
 ## Other people on the same computer
 

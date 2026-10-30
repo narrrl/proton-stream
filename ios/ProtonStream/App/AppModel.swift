@@ -41,7 +41,14 @@ final class AppModel {
     /// A crawl is running, which the banner offers to stop.
     private(set) var crawling = false
     private(set) var query = ""
+    /// The whole library, whatever is searched for: the grid narrows to the
+    /// search through `arrangement`, and a title opened from a search stays one
+    /// the app can show. Android's `AppUiState.titles`.
     var titles: [TitleRecord] = []
+    /// What the search found besides titles; nil with no search.
+    private(set) var searchExtras: SearchExtrasRecord?
+    /// The last few searches on this device, newest first.
+    private(set) var recentSearches: [String] = []
     /// The grid: `titles` ordered, each franchise folded into one tile when
     /// `grouped`, and the shelves above it. Nil until the bridge has answered,
     /// when the grid falls back to `titles` as they are.
@@ -85,6 +92,7 @@ final class AppModel {
         started = true
         reload()
         enteredForeground()
+        Task { recentSearches = (try? await run { try $0.recentSearches() }) ?? [] }
         DownloadCoordinator.shared.onFinished = { [weak self] in self?.reload() }
         DownloadCoordinator.shared.resumeQueued()
         Task {
@@ -133,6 +141,32 @@ final class AppModel {
             try? await Task.sleep(for: .milliseconds(300))
             if Task.isCancelled { return }
             await reloadLibrary(query)
+        }
+    }
+
+    /// Keep the search being shown as one to offer again: called when a viewer
+    /// opens something it found. Nothing for an empty one.
+    func rememberSearch() {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        if query.isEmpty { return }
+        Task {
+            if let recent = try? await run({ engine in
+                try engine.rememberSearch(query: query)
+                return try engine.recentSearches()
+            }) {
+                recentSearches = recent
+            }
+        }
+    }
+
+    func forgetSearches() {
+        Task {
+            do {
+                try await run { try $0.forgetSearches() }
+                recentSearches = []
+            } catch {
+                reportError(error)
+            }
         }
     }
 
@@ -840,7 +874,7 @@ final class AppModel {
                 _ = try engine.pruneOfflineFiles()
                 return Reloaded(
                     shares: try engine.shares(),
-                    titles: try engine.library(search: query),
+                    titles: try engine.library(search: nil),
                     arrangement: try engine.arrangement(search: query, filter: filter, sort: sort, grouped: grouped),
                     offline: try engine.offlineFiles(),
                     metadataSettings: try engine.metadataSettings(),
@@ -866,11 +900,16 @@ final class AppModel {
         let sort = sort
         let grouped = grouped
         do {
-            let (titles, arrangement) = try await run { engine in
-                (try engine.library(search: search), try engine.arrangement(search: search, filter: filter, sort: sort, grouped: grouped))
+            let (titles, arrangement, extras) = try await run { engine in
+                (
+                    try engine.library(search: nil),
+                    try engine.arrangement(search: search, filter: filter, sort: sort, grouped: grouped),
+                    try search.map { try engine.searchExtras(search: $0) }
+                )
             }
             self.titles = titles
             self.arrangement = arrangement
+            self.searchExtras = extras
         } catch {
             message = errorMessage(error)
         }

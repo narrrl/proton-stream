@@ -70,6 +70,125 @@ impl Facet {
     }
 }
 
+/// One episode a search found by the name the provider gave it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpisodeMatch {
+    pub title_key: String,
+    pub share_id: String,
+    pub link_id: String,
+    /// `S01E05`, as the row everywhere else says it.
+    pub label: String,
+    /// The provider's name for it.
+    pub name: String,
+}
+
+/// What a search found besides titles: episodes by name, and the people,
+/// studios and genres whose names hold the query, each with how many titles
+/// in the library carry it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Found {
+    pub episodes: Vec<EpisodeMatch>,
+    /// Directors and studios.
+    pub people: Vec<(Facet, usize)>,
+    pub genres: Vec<(Facet, usize)>,
+}
+
+impl Found {
+    pub fn is_empty(&self) -> bool {
+        self.episodes.is_empty() && self.people.is_empty() && self.genres.is_empty()
+    }
+}
+
+/// How many episodes a search lists: past this the query is too loose for a
+/// list of episodes to help.
+const EPISODES: usize = 12;
+
+/// Everything but titles that `query` finds. Nothing for a query under two
+/// letters, which would hold half of every name.
+pub fn find(
+    library: &crate::library::Library,
+    metadata: &HashMap<String, MetadataRecord>,
+    guides: &HashMap<String, crate::metadata::EpisodeGuide>,
+    query: &str,
+) -> Found {
+    let needle = query.trim().to_lowercase();
+    if needle.chars().count() < 2 {
+        return Found::default();
+    }
+    let holds = |name: &str| name.to_lowercase().contains(&needle);
+
+    let mut episodes = Vec::new();
+    'titles: for title in &library.titles {
+        let Some(guide) = guides.get(&title.key) else {
+            continue;
+        };
+        for episode in title.episodes() {
+            let node = &episode.node;
+            let Some(name) = node
+                .parsed
+                .episode
+                .and_then(|number| guide.get(node.parsed.season, number))
+                .and_then(|found| found.name.as_deref())
+                .filter(|name| holds(name))
+            else {
+                continue;
+            };
+            episodes.push(EpisodeMatch {
+                title_key: title.key.clone(),
+                share_id: node.share_id.clone(),
+                link_id: node.link_id.clone(),
+                label: episode.numbering().unwrap_or_else(|| episode.label()),
+                name: name.to_owned(),
+            });
+            if episodes.len() == EPISODES {
+                break 'titles;
+            }
+        }
+    }
+
+    let mut people: HashMap<Facet, usize> = HashMap::new();
+    let mut genres: HashMap<Facet, usize> = HashMap::new();
+    for title in &library.titles {
+        let Some(found) = metadata
+            .get(&title.key)
+            .and_then(|record| record.metadata.as_ref())
+        else {
+            continue;
+        };
+        for genre in found.genres.iter().filter(|genre| holds(genre)) {
+            *genres.entry(Facet::Genre(genre.clone())).or_default() += 1;
+        }
+        let Some(details) = &found.details else {
+            continue;
+        };
+        let made = details
+            .directors
+            .iter()
+            .map(|name| Facet::Person(name.clone()))
+            .chain(
+                details
+                    .studios
+                    .iter()
+                    .map(|name| Facet::Studio(name.clone())),
+            );
+        for facet in made.filter(|facet| holds(facet.name())) {
+            *people.entry(facet).or_default() += 1;
+        }
+    }
+    // Most titles first, then by name, so the order does not change from one
+    // keystroke to the next.
+    let ranked = |found: HashMap<Facet, usize>| {
+        let mut found: Vec<(Facet, usize)> = found.into_iter().collect();
+        found.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name().cmp(b.0.name())));
+        found
+    };
+    Found {
+        episodes,
+        people: ranked(people),
+        genres: ranked(genres),
+    }
+}
+
 /// How much one shared trait says two titles are alike. A director is close
 /// to a signature; a genre is one of three or four on every entry.
 const DIRECTOR: u32 = 4;
@@ -408,6 +527,38 @@ mod tests {
             because_you_watched(&library.titles, &HashMap::new(), TitleNames::default(), 10)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_search_finds_episodes_by_name_and_the_people_and_genres_it_names() {
+        let (library, metadata) = library(&[]);
+        let guide = crate::metadata::EpisodeGuide::new(vec![crate::metadata::EpisodeMetadata {
+            season: None,
+            number: 1,
+            absolute: None,
+            entry_season: None,
+            entry_number: None,
+            name: Some("The Journey's End".into()),
+            overview: None,
+            still_url: None,
+            air_date: None,
+            runtime: None,
+        }]);
+        let guides = HashMap::from([("frieren".to_owned(), guide)]);
+
+        let found = find(&library, &metadata, &guides, "journey");
+        assert_eq!(found.episodes.len(), 1);
+        assert_eq!(found.episodes[0].title_key, "frieren");
+        assert_eq!(found.episodes[0].name, "The Journey's End");
+
+        let found = find(&library, &metadata, &guides, "saitou");
+        assert_eq!(
+            found.people,
+            [(Facet::Person("Keiichirou Saitou".into()), 3)]
+        );
+        let found = find(&library, &metadata, &guides, "com");
+        assert_eq!(found.genres, [(Facet::Genre("Comedy".into()), 2)]);
+        assert!(find(&library, &metadata, &guides, "c").is_empty());
     }
 
     #[test]

@@ -94,6 +94,15 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
                 }
             }
 
+            if searching && !view.found.is_empty() {
+                found(ui, library, &view.found, art, actions);
+                // Found as an episode or a person but not by name: no empty
+                // heading over no titles.
+                if matches.is_empty() {
+                    return;
+                }
+            }
+
             ui.horizontal(|ui| {
                 ui::section(
                     ui,
@@ -125,6 +134,76 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
 
             grid(ui, art, &matches, view, tiles, true, actions);
         });
+}
+
+/// What a search found besides titles, above the titles it found: the
+/// people, studios and genres it names as chips, then episodes by name.
+fn found(
+    ui: &mut egui::Ui,
+    library: &Library,
+    found: &pstr_core::discover::Found,
+    art: &Art<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let chips = |ui: &mut egui::Ui,
+                 heading: &str,
+                 facets: &[(pstr_core::discover::Facet, usize)],
+                 actions: &mut Vec<Action>| {
+        if facets.is_empty() {
+            return;
+        }
+        ui::section(ui, heading);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            for (facet, count) in facets {
+                if ui::widgets::link_chip(ui, &format!("{}  ·  {count}", facet.name()))
+                    .on_hover_text(format!("{}: {}", facet.kind(), plural(*count, "title")))
+                    .clicked()
+                {
+                    actions.push(Action::Goto(Page::Browse {
+                        facet: facet.clone(),
+                        from: None,
+                    }));
+                }
+            }
+        });
+        ui.add_space(theme::space::XL);
+    };
+    chips(ui, "People and studios", &found.people, actions);
+    chips(ui, "Genres", &found.genres, actions);
+
+    if found.episodes.is_empty() {
+        return;
+    }
+    ui::section(ui, "Episodes");
+    for hit in &found.episodes {
+        let Some(title) = library.get(&hit.title_key) else {
+            continue;
+        };
+        let Some(episode) = title.episodes().find(|episode| {
+            episode.node.link_id == hit.link_id && episode.node.share_id == hit.share_id
+        }) else {
+            continue;
+        };
+        let text = format!(
+            "{}  {}  ·  {}  ·  {}",
+            egui_phosphor::regular::PLAY,
+            art.name(title),
+            hit.label,
+            hit.name
+        );
+        let response = ui
+            .add(egui::Button::selectable(false, text).frame_when_inactive(false))
+            .on_hover_text("Play this episode");
+        if response.clicked() {
+            actions.push(Action::Play(PlaybackTarget::from_node(
+                title,
+                &episode.node,
+                None,
+            )));
+        }
+    }
+    ui.add_space(theme::space::XL);
 }
 
 /// What a chip on a title page opened.

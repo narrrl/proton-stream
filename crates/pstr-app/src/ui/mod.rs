@@ -407,7 +407,15 @@ pub fn glass_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 ///
 /// Escape inside it clears it. `focus` puts the caret in it this frame — which
 /// is what `Ctrl+F` and `/` ask for from anywhere in the library.
-pub fn search_field(ui: &mut egui::Ui, search: &mut String, focus: bool) {
+///
+/// Empty and with the caret in it, it offers the `recent` searches under it.
+/// Picking one fills the box; the return says the viewer asked to forget them.
+pub fn search_field(
+    ui: &mut egui::Ui,
+    search: &mut String,
+    focus: bool,
+    recent: &[String],
+) -> bool {
     let id = egui::Id::new("library-search");
     let width = 240.0;
     let height = ui.spacing().interact_size.y;
@@ -446,7 +454,7 @@ pub fn search_field(ui: &mut egui::Ui, search: &mut String, focus: bool) {
             .id(id)
             .frame(egui::Frame::NONE)
             .hint_text(if has_focus {
-                "Titles and filenames"
+                "Titles, episodes, people"
             } else {
                 "Search   Ctrl+F"
             })
@@ -490,6 +498,56 @@ pub fn search_field(ui: &mut egui::Ui, search: &mut String, focus: bool) {
             search.clear();
         }
     }
+
+    // Kept up while the pointer is over it as well as while the box has the
+    // caret: pressing on it takes the caret away before the click lands.
+    let popup = id.with("recent");
+    let over = ui
+        .data(|data| data.get_temp::<bool>(popup))
+        .unwrap_or(false);
+    let mut forget = false;
+    if search.is_empty() && !recent.is_empty() && (response.has_focus() || over) {
+        let mut picked = None;
+        let shown = egui::Area::new(popup)
+            .order(egui::Order::Foreground)
+            .fixed_pos(outer.left_bottom() + Vec2::new(0.0, 6.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(width - 12.0);
+                    ui.label(
+                        theme::Role::Caption
+                            .rich("Recent searches")
+                            .color(theme::muted()),
+                    );
+                    for query in recent {
+                        if ui
+                            .add(
+                                egui::Button::selectable(false, query.as_str())
+                                    .frame_when_inactive(false),
+                            )
+                            .clicked()
+                        {
+                            picked = Some(query.clone());
+                        }
+                    }
+                    ui.separator();
+                    forget = ui
+                        .add(
+                            egui::Button::selectable(false, muted("Clear recent searches"))
+                                .frame_when_inactive(false),
+                        )
+                        .clicked();
+                });
+            });
+        let over = shown.response.contains_pointer();
+        ui.data_mut(|data| data.insert_temp(popup, over && !forget && picked.is_none()));
+        if let Some(query) = picked {
+            *search = query;
+        }
+    } else {
+        ui.data_mut(|data| data.remove::<bool>(popup));
+    }
+    forget
 }
 
 /// A thin bar in the accent, for how far something has got.

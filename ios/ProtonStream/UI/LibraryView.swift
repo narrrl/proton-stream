@@ -59,6 +59,8 @@ struct LibraryView: View {
     let onTitle: (TitleRecord) -> Void
     var onAddShare: () -> Void = {}
     var onOpenSettings: () -> Void = {}
+    /// Open every title sharing a genre, studio or director a search named.
+    var onBrowse: (BrowseFacet) -> Void = { _ in }
 
     // What a long press opened a menu for: a title, or a Continue watching card.
     @State private var menuFor: TitleRecord?
@@ -178,8 +180,13 @@ struct LibraryView: View {
     @ViewBuilder private func content(_ resumable: [Resumable], featured: [TitleRecord]) -> some View {
         if model.loading {
             LibrarySkeleton()
-        } else if model.titles.isEmpty && !model.query.trimmingCharacters(in: .whitespaces).isEmpty {
-            EmptyState("Nothing matches", "No title in the library is called “\(model.query.trimmingCharacters(in: .whitespaces))”.")
+        } else if searching && model.query.trimmingCharacters(in: .whitespaces).isEmpty && !model.recentSearches.isEmpty {
+            // Empty and with the field open: the last few searches.
+            recentSearches
+        } else if !model.query.trimmingCharacters(in: .whitespaces).isEmpty,
+                  model.arrangement?.tiles.isEmpty == true,
+                  model.searchExtras?.isEmpty ?? true {
+            EmptyState("Nothing matches", "Nothing in the library is called “\(model.query.trimmingCharacters(in: .whitespaces))”.")
         } else if model.titles.isEmpty, let activity = model.activity {
             // A share just added: say it is being looked through, rather than
             // offer to add the one that is already filling the page.
@@ -284,6 +291,14 @@ struct LibraryView: View {
                         Text("All titles").textStyle(.titleMedium).foregroundStyle(scheme.onSurface).padding(.top, 8)
                     }
                 }
+                // What the search found besides titles, above the titles it
+                // found.
+                if !browsing, let extras = model.searchExtras {
+                    searchExtras(extras, byKey: byKey)
+                    if !tiles.isEmpty && !extras.isEmpty {
+                        Text("Titles").textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
+                    }
+                }
                 if browsing {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -314,6 +329,71 @@ struct LibraryView: View {
         .coordinateSpace(name: "library")
         .refreshable { await model.crawlNow(nil) }
         .scrollDismissesKeyboard(.immediately)
+    }
+
+    /// The people, studios and genres a search named as chips, then the
+    /// episodes it found by name. Android's `facetChips` and its episode rows.
+    @ViewBuilder private func searchExtras(_ extras: SearchExtrasRecord, byKey: [String: TitleRecord]) -> some View {
+        ForEach([("People and studios", extras.people), ("Genres", extras.genres)], id: \.0) { heading, facets in
+            if !facets.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(heading).textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
+                    FlowLayout(spacing: 6) {
+                        ForEach(facets, id: \.facet.label) { found in
+                            GenreChip(text: "\(found.facet.label) · \(found.count)") { onBrowse(found.facet) }
+                        }
+                    }
+                }
+            }
+        }
+        if !extras.episodes.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Episodes").textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
+                ForEach(extras.episodes, id: \.linkId) { hit in
+                    if let title = byKey[hit.titleKey],
+                       let index = title.playlist.firstIndex(where: { $0.linkId == hit.linkId }) {
+                        Button { onResume(title, index) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "play.fill").foregroundStyle(scheme.onSurfaceVariant)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(hit.name).textStyle(.bodyLarge).foregroundStyle(scheme.onSurface).lineLimit(1)
+                                    Text("\(title.displayName) · \(hit.label)")
+                                        .textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Play")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The last few searches, under an empty search field.
+    private var recentSearches: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Recent searches").textStyle(.titleMedium).foregroundStyle(scheme.onSurface).padding(.vertical, 8)
+                ForEach(model.recentSearches, id: \.self) { query in
+                    Button { model.search(query) } label: {
+                        Label(query, systemImage: "clock.arrow.circlepath")
+                            .textStyle(.bodyLarge)
+                            .foregroundStyle(scheme.onSurface)
+                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button("Clear recent searches") { model.forgetSearches() }
+                    .buttonStyle(.quiet)
+                    .padding(.top, 8)
+            }
+            .padding(.horizontal, 16)
+        }
     }
 
     private func longPressed(_ open: () -> Void) {
@@ -845,4 +925,9 @@ extension BrowseFacet {
         case .genre(let name), .studio(let name), .person(let name): name
         }
     }
+}
+
+extension SearchExtrasRecord {
+    /// Whether a search found nothing besides titles.
+    var isEmpty: Bool { episodes.isEmpty && people.isEmpty && genres.isEmpty }
 }

@@ -427,6 +427,8 @@ pub struct LibraryView {
     pub badges: HashMap<String, String>,
     /// The keys on My List.
     pub listed: std::collections::HashSet<String>,
+    /// What the search found besides titles.
+    pub found: pstr_core::discover::Found,
     /// "More like this" for the title page open, worked out once per title:
     /// its key, and the keys of the titles like it.
     pub similar: Option<(String, Vec<String>)>,
@@ -468,6 +470,7 @@ impl Default for LibraryView {
             badges: HashMap::new(),
             listed: std::collections::HashSet::new(),
             similar: None,
+            found: pstr_core::discover::Found::default(),
             stale: false,
             progressed: false,
         }
@@ -488,6 +491,9 @@ pub struct ViewInputs<'a> {
     pub list: &'a MyList,
     /// When each file first appeared in a crawl, for what is new.
     pub first_seen: &'a HashMap<(String, String), i64>,
+    /// What the providers said about each title's episodes, for searching
+    /// them by name.
+    pub guides: &'a HashMap<String, EpisodeGuide>,
     pub now: i64,
 }
 
@@ -614,6 +620,9 @@ impl LibraryView {
             self.history = ui::history::entries(library);
             self.resumable = Self::resumable(library);
             self.badges = Self::badges(library, &inputs);
+        }
+        if self.query != inputs.query || self.stale {
+            self.found = pstr_core::discover::find(library, metadata, inputs.guides, inputs.query);
         }
         self.query = inputs.query.to_owned();
         self.stale = false;
@@ -1599,6 +1608,15 @@ impl App {
     }
 
     fn apply(&mut self, ctx: &egui::Context, action: Action) {
+        // A search that led somewhere is one worth offering again.
+        if self.page == Page::Library
+            && matches!(
+                action,
+                Action::Goto(Page::Title(_) | Page::Browse { .. }) | Action::Play(_)
+            )
+        {
+            self.engine.remember_search(Some(&self.search));
+        }
         match action {
             Action::Goto(page) => self.page = page,
             Action::Play(mut target) => {
@@ -2221,7 +2239,9 @@ impl App {
 
                 if on_library && !self.library.is_empty() {
                     ui.add_space(theme::space::M);
-                    ui::search_field(ui, search, focus_search);
+                    if ui::search_field(ui, search, focus_search, &self.engine.recent_searches()) {
+                        self.engine.remember_search(None);
+                    }
                 }
             });
         });
@@ -2474,6 +2494,7 @@ impl eframe::App for App {
                     offline: &self.offline_files,
                     list: &self.my_list,
                     first_seen: &self.first_seen,
+                    guides: &self.episodes,
                     now: crate::engine::unix_now(),
                 },
             );
