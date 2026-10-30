@@ -238,6 +238,20 @@ impl TitleDetails {
         self.status.as_deref() == Some("RELEASING")
     }
 
+    /// [`TitleDetails::status`] said for a person: `Airing`, `Finished`,
+    /// `Upcoming`, `On hiatus` or `Cancelled`. `None` for a status nobody
+    /// filled in, or one this build does not know.
+    pub fn status_label(&self) -> Option<&'static str> {
+        Some(match self.status.as_deref()? {
+            "RELEASING" => "Airing",
+            "FINISHED" => "Finished",
+            "NOT_YET_RELEASED" => "Upcoming",
+            "HIATUS" => "On hiatus",
+            "CANCELLED" => "Cancelled",
+            _ => return None,
+        })
+    }
+
     /// The next episode and when it airs, when that is still after `now`.
     pub fn next_airing(&self, now: i64) -> Option<(u32, i64)> {
         let at = self.next_airing_at.filter(|at| *at > now)?;
@@ -588,6 +602,24 @@ impl Default for MetadataConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_status_is_said_for_a_person_and_an_unknown_one_is_not_said_at_all() {
+        let status = |value: &str| {
+            TitleDetails {
+                status: Some(value.to_owned()),
+                ..TitleDetails::default()
+            }
+            .status_label()
+        };
+        assert_eq!(status("RELEASING"), Some("Airing"));
+        assert_eq!(status("FINISHED"), Some("Finished"));
+        assert_eq!(status("NOT_YET_RELEASED"), Some("Upcoming"));
+        assert_eq!(status("HIATUS"), Some("On hiatus"));
+        assert_eq!(status("CANCELLED"), Some("Cancelled"));
+        assert_eq!(status("SOMETHING_NEW"), None);
+        assert_eq!(TitleDetails::default().status_label(), None);
+    }
 
     fn metadata() -> TitleMetadata {
         TitleMetadata {

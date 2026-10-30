@@ -223,19 +223,21 @@ struct TitleView: View {
             }
             Text(factLine)
                 .textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 6)
-            // Who made it, and whether more is coming.
+            // Who made it.
             let makers: [String?] = [
                 title.studios.isEmpty ? nil : title.studios.prefix(2).joined(separator: ", "),
                 title.directors.first.map { "dir. \($0)" },
-                airingNote(title),
             ]
             let facts = makers.compactMap { $0 }.joined(separator: "  ·  ")
             if !facts.isEmpty {
                 Text(facts).textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 2)
             }
-            // What the files are, rather than what the title is.
-            if !title.quality.isEmpty {
+            // Where the title stands, then what the files are rather than
+            // what the title is.
+            let status = statusText(title)
+            if !title.quality.isEmpty || status != nil {
                 HStack(spacing: 4) {
+                    if let status { StatusChip(text: status.text, live: status.live).padding(.trailing, 4) }
                     ForEach(title.quality, id: \.self) { SpecBadge(text: $0) }
                 }
                 .padding(.top, 8)
@@ -330,11 +332,34 @@ struct TitleView: View {
 
     private func seasonChips(season: SeasonRecord?, side: CGFloat) -> some View {
         HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    // By position: two seasons can share a label.
-                    ForEach(Array(title.seasons.enumerated()), id: \.offset) { index, entry in
-                        FilterChip(label: entry.label, selected: index == seasonIndex) { seasonIndex = index }
+            if title.seasons.count > seasonChipsMax {
+                // A long-running show's row of chips is a scroll of its own;
+                // past a handful it is a list to pick from.
+                Menu {
+                    Picker("Season", selection: $seasonIndex) {
+                        ForEach(Array(title.seasons.enumerated()), id: \.offset) { index, entry in
+                            Text(entry.label).tag(index)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(title.seasons.indices.contains(seasonIndex) ? title.seasons[seasonIndex].label : "")
+                        Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold))
+                    }
+                    .textStyle(.labelLarge)
+                    .foregroundStyle(scheme.onSecondaryContainer)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(scheme.secondaryContainer, in: RoundedRectangle(cornerRadius: Corner.standard))
+                }
+                Spacer(minLength: 0)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        // By position: two seasons can share a label.
+                        ForEach(Array(title.seasons.enumerated()), id: \.offset) { index, entry in
+                            FilterChip(label: entry.label, selected: index == seasonIndex) { seasonIndex = index }
+                        }
                     }
                 }
             }
@@ -407,15 +432,20 @@ private struct FranchiseTile: View {
     }
 }
 
-/// "episode 7 on Sat 11 Oct" while one is due, "airing" while it is airing
-/// with no date yet, else nothing.
-private func airingNote(_ title: TitleRecord) -> String? {
-    if let at = title.nextAiringAt, let episode = title.nextEpisode {
-        let format = DateFormatter()
-        format.setLocalizedDateFormatFromTemplate("EEE d MMM")
-        return "episode \(episode) on " + format.string(from: Date(timeIntervalSince1970: TimeInterval(at)))
-    }
-    return title.airing ? "airing" : nil
+/// The most seasons picked from a row of chips; past it, a list. Android's
+/// `SEASON_CHIPS`.
+private let seasonChipsMax = 5
+
+/// What the status chip says — "Airing · episode 7 Sat 11 Oct", "Finished" —
+/// and whether more is coming. Android's `statusText`.
+func statusText(_ title: TitleRecord) -> (text: String, live: Bool)? {
+    let next = title.nextAiringAt.flatMap { at in title.nextEpisode.map { (episode: $0, at: at) } }
+    guard let label = title.status ?? (next != nil || title.airing ? "Airing" : nil) else { return nil }
+    let live = next != nil || title.airing
+    guard let next else { return (label, live) }
+    let format = DateFormatter()
+    format.setLocalizedDateFormatFromTemplate("EEE d MMM")
+    return ("\(label)  ·  episode \(next.episode) " + format.string(from: Date(timeIntervalSince1970: TimeInterval(next.at))), live)
 }
 
 /// One of the title's secondary actions: an icon with its name under it.
@@ -507,6 +537,19 @@ private struct EpisodeRow: View {
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .overlay(alignment: .bottom) {
                         if let progress = episode.progress, !episode.watched { AccentProgress(progress: progress) }
+                    }
+                    // Seen, said on the picture as well as by the mark at the
+                    // row's end: a season is scanned by its stills.
+                    .overlay(alignment: .topTrailing) {
+                        if episode.watched {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(scheme.onPrimary)
+                                .frame(width: 18, height: 18)
+                                .background(scheme.primary, in: Circle())
+                                .padding(5)
+                                .accessibilityHidden(true)
+                        }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: Corner.standard))
                 VStack(alignment: .leading, spacing: 2) {

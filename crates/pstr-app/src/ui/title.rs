@@ -85,7 +85,27 @@ pub fn show(
                         .enumerate()
                         .map(|(index, label)| (index, label.as_str()))
                         .collect();
-                    if let Some(index) = ui::widgets::segmented(ui, picked, &choices) {
+                    // A long-running show's row of pills ran off the page;
+                    // past a handful it is a list to pick from instead.
+                    let chosen = if choices.len() > SEASON_PILLS {
+                        egui::ComboBox::from_id_salt(("season-list", &title.key))
+                            .selected_text(labels[picked].as_str())
+                            .height(360.0)
+                            .show_ui(ui, |ui| {
+                                let mut chosen = None;
+                                for &(index, label) in &choices {
+                                    if ui.selectable_label(index == picked, label).clicked() {
+                                        chosen = Some(index);
+                                    }
+                                }
+                                chosen
+                            })
+                            .inner
+                            .flatten()
+                    } else {
+                        ui::widgets::segmented(ui, picked, &choices)
+                    };
+                    if let Some(index) = chosen {
                         picked = index;
                         ui.data_mut(|data| data.insert_temp(picked_id, index));
                     }
@@ -348,11 +368,22 @@ fn header(
             // What the files are, rather than what the title is: set apart
             // from the line above as small outlined marks, the way a box
             // prints them.
+            //
+            // After where the title stands, which is the one fact here that
+            // changes week to week.
             let quality = title.quality().badges();
-            if !quality.is_empty() {
+            let status = found
+                .as_ref()
+                .and_then(|found| found.details.as_ref())
+                .and_then(|details| status_text(details, now()));
+            if !quality.is_empty() || status.is_some() {
                 ui.add_space(theme::space::XS);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = theme::space::XS;
+                    if let Some((text, live)) = &status {
+                        ui::widgets::status_chip(ui, text, *live);
+                        ui.add_space(theme::space::XS);
+                    }
                     for badge in quality {
                         ui::widgets::spec_badge(ui, badge);
                     }
@@ -678,21 +709,6 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
         if let Some(director) = details.directors.first() {
             parts.push(format!("dir. {director}"));
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs() as i64);
-        if let Some((episode, at)) = details.next_airing(now) {
-            let when = chrono::DateTime::from_timestamp(at, 0)
-                .map(|at| {
-                    at.with_timezone(&chrono::Local)
-                        .format("%a %-d %b, %H:%M")
-                        .to_string()
-                })
-                .unwrap_or_default();
-            parts.push(format!("episode {episode} airs {when}"));
-        } else if details.is_airing() {
-            parts.push("airing".to_owned());
-        }
     }
     if let Some(found) = found {
         if let Some(rating) = found.rating {
@@ -709,6 +725,37 @@ fn meta_line(title: &Title, found: Option<&TitleMetadata>) -> String {
         }
     }
     parts.join("  ·  ")
+}
+
+/// The most seasons picked from a row of pills; past it, a list.
+const SEASON_PILLS: usize = 5;
+
+/// Unix seconds, now.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64)
+}
+
+/// What the status chip says — `Airing · episode 8 Sat 1 Nov, 14:00`,
+/// `Finished` — and whether more is coming.
+fn status_text(details: &pstr_core::metadata::TitleDetails, now: i64) -> Option<(String, bool)> {
+    let next = details.next_airing(now);
+    let label = details.status_label().or(next.map(|_| "Airing"))?;
+    let live = next.is_some() || details.is_airing();
+    Some(match next {
+        Some((episode, at)) => {
+            let when = chrono::DateTime::from_timestamp(at, 0)
+                .map(|at| {
+                    at.with_timezone(&chrono::Local)
+                        .format("%a %-d %b, %H:%M")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            (format!("{label}  ·  episode {episode} {when}"), live)
+        }
+        None => (label.to_owned(), live),
+    })
 }
 
 /// How big an episode's still is drawn.
@@ -1000,6 +1047,21 @@ pub(crate) fn still(
         theme::accent_fill(&painter, played, radius, 0.0);
     }
 
+    // Seen, said on the picture as well as by the mark at the row's end: a
+    // season is scanned by its stills, and a dimmed one alone read as one that
+    // had not loaded.
+    if watched {
+        let corner = rect.right_top() + egui::vec2(-14.0, 14.0);
+        painter.circle_filled(corner, 9.0, theme::accent());
+        painter.text(
+            corner,
+            egui::Align2::CENTER_CENTER,
+            egui_phosphor::regular::CHECK,
+            theme::Role::Micro.font(),
+            theme::on_accent(),
+        );
+    }
+
     if response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(if episode.resume_at().is_some() {
@@ -1081,5 +1143,38 @@ fn key_of(episode: &Episode) -> DownloadKey {
     DownloadKey {
         share_id: episode.node.share_id.clone(),
         link_id: episode.node.link_id.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn details(status: &str, next: Option<(u32, i64)>) -> pstr_core::metadata::TitleDetails {
+        pstr_core::metadata::TitleDetails {
+            status: Some(status.to_owned()),
+            next_episode: next.map(|(episode, _)| episode),
+            next_airing_at: next.map(|(_, at)| at),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_status_chip_says_when_the_next_episode_airs_and_only_while_it_is_ahead() {
+        let (text, live) = status_text(&details("RELEASING", Some((8, 2_000))), 1_000).unwrap();
+        assert!(text.starts_with("Airing  ·  episode 8 "), "{text}");
+        assert!(live);
+        // Fetched a while ago: the date has passed, so it says nothing of it.
+        let (text, live) = status_text(&details("RELEASING", Some((8, 500))), 1_000).unwrap();
+        assert_eq!(text, "Airing");
+        assert!(live);
+        assert_eq!(
+            status_text(&details("FINISHED", None), 1_000),
+            Some(("Finished".to_owned(), false))
+        );
+        assert_eq!(
+            status_text(&pstr_core::metadata::TitleDetails::default(), 0),
+            None
+        );
     }
 }

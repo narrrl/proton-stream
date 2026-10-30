@@ -620,6 +620,10 @@ pub struct TitleRecord {
     /// `Dual audio` — in that order. Never a release group's name.
     #[uniffi(default = [])]
     pub quality: Vec<String>,
+    /// `Airing`, `Finished`, `Upcoming`, `On hiatus` or `Cancelled`: the
+    /// shared `TitleDetails::status_label`.
+    #[uniffi(default = None)]
+    pub status: Option<String>,
 }
 
 /// Playback preferences that outlive one file, one title and one launch.
@@ -3684,6 +3688,9 @@ fn title_record(
         directors: details.map_or_else(Vec::new, |details| details.directors.clone()),
         tags: details.map_or_else(Vec::new, |details| details.tags.clone()),
         airing: details.is_some_and(|details| details.is_airing()),
+        status: details
+            .and_then(|details| details.status_label())
+            .map(str::to_owned),
         next_episode: None,
         next_airing_at: None,
         franchise: Vec::new(),

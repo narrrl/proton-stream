@@ -409,6 +409,33 @@ pub fn spec_badge(ui: &mut egui::Ui, text: &str) -> egui::Response {
         .response
 }
 
+/// Where a title stands — `Airing · episode 8 Sat 1 Nov, 14:00`, `Finished` —
+/// as a [`chip`] with a dot in front: the accent while more is coming, muted
+/// once it is all out.
+pub fn status_chip(ui: &mut egui::Ui, text: &str, live: bool) -> egui::Response {
+    egui::Frame::new()
+        .fill(theme::card_hover().gamma_multiply(0.8))
+        .corner_radius(CornerRadius::same(theme::radius::LG))
+        .inner_margin(egui::Margin::symmetric(9, 3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::space::XS;
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+                ui.painter().circle_filled(
+                    dot.center(),
+                    3.0,
+                    if live {
+                        theme::accent()
+                    } else {
+                        theme::muted()
+                    },
+                );
+                ui.label(theme::Role::Caption.rich(text).color(theme::text()));
+            });
+        })
+        .response
+}
+
 /// A small rounded label: a genre, a year, a fact.
 pub fn chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
     egui::Frame::new()

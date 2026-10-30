@@ -401,6 +401,25 @@ private extension UIColor {
     }
 }
 
+/// Where a title stands — "Airing · episode 8 Sat 1 Nov", "Finished" — as a
+/// `GenreChip` with a dot in front: the accent while more is coming, muted
+/// once it is all out. Android's `StatusChip`.
+struct StatusChip: View {
+    @Environment(\.scheme) private var scheme
+    let text: String
+    let live: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(live ? scheme.primary : scheme.onSurfaceVariant).frame(width: 6, height: 6)
+            Text(text).textStyle(.labelMedium).foregroundStyle(scheme.onSurface)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
 /// Something the title is filed under — a genre — as a small rounded label.
 /// Android's `GenreChip`.
 struct GenreChip: View {

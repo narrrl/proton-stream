@@ -78,8 +78,13 @@ top.
   is. Each result names the site it came from. Use it when the app guessed wrong or did not guess
   at all. A match you pick is never replaced.
 - **More on AniList** (or TVmaze, or TMDB) opens the title's page there.
-- Each season has **Mark season watched** and **Download season**.
-- Each episode shows a tick when you have watched it. Right-click an episode and choose **Mark
+- Each season has **Mark season watched** and **Download season**. A show with more than five
+  seasons lists them in a drop-down instead of a row of buttons.
+- With posters and descriptions on, a chip under the name says where the show stands: **Airing**
+  with the day the next episode comes out, **Finished**, **Upcoming**, **On hiatus** or
+  **Cancelled**.
+- Each episode shows a tick when you have watched it, at the end of its row and in the corner of
+  its picture. Right-click an episode and choose **Mark
   watched up to here** to tick it and every episode before it.
 - **In this franchise** lists the other parts of the series, when posters and descriptions are on.
 - With posters and descriptions on, a show's logo takes the place of its name at the top of the

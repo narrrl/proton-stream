@@ -299,3 +299,35 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(formatRuntime(124), "2 h 4 min")
     }
 }
+
+final class StatusTextTests: XCTestCase {
+    private func title(status: String?, airing: Bool = false, next: (UInt32, Int64)? = nil) -> TitleRecord {
+        TitleRecord(
+            key: "k", name: "k", year: nil, kind: .series, watchedCount: 0,
+            episodeCount: 0, canonicalName: nil, originalName: nil, overview: nil,
+            metadataProvider: nil, metadataId: nil, metadataYear: nil, metadataKind: nil, posterUrl: nil,
+            backdropUrl: nil, rating: nil, genres: [], providerEpisodeCount: nil, externalUrl: nil,
+            manualMatch: false, seasons: [],
+            displayName: "k", wideUrl: nil, formatLabel: nil, seasonLabel: nil, studios: [],
+            directors: [], tags: [], airing: airing, nextEpisode: next?.0, nextAiringAt: next?.1,
+            franchise: [], continueIndex: nil, status: status
+        )
+    }
+
+    func testTheStatusChipNamesTheNextEpisodeWhileOneIsDue() throws {
+        let status = try XCTUnwrap(statusText(title(status: "Airing", airing: true, next: (8, 1_800_000_000))))
+        XCTAssertTrue(status.text.hasPrefix("Airing  ·  episode 8 "), status.text)
+        XCTAssertTrue(status.live)
+    }
+
+    func testAFinishedTitleIsSaidPlainlyAndIsNotLive() throws {
+        let status = try XCTUnwrap(statusText(title(status: "Finished")))
+        XCTAssertEqual(status.text, "Finished")
+        XCTAssertFalse(status.live)
+    }
+
+    func testATitleWithNoStatusAndNothingAiringHasNoChip() {
+        XCTAssertNil(statusText(title(status: nil)))
+        XCTAssertEqual(statusText(title(status: nil, airing: true))?.text, "Airing")
+    }
+}

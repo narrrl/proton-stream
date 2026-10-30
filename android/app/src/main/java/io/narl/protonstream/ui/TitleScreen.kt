@@ -95,6 +95,8 @@ import uniffi.pstr_android.SeasonRecord
 import uniffi.pstr_android.MatchRecord
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -254,12 +256,11 @@ internal fun TitleScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
                     )
-                    // Who made it, and whether more is coming — the desktop's
-                    // line of facts, on a line of its own so neither wraps.
+                    // Who made it — the desktop's line of facts, on a line of
+                    // its own so neither wraps.
                     listOfNotNull(
                         title.studios.takeIf { it.isNotEmpty() }?.take(2)?.joinToString(", "),
                         title.directors.firstOrNull()?.let { "dir. $it" },
-                        airingNote(title),
                     ).joinToString("  ·  ").takeIf(String::isNotEmpty)?.let {
                         Text(
                             it,
@@ -268,9 +269,18 @@ internal fun TitleScreen(
                             modifier = Modifier.padding(top = 2.dp),
                         )
                     }
-                    // What the files are, rather than what the title is.
-                    if (title.quality.isNotEmpty()) {
-                        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // Where the title stands, then what the files are rather
+                    // than what the title is.
+                    val status = statusText(title)
+                    if (title.quality.isNotEmpty() || status != null) {
+                        Row(
+                            Modifier.padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            status?.let { (text, live) ->
+                                StatusChip(text, live, Modifier.padding(end = 4.dp))
+                            }
                             title.quality.forEach { SpecBadge(it) }
                         }
                     }
@@ -394,15 +404,21 @@ internal fun TitleScreen(
                     Modifier.fillMaxWidth().padding(start = side + 16.dp, end = side + 4.dp, top = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // By position: two seasons can share a label, and a
-                        // repeated key is a crash in a lazy list.
-                        itemsIndexed(title.seasons, key = { index, _ -> index }) { index, entry ->
-                            FilterChip(
-                                selected = index == seasonIndex,
-                                onClick = { seasonIndex = index },
-                                label = { Text(entry.label) },
-                            )
+                    if (title.seasons.size > SEASON_CHIPS) {
+                        // A long-running show's row of chips is a scroll of
+                        // its own; past a handful it is a list to pick from.
+                        SeasonList(title.seasons, seasonIndex, { seasonIndex = it }, Modifier.weight(1f))
+                    } else {
+                        LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // By position: two seasons can share a label, and a
+                            // repeated key is a crash in a lazy list.
+                            itemsIndexed(title.seasons, key = { index, _ -> index }) { index, entry ->
+                                FilterChip(
+                                    selected = index == seasonIndex,
+                                    onClick = { seasonIndex = index },
+                                    label = { Text(entry.label) },
+                                )
+                            }
                         }
                     }
                     season?.let {
@@ -567,17 +583,51 @@ private fun FranchiseTile(title: TitleRecord, here: Boolean, onClick: () -> Unit
 }
 
 /**
- * "Episode 7 on Sat 11 Oct" while one is due, "Airing" while it is airing with
- * no date yet, else nothing.
+ * What the status chip says — "Airing · episode 7 Sat 11 Oct", "Finished" —
+ * and whether more is coming. The desktop's `status_text`.
  */
-private fun airingNote(title: TitleRecord): String? {
+internal fun statusText(title: TitleRecord): Pair<String, Boolean>? {
     val at = title.nextAiringAt
     val episode = title.nextEpisode
-    if (at != null && episode != null) {
-        val day = java.time.Instant.ofEpochSecond(at).atZone(java.time.ZoneId.systemDefault())
-        return "episode $episode on " + day.format(java.time.format.DateTimeFormatter.ofPattern("EEE d MMM"))
+    val next = at != null && episode != null
+    val label = title.status ?: (if (next || title.airing) "Airing" else return null)
+    val live = next || title.airing
+    if (at == null || episode == null) return label to live
+    val day = java.time.Instant.ofEpochSecond(at).atZone(java.time.ZoneId.systemDefault())
+    return "$label  ·  episode $episode " + day.format(java.time.format.DateTimeFormatter.ofPattern("EEE d MMM")) to live
+}
+
+/** The most seasons picked from a row of chips; past it, a list. The desktop's `SEASON_PILLS`. */
+private const val SEASON_CHIPS = 5
+
+/** The season shown, as a button that opens the list of all of them. */
+@Composable
+private fun SeasonList(seasons: List<SeasonRecord>, picked: Int, onPick: (Int) -> Unit, modifier: Modifier = Modifier) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        FilterChip(
+            selected = true,
+            onClick = { open = true },
+            label = { Text(seasons.getOrNull(picked)?.label.orEmpty()) },
+            trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            seasons.forEachIndexed { index, season ->
+                DropdownMenuItem(
+                    text = { Text(season.label) },
+                    onClick = {
+                        open = false
+                        onPick(index)
+                    },
+                    trailingIcon = if (index == picked) {
+                        { Icon(Icons.Default.Check, contentDescription = "Shown") }
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
     }
-    return if (title.airing) "airing" else null
 }
 
 /** How wide the page's text and controls run on a window wider than a phone. */
@@ -700,6 +750,21 @@ private fun EpisodeRow(
                     AccentProgress(
                         progress = { progress.toFloat().coerceIn(0f, 1f) },
                         modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
+                    )
+                }
+                // Seen, said on the picture as well as by the mark at the
+                // row's end: a season is scanned by its stills.
+                if (episode.watched) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(5.dp)
+                            .size(18.dp)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape)
+                            .padding(2.dp),
                     )
                 }
             }

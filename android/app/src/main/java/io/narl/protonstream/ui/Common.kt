@@ -8,6 +8,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
@@ -274,6 +279,30 @@ internal fun GenreChip(text: String) {
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
+}
+
+/**
+ * Where a title stands — "Airing · episode 8 Sat 1 Nov", "Finished" — as a
+ * [GenreChip] with a dot in front: the accent while more is coming, muted once
+ * it is all out. The desktop's `widgets::status_chip`.
+ */
+@Composable
+internal fun StatusChip(text: String, live: Boolean, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier
+            .background(scheme.surfaceVariant, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .background(if (live) scheme.primary else scheme.onSurfaceVariant, CircleShape),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = MaterialTheme.typography.labelMedium, color = scheme.onSurface)
+    }
 }
 
 /**
