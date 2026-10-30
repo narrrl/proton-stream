@@ -457,6 +457,35 @@ pub fn stored_palette(paths: AndroidPaths) -> PaletteRecord {
     palette_record(&appearance_record(appearance))
 }
 
+/// The colour a picture leaves behind, as `0xAARRGGBB`, opaque: the shared
+/// `pstr_core::appearance::mood` over [`pixels`], which are `0xAARRGGBB` too —
+/// what `Bitmap.getPixels` hands back. `None` for nothing opaque.
+///
+/// The client squeezes the picture to a few hundred pixels first; this is the
+/// weighting, kept in one place so every client lands on the same colour.
+#[uniffi::export]
+pub fn picture_mood(pixels: Vec<u32>) -> Option<u32> {
+    pstr_core::appearance::mood(pixels.into_iter().map(|argb| {
+        let channel = |shift: u32| ((argb >> shift) & 0xff) as u8;
+        (
+            pstr_core::appearance::Rgb::new(channel(16), channel(8), channel(0)),
+            channel(24),
+        )
+    }))
+    .map(pstr_core::appearance::Rgb::argb)
+}
+
+/// The page colour `background` tinted by a picture's [`picture_mood`], for
+/// the veils over that picture. All `0xAARRGGBB`; see
+/// `pstr_core::appearance::mood_veil`.
+#[uniffi::export]
+pub fn mood_veil(background: u32, mood: u32, light: bool) -> u32 {
+    let rgb = |argb: u32| {
+        pstr_core::appearance::Rgb::new((argb >> 16) as u8, (argb >> 8) as u8, argb as u8)
+    };
+    pstr_core::appearance::mood_veil(rgb(background), rgb(mood), light).argb()
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MetadataSettingsRecord {
     pub enabled: bool,
@@ -3849,6 +3878,22 @@ mod tests {
     /// Material's containment ladder has five rungs where the palette names
     /// three, and Kotlin lays them out in this order. A rung that is not past
     /// the one below it is a rung that reads as the same surface.
+    #[test]
+    fn a_picture_handed_over_as_argb_pixels_keeps_its_colour_and_skips_the_clear_ones() {
+        let teal = 0xff14_8c96;
+        assert_eq!(super::picture_mood(vec![teal; 9]), Some(teal));
+        assert_eq!(super::picture_mood(vec![teal, 0x00ff_ffff]), Some(teal));
+        assert_eq!(super::picture_mood(vec![0x00ff_ffff]), None);
+    }
+
+    #[test]
+    fn the_veil_over_a_picture_is_the_shared_one_packed_as_argb() {
+        let background = 0xff0b_0b0f;
+        let veil = super::mood_veil(background, 0xffdc_1e1e, false);
+        assert_eq!(veil >> 24, 0xff);
+        assert!((veil >> 16) & 0xff > 0x0b, "{veil:08x}");
+    }
+
     #[test]
     fn the_derived_rung_continues_the_ladder_in_both_polarities() {
         for flavor in FLAVORS {

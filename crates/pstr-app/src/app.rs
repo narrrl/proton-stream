@@ -2471,7 +2471,19 @@ impl eframe::App for App {
                 .frame(
                     egui::Frame::new()
                         .fill(theme::background())
-                        .inner_margin(egui::Margin::symmetric(18, 12)),
+                        .inner_margin(egui::Margin {
+                            left: ui::PAGE_MARGIN.x as i8,
+                            right: ui::PAGE_MARGIN.x as i8,
+                            // The library's banner starts right under the bar;
+                            // the page keeps the margin itself when it has no
+                            // banner to show.
+                            top: if *page == Page::Library {
+                                0
+                            } else {
+                                ui::PAGE_MARGIN.y as i8
+                            },
+                            bottom: ui::PAGE_MARGIN.y as i8,
+                        }),
                 )
                 .show(ui, |ui| {
                     ui.multiply_opacity(fade);

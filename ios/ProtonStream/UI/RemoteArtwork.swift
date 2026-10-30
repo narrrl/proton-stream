@@ -43,13 +43,22 @@ struct RemoteArtwork: View {
     let description: String
     var fallback: ThumbnailSource?
     var labelled = true
+    /// Told the picture's colour once it has arrived — see `pictureMood`.
+    var onMood: ((UInt32) -> Void)?
     @State private var load: ArtworkLoad
 
-    init(_ url: String?, _ description: String, fallback: ThumbnailSource? = nil, labelled: Bool = true) {
+    init(
+        _ url: String?,
+        _ description: String,
+        fallback: ThumbnailSource? = nil,
+        labelled: Bool = true,
+        onMood: ((UInt32) -> Void)? = nil
+    ) {
         self.url = url
         self.description = description
         self.fallback = fallback
         self.labelled = labelled
+        self.onMood = onMood
         // A poster already decoded draws in the first frame, so scrolling back
         // over the grid does not flash a skeleton per tile.
         _load = State(initialValue: ArtworkLoader.shared.cached(url: url, fallback: fallback).map(ArtworkLoad.loaded) ?? .pending)
@@ -71,11 +80,20 @@ struct RemoteArtwork: View {
             .accessibilityElement()
             .accessibilityLabel(description)
             .task(id: Request(url: url, fallback: fallback)) {
-                if case .loaded = load, ArtworkLoader.shared.cached(url: url, fallback: fallback) != nil { return }
+                if case let .loaded(image) = load, ArtworkLoader.shared.cached(url: url, fallback: fallback) != nil {
+                    report(image)
+                    return
+                }
                 let loaded = await ArtworkLoader.shared.artwork(url: url, fallback: fallback)
                 if Task.isCancelled { return }
                 withAnimation(Motion.arrive) { load = loaded.map(ArtworkLoad.loaded) ?? .missing }
+                if let loaded { report(loaded) }
             }
+    }
+
+    private func report(_ image: UIImage) {
+        guard let onMood, let mood = moodOf(image) else { return }
+        onMood(mood)
     }
 
     private struct Request: Hashable {
@@ -84,15 +102,67 @@ struct RemoteArtwork: View {
     }
 }
 
+/// A picture squeezed to this many pixels a side is still its colours, and a
+/// few hundred values to average — Android's `MOOD_EDGE`.
+private let moodEdge = 24
+
+/// The colour a picture leaves behind, as `0xAARRGGBB`: the shared
+/// `appearance::mood`, over the picture squeezed to `moodEdge` pixels a side.
+func moodOf(_ image: UIImage) -> UInt32? {
+    guard let cgImage = image.cgImage else { return nil }
+    var bytes = [UInt8](repeating: 0, count: moodEdge * moodEdge * 4)
+    let drawn: Bool = bytes.withUnsafeMutableBytes { buffer in
+        guard let context = CGContext(
+            data: buffer.baseAddress,
+            width: moodEdge,
+            height: moodEdge,
+            bitsPerComponent: 8,
+            bytesPerRow: moodEdge * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return false }
+        context.interpolationQuality = .medium
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: moodEdge, height: moodEdge))
+        return true
+    }
+    guard drawn else { return nil }
+    let pixels: [UInt32] = stride(from: 0, to: bytes.count, by: 4).map { index in
+        let alpha = UInt32(bytes[index + 3])
+        // Premultiplied as drawn; the average wants the colour itself.
+        let channel = { (value: UInt8) -> UInt32 in
+            alpha == 0 ? 0 : min(255, UInt32(value) * 255 / alpha)
+        }
+        return alpha << 24 | channel(bytes[index]) << 16 | channel(bytes[index + 1]) << 8 | channel(bytes[index + 2])
+    }
+    return pictureMood(pixels: pixels)
+}
+
+extension Scheme {
+    /// The page colour tinted by a picture's `mood`, for the veils over that
+    /// picture — the shared `appearance::mood_veil`. The page colour itself
+    /// until the mood is known.
+    func veil(_ mood: UInt32?) -> Color {
+        guard let mood else { return background }
+        return argb(moodVeil(background: backgroundArgb, mood: mood, light: light))
+    }
+}
+
 /// A title's art across the top of a page: its backdrop, or with none, its
 /// poster as a wash of its own colours — blurred, so it reads as the poster's
 /// light rather than a blown-up slice of it. The desktop's `Fit::Ambient`.
 struct Backdrop: View {
     let title: TitleRecord
+    var onMood: ((UInt32) -> Void)?
 
     var body: some View {
         let wash = title.backdropUrl == nil && title.posterUrl != nil
-        RemoteArtwork(title.backdropUrl ?? title.posterUrl, title.displayName, fallback: title.thumbnailSource, labelled: false)
+        RemoteArtwork(
+            title.backdropUrl ?? title.posterUrl,
+            title.displayName,
+            fallback: title.thumbnailSource,
+            labelled: false,
+            onMood: onMood
+        )
             .blur(radius: wash ? 24 : 0, opaque: true)
     }
 }

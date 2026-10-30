@@ -1,6 +1,28 @@
 package io.narl.protonstream.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.unit.Dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -199,72 +221,83 @@ internal fun LibraryScreen(
         onSearch("")
     }
     BackHandler(enabled = searching, onBack = closeSearch)
-    // The large title folds into the bar as the grid scrolls, and comes back
-    // only at the top: the page says what it is on arrival, then gets out of
-    // the way.
+    // The banner turns through these. Worked out here rather than in the grid,
+    // because whether there is one decides the shape of the whole page.
+    val featured = remember(state.titles, resumable) { featured(state.titles, resumable) }
+    // With a banner, the bar lies over it, clear, and fills in as the banner
+    // scrolls away; without one, the large title folds into the bar as the
+    // grid scrolls and comes back only at the top.
+    val overBanner = !searching && !state.loading && state.query.isBlank() && featured.isNotEmpty()
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    Column(Modifier.fillMaxSize().nestedScroll(scroll.nestedScrollConnection)) {
-        if (searching) {
-            SearchBar(state.query, onSearch, closeSearch)
-        } else {
-            LargeTopAppBar(
-                title = { Text("Library") },
-                actions = {
-                    IconButton(onClick = { searching = true }) {
-                        Icon(Icons.Default.Search, contentDescription = "Search library")
-                    }
-                    ArrangeMenu(state.sort, state.grouped, onArrange)
-                    // Pull to refresh is the gesture; the icon stays for a
-                    // viewer who does not know it.
-                    IconButton(onClick = onRefresh, enabled = !state.refreshing) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                },
-                colors = pageBarColors(),
-                scrollBehavior = scroll,
-            )
+    val grid = rememberLazyGridState()
+    val actions: @Composable RowScope.() -> Unit = {
+        IconButton(onClick = { searching = true }) {
+            Icon(Icons.Default.Search, contentDescription = "Search library")
         }
-        PullToRefreshBox(
-            isRefreshing = state.refreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.weight(1f).padding(padding),
-        ) {
-            when {
-                state.loading -> LibrarySkeleton()
-                state.titles.isEmpty() && state.query.isNotBlank() -> EmptyState(
-                    "Nothing matches",
-                    "No title in the library is called “${state.query.trim()}”.",
-                )
-                // A share just added: say it is being looked through, rather
-                // than offer to add the one that is already filling the page.
-                state.titles.isEmpty() && state.activity != null -> EmptyState(
-                    "Looking through the share",
-                    "${state.activity} Its titles appear here once it has been listed.",
-                )
-                state.titles.isEmpty() -> EmptyState(
-                    "Your library is empty",
-                    "Add a Proton Drive share link, and everything playable behind it shows up here.",
-                    action = "Add a share" to onAddShare,
-                )
-                else -> LibraryGrid(
-                    state,
-                    resumable,
-                    onResume,
-                    onTitle,
-                    onTitleMenu = { menuFor = it },
-                    onResumeMenu = { menuResume = it },
-                    onFilter = onFilter,
-                    metadataOffer = if (state.metadataSettings.enabled || offerDismissed) {
-                        null
-                    } else {
-                        MetadataOffer(onOpenSettings) {
-                            offerDismissed = true
-                            SettingsStore(context).metadataOfferDismissed = true
-                        }
-                    },
+        ArrangeMenu(state.sort, state.grouped, onArrange)
+        // Pull to refresh is the gesture; the icon stays for a viewer who
+        // does not know it.
+        IconButton(onClick = onRefresh, enabled = !state.refreshing) {
+            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().then(if (overBanner) Modifier else Modifier.nestedScroll(scroll.nestedScrollConnection))) {
+            if (searching) {
+                SearchBar(state.query, onSearch, closeSearch)
+            } else if (!overBanner) {
+                LargeTopAppBar(
+                    title = { Text("Library") },
+                    actions = actions,
+                    colors = pageBarColors(),
+                    scrollBehavior = scroll,
                 )
             }
+            PullToRefreshBox(
+                isRefreshing = state.refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.weight(1f).padding(padding),
+            ) {
+                when {
+                    state.loading -> LibrarySkeleton()
+                    state.titles.isEmpty() && state.query.isNotBlank() -> EmptyState(
+                        "Nothing matches",
+                        "No title in the library is called “${state.query.trim()}”.",
+                    )
+                    // A share just added: say it is being looked through, rather
+                    // than offer to add the one that is already filling the page.
+                    state.titles.isEmpty() && state.activity != null -> EmptyState(
+                        "Looking through the share",
+                        "${state.activity} Its titles appear here once it has been listed.",
+                    )
+                    state.titles.isEmpty() -> EmptyState(
+                        "Your library is empty",
+                        "Add a Proton Drive share link, and everything playable behind it shows up here.",
+                        action = "Add a share" to onAddShare,
+                    )
+                    else -> LibraryGrid(
+                        state,
+                        resumable,
+                        onResume,
+                        onTitle,
+                        onTitleMenu = { menuFor = it },
+                        onResumeMenu = { menuResume = it },
+                        onFilter = onFilter,
+                        metadataOffer = if (state.metadataSettings.enabled || offerDismissed) {
+                            null
+                        } else {
+                            MetadataOffer(onOpenSettings) {
+                                offerDismissed = true
+                                SettingsStore(context).metadataOfferDismissed = true
+                            }
+                        },
+                        featured = if (overBanner) featured else emptyList(),
+                        grid = grid,
+                    )
+                }
+            }
         }
+        if (overBanner) BarOverBanner(grid, actions)
     }
     menuFor?.let { title ->
         val playlist = title.seasons.flatMap(SeasonRecord::episodes)
@@ -458,6 +491,8 @@ private fun LibraryGrid(
     onResumeMenu: (Resumable) -> Unit,
     onFilter: (LibraryFilter) -> Unit = {},
     metadataOffer: MetadataOffer? = null,
+    featured: List<TitleRecord> = emptyList(),
+    grid: LazyGridState = rememberLazyGridState(),
 ) {
     // The arrangement names titles by key; before it has arrived, the titles
     // as they came are the grid.
@@ -476,27 +511,30 @@ private fun LibraryGrid(
     LazyVerticalGrid(
         columns = GridCells.Adaptive(108.dp),
         modifier = Modifier.fillMaxSize(),
+        state = grid,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        // No room above a banner: it starts under the status bar, and the bar
+        // lies over it.
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = if (featured.isEmpty()) 8.dp else 0.dp, bottom = 24.dp),
     ) {
+        if (featured.isNotEmpty()) {
+            item(key = "featured", span = { GridItemSpan(maxLineSpan) }) {
+                FeaturedBanner(
+                    featured,
+                    resumable,
+                    onPlay = onResume,
+                    onOpen = onTitle,
+                    modifier = Modifier.bleed(16.dp),
+                )
+            }
+        }
         // Above the grid, and only when there is something in it: what a viewer
         // opening the app wants is almost always the thing they were part way
         // through. Inside the grid rather than pinned over it, so the shelf
         // scrolls away with the rest.
         if (metadataOffer != null && state.query.isBlank()) {
             item(key = "metadata-offer", span = { GridItemSpan(maxLineSpan) }) { MetadataOfferCard(metadataOffer) }
-        }
-        val featured = if (state.query.isBlank()) featured(state.titles, resumable) else null
-        featured?.let { title ->
-            item(key = "featured", span = { GridItemSpan(maxLineSpan) }) {
-                FeaturedBanner(
-                    title,
-                    resume = resumable.firstOrNull { it.title.key == title.key },
-                    onPlay = { onResume(title, it) },
-                    onOpen = { onTitle(title) },
-                )
-            }
         }
         if (state.query.isBlank() && resumable.isNotEmpty()) {
             item(key = "continue-watching", span = { GridItemSpan(maxLineSpan) }) {
@@ -611,44 +649,173 @@ private val SHELF_TILE_WIDTH = 112.dp
 /** Enough placeholder tiles to fill a tablet's first screen. */
 private const val SKELETON_TILES = 18
 
+/** How many titles the banner turns through: the desktop's `FEATURED`. */
+private const val FEATURED_MAX = 5
+
+/** How long each title holds the banner: the desktop's `HOLD`. */
+private const val HOLD_MS = 8_000L
+
+/** How long one title takes to give way to the next: the desktop's `TURN`. */
+private const val TURN_MS = 600
+
 /**
- * The title the banner shows: the one watched last, or with nothing part
- * watched, one of the titles the provider has a backdrop for, turning over
- * once a day — the desktop's `featured`.
+ * The titles the banner turns through: the one watched last first, then titles
+ * the provider has a backdrop for, starting from a different one each day —
+ * the desktop's `featured`.
  */
-private fun featured(titles: List<TitleRecord>, resumable: List<Resumable>): TitleRecord? {
-    resumable.firstOrNull()?.let { return it.title }
+private fun featured(titles: List<TitleRecord>, resumable: List<Resumable>): List<TitleRecord> {
+    val picked = listOfNotNull(resumable.firstOrNull()?.title).toMutableList()
     val pictured = titles.filter { it.backdropUrl != null }
-    if (pictured.isEmpty()) return null
-    return pictured[(LocalDate.now().toEpochDay() % pictured.size).toInt()]
+    if (pictured.isEmpty()) return picked
+    val start = (LocalDate.now().toEpochDay() % pictured.size).toInt()
+    for (offset in pictured.indices) {
+        if (picked.size == FEATURED_MAX) break
+        val title = pictured[(start + offset) % pictured.size]
+        if (picked.none { it.key == title.key }) picked += title
+    }
+    return picked
 }
 
-/** Large art behind the name, rating, genres and three lines of synopsis. */
+/**
+ * Wider than the space it is given by [horizontal] on each side: for the
+ * banner, which runs edge to edge inside a grid with a margin.
+ */
+private fun Modifier.bleed(horizontal: Dp): Modifier = layout { measurable, constraints ->
+    val extra = horizontal.roundToPx() * 2
+    val placeable = measurable.measure(
+        constraints.copy(minWidth = constraints.minWidth + extra, maxWidth = constraints.maxWidth + extra),
+    )
+    layout(placeable.width - extra, placeable.height) { placeable.place(-extra / 2, 0) }
+}
+
+/**
+ * The bar over the banner: clear at the top, with white icons over the
+ * banner's own scrim, and filling in to the page's bar as the banner scrolls
+ * away — at which point it is the page's bar, title and all.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int) -> Unit, onOpen: () -> Unit) {
+private fun BarOverBanner(grid: LazyGridState, actions: @Composable RowScope.() -> Unit) {
+    val reveal = with(LocalDensity.current) { BAR_REVEAL.toPx() }
+    val solid by remember(grid) {
+        derivedStateOf {
+            if (grid.firstVisibleItemIndex > 0) 1f else (grid.firstVisibleItemScrollOffset / reveal).coerceIn(0f, 1f)
+        }
+    }
+    val scheme = MaterialTheme.colorScheme
+    val ink = lerp(Color.White, scheme.onSurface, solid)
+    TopAppBar(
+        title = { Text("Library", modifier = Modifier.graphicsLayer { alpha = solid }) },
+        actions = actions,
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = scheme.surfaceContainer.copy(alpha = solid),
+            titleContentColor = ink,
+            actionIconContentColor = ink,
+        ),
+    )
+}
+
+/** How far the banner scrolls before the bar over it is solid. */
+private val BAR_REVEAL = 280.dp
+
+/**
+ * The banner at the top of the library: one title at a time, edge to edge
+ * under the status bar, turning to the next every [HOLD_MS] unless a finger is
+ * on it. Each title's veil is tinted with its own picture's colour.
+ */
+@Composable
+private fun FeaturedBanner(
+    titles: List<TitleRecord>,
+    resumable: List<Resumable>,
+    onPlay: (TitleRecord, Int) -> Unit,
+    onOpen: (TitleRecord) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val pager = rememberPagerState { titles.size }
+    val dragged by pager.interactionSource.collectIsDraggedAsState()
+    if (titles.size > 1 && !dragged) {
+        LaunchedEffect(pager.currentPage, titles.size) {
+            delay(HOLD_MS)
+            pager.animateScrollToPage((pager.currentPage + 1) % titles.size, animationSpec = tween(TURN_MS))
+        }
+    }
+    // Most of a phone's first screen, but never so much of a tablet's that
+    // nothing under it shows.
+    val height = (LocalConfiguration.current.screenHeightDp * 0.62f).dp.coerceIn(360.dp, 620.dp)
+    Box(modifier.fillMaxWidth().height(height)) {
+        HorizontalPager(pager, Modifier.fillMaxSize(), key = { titles[it].key }) { page ->
+            val title = titles[page]
+            FeaturedPage(
+                title,
+                resumable.firstOrNull { it.title.key == title.key },
+                onPlay = { onPlay(title, it) },
+                onOpen = { onOpen(title) },
+            )
+        }
+        if (titles.size > 1) {
+            val scope = rememberCoroutineScope()
+            Row(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                titles.forEachIndexed { index, title ->
+                    val shown = index == pager.currentPage
+                    val width by animateDpAsState(if (shown) 18.dp else 6.dp, label = "dot")
+                    Box(
+                        Modifier
+                            .size(width, 6.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = if (shown) 1f else 0.4f))
+                            .clickable(onClickLabel = "Show ${title.displayName}") {
+                                scope.launch { pager.animateScrollToPage(index, animationSpec = tween(TURN_MS)) }
+                            }
+                            .semantics { selected = shown },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One title on the banner: its art, its veil, and what it is, from the bottom up. */
+@Composable
+private fun FeaturedPage(title: TitleRecord, resume: Resumable?, onPlay: (Int) -> Unit, onOpen: () -> Unit) {
     val playlist = remember(title) { title.seasons.flatMap(SeasonRecord::episodes) }
-    Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(MaterialTheme.shapes.large)) {
-        Backdrop(title, Modifier.fillMaxSize())
+    var mood by remember(title.key) { mutableStateOf<Color?>(null) }
+    val background = MaterialTheme.colorScheme.background
+    val veil = moodVeil(mood)
+    val ink = MaterialTheme.colorScheme.onBackground
+    // A logo is lettering made for dark art, white as often as not; over a
+    // light palette's veil it is gone, so the light palette keeps the name.
+    val dark = background.luminance() < 0.5f
+    Box(Modifier.fillMaxSize().clickable(onClickLabel = "Open ${title.displayName}", onClick = onOpen)) {
+        Backdrop(title, Modifier.fillMaxSize(), onMood = { mood = it })
         Box(
             Modifier.fillMaxSize().background(
-                Brush.verticalGradient(0.35f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.85f)),
+                Brush.verticalGradient(
+                    // Dark under the status bar and the bar's white icons…
+                    0f to Color.Black.copy(alpha = 0.5f),
+                    0.22f to Color.Transparent,
+                    // …and the picture's own colour under the text, ending in
+                    // the page it hands over to.
+                    0.45f to veil.copy(alpha = 0.35f),
+                    0.78f to veil.copy(alpha = 0.92f),
+                    1f to background,
+                ),
             ),
         )
-        Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-            // Always over the dark scrim above, so a logo made for dark art
-            // reads here whatever the theme.
-            RemoteLogo(
-                title.logoUrl,
-                title.displayName,
-                Modifier.fillMaxWidth(0.6f).heightIn(max = 72.dp).padding(bottom = 6.dp),
-            ) {
-                Text(
+        Column(
+            Modifier.align(Alignment.BottomStart).widthIn(max = 560.dp).padding(start = 16.dp, end = 16.dp, bottom = 28.dp),
+        ) {
+            if (dark) {
+                RemoteLogo(
+                    title.logoUrl,
                     title.displayName,
-                    style = MaterialTheme.typography.displayLarge,
-                    color = Color.White,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                    Modifier.fillMaxWidth(0.7f).heightIn(max = 88.dp).padding(bottom = 8.dp),
+                ) { HeroName(title.displayName, ink) }
+            } else {
+                HeroName(title.displayName, ink)
             }
             Text(
                 listOfNotNull(
@@ -656,14 +823,14 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
                     title.genres.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
                 ).joinToString("  ·  ").ifEmpty { title.caption() },
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.8f),
+                color = ink.copy(alpha = 0.8f),
             )
             title.overview?.let {
                 Text(
                     it.trim(),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.8f),
-                    maxLines = 3,
+                    color = ink.copy(alpha = 0.8f),
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 6.dp),
                 )
@@ -672,12 +839,46 @@ private fun FeaturedBanner(title: TitleRecord, resume: Resumable?, onPlay: (Int)
                 AccentButton(onClick = { onPlay(resume?.index ?: nextUpIndex(playlist, title.continueIndex)) }) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(6.dp))
-                    Text(if (resume != null) "Resume" else "Play")
+                    Text(if (resume?.episode?.resumeAt != null) "Resume" else "Play")
                 }
-                TonalButton(onClick = onOpen) { Text("More info") }
+                TonalButton(onClick = onOpen) {
+                    Icon(Icons.Default.Info, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("More info")
+                }
+            }
+            val episode = resume?.episode
+            val progress = episode?.progress?.takeIf { episode.resumeAt != null }
+            if (progress != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) {
+                    AccentProgress(
+                        progress = { progress.toFloat().coerceIn(0f, 1f) },
+                        modifier = Modifier.width(120.dp),
+                    )
+                    episode.timeLeft()?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ink.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+private fun HeroName(name: String, ink: Color) {
+    Text(
+        name,
+        style = MaterialTheme.typography.displayLarge,
+        color = ink,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(bottom = 4.dp),
+    )
 }
 
 /** A part-watched episode: its still, where it was left, and what is left of it. */

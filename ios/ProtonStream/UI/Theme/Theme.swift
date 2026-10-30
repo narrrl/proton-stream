@@ -53,6 +53,9 @@ final class AppearanceState {
 /// `schemeOf` line for line; `SchemeRolesTests` pins it.
 struct Scheme: Equatable {
     let light: Bool
+    /// `background` as the bridge hands it over, for the shared colour work
+    /// that takes it back — `Scheme.veil`.
+    let backgroundArgb: UInt32
     let primary: Color
     let onPrimary: Color
     let primaryContainer: Color
@@ -91,6 +94,7 @@ struct Scheme: Equatable {
 
     init(_ palette: PaletteRecord) {
         light = palette.light
+        backgroundArgb = palette.background
         primary = argb(palette.accent)
         onPrimary = argb(palette.onAccent)
         primaryContainer = argb(palette.accentDim)

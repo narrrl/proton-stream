@@ -823,6 +823,11 @@ pub fn ramp_fill(
 /// scrim that starts opaque and lets the picture out, `true` for one that lets
 /// the picture *into* the page — which is the one the title backdrop wants,
 /// since the page is below the band.
+///
+/// The ramp itself is white and the colour is the shape's fill, which the GPU
+/// multiplies in: one texture per direction, however many colours fade —
+/// a banner tinted per title would otherwise build a ramp for every frame of
+/// its cross-fade.
 pub fn fade_shape(
     ctx: &egui::Context,
     rect: Rect,
@@ -830,8 +835,29 @@ pub fn fade_shape(
     direction: Direction,
     arriving: bool,
 ) -> egui::Shape {
-    let texture = alpha_ramp(ctx, color, direction, arriving);
-    textured(rect, CornerRadius::ZERO, &texture)
+    let texture = alpha_ramp(ctx, Color32::WHITE, direction, arriving);
+    let mut shape = egui::epaint::RectShape::filled(rect, CornerRadius::ZERO, color);
+    shape.brush = Some(Arc::new(egui::epaint::Brush {
+        fill_texture_id: texture.id(),
+        uv: Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+    }));
+    shape.into()
+}
+
+/// The page colour tinted by a picture's colour, for the veils over that
+/// picture: see [`pstr_core::appearance::mood_veil`]. The page colour itself
+/// while the picture has not arrived.
+pub fn mood_veil(mood: Option<Color32>) -> Color32 {
+    let palette = palette();
+    let Some(mood) = mood else {
+        return palette.background;
+    };
+    let rgb = |c: Color32| pstr_core::appearance::Rgb::new(c.r(), c.g(), c.b());
+    color(pstr_core::appearance::mood_veil(
+        rgb(palette.background),
+        rgb(mood),
+        palette.light,
+    ))
 }
 
 /// The one gradient that is not the accent: the top bar, which runs from the

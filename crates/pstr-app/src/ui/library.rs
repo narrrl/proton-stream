@@ -36,6 +36,17 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
         crawl,
         offer_metadata,
     } = shelves;
+    let searching = !search.trim().is_empty();
+    let featured = if searching {
+        Vec::new()
+    } else {
+        featured(library, view, art.metadata, today())
+    };
+    // The panel leaves the top margin to this page, for the banner to start
+    // under the bar.
+    if featured.is_empty() {
+        ui.add_space(ui::PAGE_MARGIN.y);
+    }
     if !loaded {
         return placeholder(ui);
     }
@@ -50,20 +61,19 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
             .collect()
     };
     let matches = pick(&view.matches);
-    let searching = !search.trim().is_empty();
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            if !featured.is_empty() {
+                hero(ui, art, &featured, actions);
+                ui.add_space(theme::space::L);
+            }
             if !searching && offer_metadata {
                 metadata_offer(ui, actions);
                 ui.add_space(theme::space::XL);
             }
             if !searching {
-                if let Some(title) = featured(library, view, art.metadata, today()) {
-                    hero(ui, art, title, actions);
-                    ui.add_space(theme::space::XL);
-                }
                 let resumable = pick(&view.resumable);
                 if !resumable.is_empty() {
                     ui::section(ui, "Continue watching");
@@ -115,30 +125,40 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
         });
 }
 
-/// Days since the epoch: what the featured title turns over on.
+/// Days since the epoch: what the featured titles turn over on.
 fn today() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs() / 86_400)
 }
 
-/// The title the banner shows: whatever was watched last, so the top of the
-/// page is one click from carrying on. With nothing part-watched, one of the
-/// titles a provider has a backdrop for, turning over once a day — the same
-/// one every time the page is opened today, rather than a new one per frame.
+/// How many titles the banner turns through.
+const FEATURED: usize = 5;
+
+/// How long each title holds the banner before the next takes it, in seconds.
+const HOLD: f64 = 8.0;
+
+/// How long one title takes to give way to the next. Slower than artwork
+/// arriving: this is the whole banner changing, and a quick one reads as a
+/// cut.
+const TURN: f32 = 0.6;
+
+/// The titles the banner turns through: whatever was watched last first, so
+/// the top of the page is one click from carrying on, then titles a provider
+/// has a backdrop for, starting from a different one each day — the same
+/// order every time the page is opened today, rather than a new one per frame.
 fn featured<'a>(
     library: &'a Library,
     view: &LibraryView,
     metadata: &std::collections::HashMap<String, pstr_core::metadata::MetadataRecord>,
     day: u64,
-) -> Option<&'a Title> {
-    if let Some(title) = view
+) -> Vec<&'a Title> {
+    let mut picked: Vec<&Title> = view
         .resumable
         .first()
         .and_then(|&index| library.titles.get(index))
-    {
-        return Some(title);
-    }
+        .into_iter()
+        .collect();
     let pictured: Vec<&Title> = library
         .titles
         .iter()
@@ -150,68 +170,130 @@ fn featured<'a>(
         })
         .collect();
     if pictured.is_empty() {
-        return None;
+        return picked;
     }
-    pictured
-        .get((day % pictured.len() as u64) as usize)
-        .copied()
+    let start = (day % pictured.len() as u64) as usize;
+    for title in pictured.iter().cycle().skip(start).take(pictured.len()) {
+        if picked.len() == FEATURED {
+            break;
+        }
+        if !picked.iter().any(|already| already.key == title.key) {
+            picked.push(title);
+        }
+    }
+    picked
 }
 
-/// The banner across the top of the library: one title, large, with what it
-/// is and a way to play it.
-fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<Action>) {
-    let height = (ui.ctx().content_rect().height() * 0.42).clamp(220.0, 360.0);
-    let (rect, response) = ui.allocate_exact_size(
+/// Which of the featured titles the banner is on, and since when. Kept in
+/// egui's memory: it is the banner's own business, and gone with the window.
+#[derive(Clone, Copy)]
+struct Turn {
+    shown: usize,
+    /// The one it is turning from, while the cross-fade lasts.
+    leaving: Option<usize>,
+    /// `InputState::time` at the last turn.
+    since: f64,
+}
+
+/// The banner across the top of the library: one title at a time, large, with
+/// what it is and a way to play it, turning to the next every [`HOLD`]
+/// seconds unless the pointer is over it.
+///
+/// Edge to edge rather than inside the page's margin, and square: a banner
+/// in the margin with rounded corners read as one more card.
+fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, titles: &[&Title], actions: &mut Vec<Action>) {
+    let height = (ui.ctx().content_rect().height() * 0.5).clamp(280.0, 520.0);
+    let (column, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
-        egui::Sense::click(),
+        egui::Sense::hover(),
     );
-    if !ui.is_rect_visible(rect) {
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(column.left() - ui::PAGE_MARGIN.x, column.top()),
+        egui::pos2(column.right() + ui::PAGE_MARGIN.x, column.bottom()),
+    );
+    if titles.is_empty() || !ui.is_rect_visible(rect) {
         return;
     }
-    let radius = egui::CornerRadius::same(theme::radius::LG);
-    let picture = art.wide(title);
-    let found = art
-        .metadata
-        .get(&title.key)
-        .and_then(|record| record.metadata.clone());
+    let id = ui.id().with("hero");
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let now = ui.input(|input| input.time);
+    let count = titles.len();
+    let mut turn = ui.data(|data| data.get_temp::<Turn>(id)).unwrap_or(Turn {
+        shown: 0,
+        leaving: None,
+        since: now,
+    });
+    // The list is worked out again every frame, and can be shorter than the
+    // last time — a title finished, a match removed.
+    turn.shown %= count;
+    turn.leaving = turn.leaving.filter(|&index| index < count);
+
+    let hovered = ui.rect_contains_pointer(rect);
+    let elapsed = now - turn.since;
+    if hovered && elapsed > f64::from(TURN) {
+        // Held where it is while it is being looked at, and the count starts
+        // again once the pointer leaves rather than turning the moment it does.
+        turn.since = now - f64::from(TURN);
+    } else if count > 1 && elapsed >= HOLD {
+        turn = Turn {
+            shown: (turn.shown + 1) % count,
+            leaving: Some(turn.shown),
+            since: now,
+        };
+    }
+    let progress = theme::motion::ease_out(((now - turn.since) / f64::from(TURN)) as f32);
+    if progress >= 1.0 {
+        turn.leaving = None;
+    }
+    let title = titles[turn.shown];
 
     let painter = ui.painter().with_clip_rect(rect);
-    painter.rect_filled(rect, radius, theme::card());
-    let art_in = ui.ctx().animate_bool_with_time(
-        response.id.with("art"),
-        picture.is_some(),
-        theme::motion::ARRIVE,
-    );
-    if art_in < 1.0 {
-        ui::placeholder(&painter, rect, "", 1.0 - art_in);
+    painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::card());
+    // A measure that reads as a column, not a line across a wide window.
+    let text_right = column.left() + (column.width() * 0.45).clamp(360.0, 720.0);
+    let mut veil = None;
+    if let Some(leaving) = turn.leaving {
+        veil = Some(backdrop(
+            ui,
+            &painter,
+            art,
+            titles[leaving],
+            rect,
+            text_right,
+            1.0,
+        ));
     }
-    if let Some((texture, _)) = &picture {
-        painter.add(
-            egui::epaint::RectShape::filled(
-                rect,
-                radius,
-                egui::Color32::WHITE.gamma_multiply(art_in),
-            )
-            .with_texture(texture.id(), ui::cover_uv(texture.size_vec2(), rect.size())),
-        );
-    }
+    let arriving = if turn.leaving.is_some() {
+        progress
+    } else {
+        1.0
+    };
+    let shown_veil = backdrop(ui, &painter, art, title, rect, text_right, arriving);
+    let veil = veil.map_or(shown_veil, |from| from.lerp_to_gamma(shown_veil, progress));
+
     // The same two coats as the title page's band, for the same reason: a
     // still is arbitrary, and the text over it has to read whatever it is.
+    // Tinted with the picture's own colour, so each title's banner has a light
+    // of its own; the fade at the bottom is the page's, because that is what
+    // it hands over to.
     if theme::ramps_on() {
-        painter.rect_filled(rect, radius, theme::background().gamma_multiply(0.25));
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, veil.gamma_multiply(0.3));
         let text_side = egui::Rect::from_min_max(
             rect.min,
-            egui::pos2(rect.left() + rect.width() * 0.7, rect.bottom()),
+            egui::pos2(
+                text_right + 0.5 * (rect.right() - text_right),
+                rect.bottom(),
+            ),
         );
         painter.add(theme::fade_shape(
             ui.ctx(),
             text_side,
-            theme::background(),
+            veil,
             theme::Direction::Horizontal,
             false,
         ));
         let bottom =
-            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 90.0), rect.max);
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 120.0), rect.max);
         painter.add(theme::fade_shape(
             ui.ctx(),
             bottom,
@@ -220,36 +302,104 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             true,
         ));
     } else {
-        painter.rect_filled(rect, radius, theme::background().gamma_multiply(0.82));
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, veil.gamma_multiply(0.82));
     }
 
     let inner = egui::Rect::from_min_max(
-        rect.min + egui::vec2(32.0, 0.0),
-        egui::pos2(
-            rect.left() + (rect.width() * 0.55).max(360.0),
-            rect.bottom() - 28.0,
-        ),
+        egui::pos2(column.left(), column.top() + theme::space::XL),
+        egui::pos2(text_right, column.bottom() - 40.0),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::bottom_up(egui::Align::Min)),
+        |ui| {
+            ui.multiply_opacity(arriving);
+            hero_text(ui, art, title, actions);
+        },
     );
 
+    if count > 1
+        && let Some(picked) = dots(ui, id, column, titles, turn.shown)
+    {
+        if picked != turn.shown {
+            turn = Turn {
+                shown: picked,
+                leaving: Some(turn.shown),
+                since: now,
+            };
+        }
+    } else if response.clicked() {
+        actions.push(Action::Goto(Page::Title(title.key.clone())));
+    }
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, art.name(title)));
+    ui.data_mut(|data| data.insert_temp(id, turn));
+
+    if turn.leaving.is_some() {
+        ui.ctx().request_repaint();
+    } else if count > 1 && !hovered {
+        let left = (HOLD - (now - turn.since)).max(0.0);
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(left));
+    }
+}
+
+/// One title's picture across the banner, at `alpha`, and the colour its veils
+/// are to be — the page's until the picture has arrived, then the picture's
+/// own, eased in with it.
+fn backdrop(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    art: &mut Art<'_>,
+    title: &Title,
+    rect: egui::Rect,
+    text_right: f32,
+    alpha: f32,
+) -> egui::Color32 {
+    let picture = art.wide(title);
+    let art_in = ui.ctx().animate_bool_with_time(
+        ui.id().with(("hero-art", &title.key)),
+        picture.is_some(),
+        theme::motion::ARRIVE,
+    );
+    if art_in < 1.0 {
+        ui::placeholder(painter, rect, "", alpha * (1.0 - art_in));
+    }
+    if let Some((texture, _)) = &picture {
+        painter.add(
+            egui::epaint::RectShape::filled(
+                rect,
+                egui::CornerRadius::ZERO,
+                egui::Color32::WHITE.gamma_multiply(alpha * art_in),
+            )
+            .with_texture(texture.id(), ui::cover_uv(texture.size_vec2(), rect.size())),
+        );
+    }
+
     // With no wide art the banner is the poster's wash, so the poster itself
-    // stands at the right, where wide art keeps its subject — over the veils,
-    // and only where it clears the text.
+    // stands at the right, where wide art keeps its subject — and only where
+    // it clears the text.
     if !art.has_wide_art(title)
         && let Some((poster, pstr_core::metadata::ArtShape::Portrait)) = art.poster(title)
     {
-        const INSET: f32 = 28.0;
-        let height = rect.height() - 2.0 * INSET;
+        const INSET: f32 = 40.0;
+        let height = rect.height() - 2.0 * INSET - 40.0;
         let size = egui::vec2(height * 2.0 / 3.0, height);
         let at = egui::Rect::from_min_size(
             egui::pos2(rect.right() - 2.0 * INSET - size.x, rect.top() + INSET),
             size,
         );
-        if at.left() > inner.right() + INSET {
+        if at.left() > text_right + INSET {
+            painter.add(
+                theme::tile_shadow(alpha * art_in)
+                    .as_shape(at, egui::CornerRadius::same(theme::radius::MD)),
+            );
             painter.add(
                 egui::epaint::RectShape::filled(
                     at,
                     egui::CornerRadius::same(theme::radius::MD),
-                    egui::Color32::WHITE.gamma_multiply(art_in),
+                    egui::Color32::WHITE.gamma_multiply(alpha * art_in),
                 )
                 .with_texture(
                     poster.id(),
@@ -258,70 +408,153 @@ fn hero(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<A
             );
         }
     }
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(inner)
-            .layout(egui::Layout::bottom_up(egui::Align::Min)),
-        |ui| {
-            ui.horizontal(|ui| {
-                if let Some(episode) = title.next_up() {
-                    let label = match (title.resume(), episode.numbering()) {
-                        (Some(_), Some(numbering)) => {
-                            format!("{}  Resume {numbering}", egui_phosphor::regular::PLAY)
-                        }
-                        (Some(_), None) => format!("{}  Resume", egui_phosphor::regular::PLAY),
-                        (None, _) => format!("{}  Play", egui_phosphor::regular::PLAY),
-                    };
-                    if ui::accent_button(ui, &label).clicked() {
-                        actions.push(Action::Play(PlaybackTarget::new(title, episode)));
-                    }
-                    ui.add_space(theme::space::S);
-                }
-                let more = format!("{}  More info", egui_phosphor::regular::INFO);
-                if ui::tonal_button(ui, &more).clicked() {
-                    actions.push(Action::Goto(Page::Title(title.key.clone())));
-                }
-            });
-            ui.add_space(theme::space::L);
-            if let Some(overview) = found.as_ref().and_then(|found| found.overview.as_deref()) {
-                let mut job = egui::text::LayoutJob::simple(
-                    overview.to_owned(),
-                    theme::Role::Body.font(),
-                    theme::text(),
-                    ui.available_width(),
-                );
-                job.wrap.max_rows = 3;
-                ui.label(job);
-                ui.add_space(theme::space::M);
-            }
-            let mut facts = vec![subtitle(title)];
-            if let Some(found) = &found {
-                if let Some(rating) = found.rating {
-                    facts.push(format!("{} {rating:.1}", egui_phosphor::regular::STAR));
-                }
-                facts.extend(found.genres.iter().take(3).cloned());
-            }
-            ui.label(ui::muted(facts.join("  ·  ")));
-            ui.add_space(theme::space::XXS);
-            if ui::logo_heading(ui, art, title, 110.0).is_none() {
-                // Two lines before it gives up: a long romanised name cut to
-                // one at this size kept barely more than its first word.
-                let mut job = egui::text::LayoutJob::simple(
-                    art.name(title).to_owned(),
-                    theme::Role::Hero.font(),
-                    theme::text(),
-                    ui.available_width().min(640.0),
-                );
-                job.wrap.max_rows = 2;
-                job.wrap.overflow_character = Some('…');
-                ui.label(job);
-            }
-        },
-    );
+    theme::background().lerp_to_gamma(theme::mood_veil(art.mood(title)), art_in)
+}
 
-    if response.clicked() {
-        actions.push(Action::Goto(Page::Title(title.key.clone())));
+/// What the banner says about one title, from the bottom up: how far into it
+/// the viewer is, the buttons, the synopsis, the facts and the name.
+fn hero_text(ui: &mut egui::Ui, art: &mut Art<'_>, title: &Title, actions: &mut Vec<Action>) {
+    let found = art
+        .metadata
+        .get(&title.key)
+        .and_then(|record| record.metadata.clone());
+    if let Some(episode) = title.resume()
+        && let Some(progress) = episode.progress()
+    {
+        ui.horizontal(|ui| {
+            ui::progress_bar(ui, progress as f32, 180.0);
+            if let Some(left) = time_left(episode) {
+                ui.add_space(theme::space::S);
+                ui.label(ui::muted(left));
+            }
+        });
+        ui.add_space(theme::space::M);
     }
+    ui.horizontal(|ui| {
+        if let Some(episode) = title.next_up() {
+            let label = match (title.resume(), episode.numbering()) {
+                (Some(_), Some(numbering)) => {
+                    format!("{}  Resume {numbering}", egui_phosphor::regular::PLAY)
+                }
+                (Some(_), None) => format!("{}  Resume", egui_phosphor::regular::PLAY),
+                (None, _) => format!("{}  Play", egui_phosphor::regular::PLAY),
+            };
+            if ui::accent_button(ui, &label).clicked() {
+                actions.push(Action::Play(PlaybackTarget::new(title, episode)));
+            }
+            ui.add_space(theme::space::S);
+        }
+        let more = format!("{}  More info", egui_phosphor::regular::INFO);
+        if ui::tonal_button(ui, &more).clicked() {
+            actions.push(Action::Goto(Page::Title(title.key.clone())));
+        }
+    });
+    ui.add_space(theme::space::L);
+    if let Some(overview) = found.as_ref().and_then(|found| found.overview.as_deref()) {
+        let mut job = egui::text::LayoutJob::simple(
+            overview.to_owned(),
+            theme::Role::Body.font(),
+            theme::text(),
+            ui.available_width(),
+        );
+        job.wrap.max_rows = 3;
+        ui.label(job);
+        ui.add_space(theme::space::M);
+    }
+    let mut facts = vec![subtitle(title)];
+    if let Some(found) = &found {
+        if let Some(rating) = found.rating {
+            facts.push(format!("{} {rating:.1}", egui_phosphor::regular::STAR));
+        }
+        facts.extend(found.genres.iter().take(3).cloned());
+    }
+    ui.label(ui::muted(facts.join("  ·  ")));
+    ui.add_space(theme::space::XXS);
+    if ui::logo_heading(ui, art, title, 120.0).is_none() {
+        // Two lines before it gives up: a long romanised name cut to one at
+        // this size kept barely more than its first word.
+        let mut job = egui::text::LayoutJob::simple(
+            art.name(title).to_owned(),
+            theme::Role::Hero.font(),
+            theme::text(),
+            ui.available_width().min(640.0),
+        );
+        job.wrap.max_rows = 2;
+        job.wrap.overflow_character = Some('…');
+        ui.label(job);
+    }
+}
+
+/// "23 min left", for an episode part-way through. `None` when the file's
+/// length is not known.
+fn time_left(episode: &pstr_core::library::Episode) -> Option<String> {
+    let watch = episode.watch?;
+    let left = (watch.duration_secs? - watch.position_secs).max(0.0);
+    let minutes = (left / 60.0).ceil() as u64;
+    Some(if minutes >= 60 {
+        format!("{}h {}m left", minutes / 60, minutes % 60)
+    } else {
+        format!("{minutes} min left")
+    })
+}
+
+/// One dot per featured title at the banner's lower right, the one shown
+/// drawn long. Returns the one clicked.
+fn dots(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    column: egui::Rect,
+    titles: &[&Title],
+    shown: usize,
+) -> Option<usize> {
+    const DOT: f32 = 8.0;
+    const LONG: f32 = 24.0;
+    const GAP: f32 = 8.0;
+    let mut picked = None;
+    // Clear of the scroll bar, which floats over the column's right edge.
+    let mut right = column.right() - theme::space::L;
+    let centre = column.bottom() - 58.0;
+    // Right to left, so the row ends at the column's edge whatever its width.
+    for (index, title) in titles.iter().enumerate().rev() {
+        let width = ui.ctx().animate_value_with_time(
+            id.with(("dot", index)),
+            if index == shown { LONG } else { DOT },
+            theme::motion::STATE,
+        );
+        let dot = egui::Rect::from_min_max(
+            egui::pos2(right - width, centre - DOT / 2.0),
+            egui::pos2(right, centre + DOT / 2.0),
+        );
+        right -= width + GAP;
+        let response = ui
+            .interact(
+                dot.expand2(egui::vec2(GAP / 2.0, 8.0)),
+                id.with(("dot-hit", index)),
+                egui::Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::RadioButton,
+                true,
+                index == shown,
+                &title.name,
+            )
+        });
+        let ink = if index == shown {
+            theme::text()
+        } else if response.hovered() {
+            theme::text().gamma_multiply(0.7)
+        } else {
+            theme::text().gamma_multiply(0.35)
+        };
+        ui.painter()
+            .rect_filled(dot, egui::CornerRadius::same(4), ink);
+        if response.clicked() {
+            picked = Some(index);
+        }
+    }
+    picked
 }
 
 /// The filter pills, the order and the grouping, at the right of the grid's
@@ -784,12 +1017,67 @@ mod tests {
         };
         let metadata = std::collections::HashMap::new();
         let mut view = LibraryView::default();
-        assert!(featured(&library, &view, &metadata, 0).is_none());
+        assert!(featured(&library, &view, &metadata, 0).is_empty());
         view.resumable = vec![1];
-        assert_eq!(
-            featured(&library, &view, &metadata, 0).map(|title| title.key.as_str()),
-            Some("second")
-        );
+        let keys: Vec<&str> = featured(&library, &view, &metadata, 0)
+            .iter()
+            .map(|title| title.key.as_str())
+            .collect();
+        assert_eq!(keys, ["second"]);
+    }
+
+    fn pictured(key: &str) -> pstr_core::metadata::MetadataRecord {
+        use pstr_core::metadata::{MetadataRecord, ProviderId, TitleMetadata};
+        MetadataRecord {
+            title_key: key.into(),
+            provider: ProviderId::AniList,
+            metadata: Some(TitleMetadata {
+                provider: ProviderId::AniList,
+                remote_id: key.into(),
+                name: key.into(),
+                original_name: None,
+                overview: None,
+                year: None,
+                kind: TitleKind::Film,
+                poster_url: None,
+                backdrop_url: Some(format!("https://example.com/{key}.jpg")),
+                logo_url: None,
+                rating: None,
+                genres: Vec::new(),
+                episodes: None,
+                url: None,
+                details: None,
+            }),
+            fetched_at: 0,
+            manual: false,
+        }
+    }
+
+    #[test]
+    fn the_banner_turns_through_five_pictured_titles_after_the_one_being_watched() {
+        let titles: Vec<Title> = (0..8)
+            .map(|index| {
+                let mut one = title(TitleKind::Film, None);
+                one.key = format!("t{index}");
+                one
+            })
+            .collect();
+        let library = Library { titles };
+        let metadata: std::collections::HashMap<_, _> = (0..8)
+            .map(|index| (format!("t{index}"), pictured(&format!("t{index}"))))
+            .collect();
+        let mut view = LibraryView::default();
+        view.resumable = vec![5];
+        let keys = |day| -> Vec<String> {
+            featured(&library, &view, &metadata, day)
+                .iter()
+                .map(|title| title.key.clone())
+                .collect()
+        };
+        assert_eq!(keys(2), ["t5", "t2", "t3", "t4", "t6"]);
+        // The same order all day, and a different start the next.
+        assert_eq!(keys(2), keys(2));
+        assert_eq!(keys(3)[1], "t3");
     }
 
     #[test]

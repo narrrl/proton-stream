@@ -143,6 +143,18 @@ impl Art<'_> {
         self.of(title)
     }
 
+    /// The colour of whatever [`Art::wide`] is drawing for `title`, once it
+    /// has arrived — what that title's veils are tinted with. See
+    /// [`theme::mood_veil`].
+    pub fn mood(&self, title: &Title) -> Option<egui::Color32> {
+        [wide_key, ambient_key, poster_key]
+            .into_iter()
+            .map(|key| key(&title.key))
+            // The tile's own picture last: what `wide` falls back on.
+            .chain(std::iter::once(title.key.clone()))
+            .find_map(|key| self.posters.mood(&key))
+    }
+
     /// Whether `title` has a picture made for a strip across the window, rather
     /// than [`Art::wide`] standing one in.
     pub fn has_wide_art(&self, title: &Title) -> bool {
@@ -202,6 +214,10 @@ impl Art<'_> {
         Some((texture, ArtShape::Landscape))
     }
 }
+
+/// The central panel's margin around every page. Anything drawn edge to edge —
+/// the library's banner, the title page's band — reaches past it.
+pub const PAGE_MARGIN: egui::Vec2 = egui::vec2(18.0, 12.0);
 
 /// The texture key of a title's cover, beside [`Art::of`]'s, which is the
 /// title key itself.

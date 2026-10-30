@@ -461,7 +461,7 @@ fn header(
 
     if let Some((texture, index)) = backdrop {
         ui.add_space(theme::space::L);
-        band(ui, &texture, index);
+        band(ui, &texture, index, art.mood(title));
     }
 }
 
@@ -475,10 +475,15 @@ fn header(
 /// page colour so text laid over it stays readable whatever the still happens to
 /// be, and a fade into the page along the bottom so the band ends rather than
 /// stops.
-fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::ShapeIdx) {
+fn band(
+    ui: &mut egui::Ui,
+    texture: &egui::TextureHandle,
+    index: egui::layers::ShapeIdx,
+    mood: Option<egui::Color32>,
+) {
     // Full width of the window, not of the content: the panel's own margin is
     // what the band has to reach past, or it reads as a picture in a box.
-    const BLEED: f32 = 18.0;
+    const BLEED: f32 = super::PAGE_MARGIN.x;
     let content = ui.min_rect();
     let rect = egui::Rect::from_min_max(
         egui::pos2(ui.max_rect().left() - BLEED, content.top()),
@@ -512,7 +517,12 @@ fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::S
     //
     // Heavier still when there is no fade coming, since then these are the only
     // things standing between the text and the picture.
+    //
+    // Both in the page colour tinted by the picture's own, so each title's
+    // page carries its light; the fade at the bottom stays the page's, since
+    // that is what it ends in.
     let ramps = theme::ramps_on();
+    let veil = theme::mood_veil(mood);
     layers.push(
         egui::epaint::RectShape::filled(
             rect,
@@ -520,7 +530,7 @@ fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::S
             // Lighter with the ramps on: the horizontal one below is solid
             // where the text is, so this coat only has to calm the picture's
             // right side, not make it disappear.
-            theme::background().gamma_multiply(if ramps { 0.72 } else { 0.94 }),
+            veil.gamma_multiply(if ramps { 0.72 } else { 0.94 }),
         )
         .into(),
     );
@@ -532,7 +542,7 @@ fn band(ui: &mut egui::Ui, texture: &egui::TextureHandle, index: egui::layers::S
         layers.push(theme::fade_shape(
             ui.ctx(),
             text_side,
-            theme::background(),
+            veil,
             theme::Direction::Horizontal,
             // Solid at the left, where the poster and the text are.
             false,

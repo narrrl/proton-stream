@@ -77,35 +77,57 @@ struct LibraryView: View {
     // library spent a band of every visit on something used in few of them.
     @SceneStorage("library.searching") private var searching = false
     @State private var collapsed = false
+    /// How far the bar over the banner has filled in, from clear to solid.
+    @State private var reveal: CGFloat = 0
+
+    /// The page's bar: its title, shown as much as `solid` says, and its
+    /// actions, in `ink` or the scheme's own.
+    private func bar(solid: CGFloat, ink: Color?) -> some View {
+        HStack(spacing: 0) {
+            Text("Library")
+                .textStyle(.titleLarge)
+                .foregroundStyle(scheme.onSurface)
+                .padding(.leading, 16)
+                .opacity(solid)
+            Spacer()
+            IconButton("magnifyingglass", "Search library", tint: ink) { searching = true }
+            ArrangeMenu(sort: model.sort, grouped: model.grouped, onArrange: model.arrange)
+            // Pull to refresh is the gesture; the icon stays for a viewer who
+            // does not know it.
+            IconButton("arrow.clockwise", "Refresh", tint: ink, enabled: !model.refreshing) { model.refresh() }
+        }
+        .frame(height: 56)
+        .padding(.trailing, 4)
+    }
 
     var body: some View {
         let resumable = resumable(model.titles)
-        VStack(spacing: 0) {
-            if searching {
-                SearchBar(query: Binding(get: { model.query }, set: model.search)) {
-                    searching = false
-                    model.search("")
+        let browsing = model.query.trimmingCharacters(in: .whitespaces).isEmpty
+        let featured = featuredTitles(model.titles, resumable)
+        // With a banner, the bar lies over it, clear, and fills in as the
+        // banner scrolls away; without one, the large title folds into the bar
+        // as the grid scrolls.
+        let overBanner = !searching && !model.loading && browsing && !featured.isEmpty
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                if searching {
+                    SearchBar(query: Binding(get: { model.query }, set: model.search)) {
+                        searching = false
+                        model.search("")
+                    }
+                } else if !overBanner {
+                    bar(solid: collapsed ? 1 : 0, ink: nil)
+                        .background(collapsed ? scheme.surfaceContainer : scheme.background)
                 }
-            } else {
-                HStack(spacing: 0) {
-                    // The large title folds into the bar as the grid scrolls.
-                    Text("Library")
-                        .textStyle(.titleLarge)
-                        .foregroundStyle(scheme.onSurface)
-                        .padding(.leading, 16)
-                        .opacity(collapsed ? 1 : 0)
-                    Spacer()
-                    IconButton("magnifyingglass", "Search library") { searching = true }
-                    ArrangeMenu(sort: model.sort, grouped: model.grouped, onArrange: model.arrange)
-                    // Pull to refresh is the gesture; the icon stays for a
-                    // viewer who does not know it.
-                    IconButton("arrow.clockwise", "Refresh", enabled: !model.refreshing) { model.refresh() }
-                }
-                .frame(height: 56)
-                .padding(.trailing, 4)
-                .background(collapsed ? scheme.surfaceContainer : scheme.background)
+                content(resumable, featured: overBanner ? featured : [])
             }
-            content(resumable)
+            if overBanner {
+                // White over the banner's own scrim, then the page's ink once
+                // the bar has filled in.
+                bar(solid: reveal, ink: reveal > 0.5 ? nil : .white)
+                    .background(scheme.surfaceContainer.opacity(reveal).ignoresSafeArea(edges: .top))
+                    .animation(.easeOut(duration: 0.15), value: reveal > 0.5)
+            }
         }
         .background(scheme.background)
         .sheet(item: $menuFor, onDismiss: {
@@ -150,7 +172,7 @@ struct LibraryView: View {
         }
     }
 
-    @ViewBuilder private func content(_ resumable: [Resumable]) -> some View {
+    @ViewBuilder private func content(_ resumable: [Resumable], featured: [TitleRecord]) -> some View {
         if model.loading {
             LibrarySkeleton()
         } else if model.titles.isEmpty && !model.query.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -170,11 +192,11 @@ struct LibraryView: View {
             }
             .refreshable { await model.crawlNow(nil) }
         } else {
-            grid(resumable)
+            grid(resumable, featured: featured)
         }
     }
 
-    private func grid(_ resumable: [Resumable]) -> some View {
+    private func grid(_ resumable: [Resumable], featured: [TitleRecord]) -> some View {
         // The arrangement names titles by key; before it has arrived, the
         // titles as they came are the grid.
         let byKey = Dictionary(model.titles.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
@@ -184,11 +206,25 @@ struct LibraryView: View {
             .map { Shelf(label: $0.label, titles: $0.keys.compactMap { byKey[$0] }) }
             .filter { !$0.titles.isEmpty }
         let browsing = model.query.trimmingCharacters(in: .whitespaces).isEmpty
-        let featured = browsing ? featuredTitle(model.titles, resumable) : nil
 
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
-                if !searching {
+                if !featured.isEmpty {
+                    FeaturedBanner(titles: featured, resumable: resumable, onPlay: onResume, onOpen: onTitle)
+                        // Edge to edge, out of the grid's margin.
+                        .padding(.horizontal, -16)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.onChange(of: geometry.frame(in: .named("library")).minY) { _, top in
+                                    reveal = min(max(-top / 280, 0), 1)
+                                }
+                            }
+                        }
+                        // Scrolled far enough to leave the lazy stack: the bar
+                        // is long since solid.
+                        .onDisappear { reveal = 1 }
+                        .onAppear { reveal = 0 }
+                } else if !searching {
                     Text("Library")
                         .textStyle(.headlineMedium)
                         .foregroundStyle(scheme.onSurface)
@@ -205,14 +241,6 @@ struct LibraryView: View {
                         offerDismissed = true
                         SettingsStore().metadataOfferDismissed = true
                     }
-                }
-                if let featured {
-                    FeaturedBanner(
-                        title: featured,
-                        resume: resumable.first { $0.title.key == featured.key },
-                        onPlay: { onResume(featured, $0) },
-                        onOpen: { onTitle(featured) }
-                    )
                 }
                 if browsing && !resumable.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -273,8 +301,11 @@ struct LibraryView: View {
                     }
                 }
             }
-            .padding(EdgeInsets(top: 8, leading: 16, bottom: 24, trailing: 16))
+            // No room above a banner: it starts under the status bar, and the
+            // bar lies over it.
+            .padding(EdgeInsets(top: featured.isEmpty ? 8 : 0, leading: 16, bottom: 24, trailing: 16))
         }
+        .ignoresSafeArea(edges: featured.isEmpty ? [] : .top)
         .coordinateSpace(name: "library")
         .refreshable { await model.crawlNow(nil) }
         .scrollDismissesKeyboard(.immediately)
@@ -475,59 +506,160 @@ private struct MetadataOfferCard: View {
     }
 }
 
-/// The title the banner shows: the one watched last, or with nothing part
-/// watched, one of the titles the provider has a backdrop for, turning over
-/// once a day — the desktop's `featured`.
-private func featuredTitle(_ titles: [TitleRecord], _ resumable: [Resumable]) -> TitleRecord? {
-    if let first = resumable.first { return first.title }
+/// How many titles the banner turns through: the desktop's `FEATURED`.
+private let featuredMax = 5
+
+/// How long each title holds the banner: the desktop's `HOLD`.
+private let holdSeconds = 8.0
+
+/// One title giving way to the next: the desktop's `TURN`.
+private let turn = Animation.easeInOut(duration: 0.6)
+
+/// The titles the banner turns through: the one watched last first, then
+/// titles the provider has a backdrop for, starting from a different one each
+/// day — the desktop's `featured`.
+private func featuredTitles(_ titles: [TitleRecord], _ resumable: [Resumable]) -> [TitleRecord] {
+    var picked = resumable.first.map { [$0.title] } ?? []
     let pictured = titles.filter { $0.backdropUrl != nil }
-    if pictured.isEmpty { return nil }
+    if pictured.isEmpty { return picked }
     let day = Int(Date().timeIntervalSince1970 + Double(TimeZone.current.secondsFromGMT())) / 86400
-    return pictured[day % pictured.count]
+    for offset in pictured.indices {
+        if picked.count == featuredMax { break }
+        let title = pictured[(day + offset) % pictured.count]
+        if !picked.contains(where: { $0.key == title.key }) { picked.append(title) }
+    }
+    return picked
 }
 
-/// Large art behind the name, rating, genres and three lines of synopsis.
+/// The banner at the top of the library: one title at a time, edge to edge
+/// under the status bar, turning to the next every `holdSeconds` — a swipe
+/// starts the count again. Each title's veil is tinted with its own picture's
+/// colour.
 private struct FeaturedBanner: View {
+    let titles: [TitleRecord]
+    let resumable: [Resumable]
+    let onPlay: (TitleRecord, Int) -> Void
+    let onOpen: (TitleRecord) -> Void
+    @Environment(\.scheme) private var scheme
+    @State private var shown = ""
+
+    var body: some View {
+        let current = titles.contains { $0.key == shown } ? shown : titles.first?.key ?? ""
+        TabView(selection: Binding(get: { current }, set: { shown = $0 })) {
+            ForEach(titles, id: \.key) { title in
+                FeaturedPage(
+                    title: title,
+                    resume: resumable.first { $0.title.key == title.key },
+                    onPlay: { onPlay(title, $0) },
+                    onOpen: { onOpen(title) }
+                )
+                .tag(title.key)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        // Most of a phone's first screen, but never so much of an iPad's that
+        // nothing under it shows.
+        .containerRelativeFrame(.vertical) { height, _ in min(max(height * 0.62, 360), 620) }
+        .overlay(alignment: .bottom) {
+            if titles.count > 1 {
+                HStack(spacing: 6) {
+                    ForEach(titles, id: \.key) { title in
+                        let selected = title.key == current
+                        Capsule()
+                            .fill(scheme.onBackground.opacity(selected ? 1 : 0.4))
+                            .frame(width: selected ? 18 : 6, height: 6)
+                            .contentShape(Rectangle().inset(by: -8))
+                            .onTapGesture { withAnimation(turn) { shown = title.key } }
+                            .accessibilityLabel("Show \(title.displayName)")
+                            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+                    }
+                }
+                .animation(.easeOut(duration: 0.15), value: current)
+                .padding(.bottom, 10)
+            }
+        }
+        .task(id: current) {
+            guard titles.count > 1 else { return }
+            try? await Task.sleep(for: .seconds(holdSeconds))
+            if Task.isCancelled { return }
+            let index = titles.firstIndex { $0.key == current } ?? 0
+            withAnimation(turn) { shown = titles[(index + 1) % titles.count].key }
+        }
+    }
+}
+
+/// One title on the banner: its art, its veil, and what it is, from the
+/// bottom up.
+private struct FeaturedPage: View {
     let title: TitleRecord
     let resume: Resumable?
     let onPlay: (Int) -> Void
     let onOpen: () -> Void
+    @Environment(\.scheme) private var scheme
+    @State private var mood: UInt32?
 
     var body: some View {
-        Backdrop(title: title)
-            .aspectRatio(4 / 3, contentMode: .fit)
-            .overlay {
-                LinearGradient(
-                    stops: [.init(color: .clear, location: 0.35), .init(color: .black.opacity(0.85), location: 1)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Always over the dark scrim above, so a logo made for dark
-                    // art reads here whatever the theme.
-                    RemoteLogo(title.logoUrl, title.displayName, maxWidth: 240, maxHeight: 72) {
-                        Text(title.displayName).textStyle(.displayLarge).foregroundStyle(.white).lineLimit(2)
+        let veil = scheme.veil(mood)
+        ZStack(alignment: .bottomLeading) {
+            Backdrop(title: title) { mood = $0 }
+            LinearGradient(
+                stops: [
+                    // Dark under the status bar and the bar's white icons…
+                    .init(color: .black.opacity(0.5), location: 0),
+                    .init(color: .clear, location: 0.22),
+                    // …and the picture's own colour under the text, ending in
+                    // the page it hands over to.
+                    .init(color: veil.opacity(0.35), location: 0.45),
+                    .init(color: veil.opacity(0.92), location: 0.78),
+                    .init(color: scheme.background, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            VStack(alignment: .leading, spacing: 0) {
+                // A logo is lettering made for dark art, white as often as
+                // not; over a light palette's veil it is gone, so the light
+                // palette keeps the name.
+                if scheme.light {
+                    name
+                } else {
+                    RemoteLogo(title.logoUrl, title.displayName, maxWidth: 260, maxHeight: 88) { name }
+                        .padding(.bottom, 8)
+                }
+                Text(factLine).textStyle(.bodySmall).foregroundStyle(scheme.onBackground.opacity(0.8))
+                if let overview = title.overview {
+                    Text(overview.trimmingCharacters(in: .whitespacesAndNewlines))
+                        .textStyle(.bodySmall).foregroundStyle(scheme.onBackground.opacity(0.8)).lineLimit(2).padding(.top, 6)
+                }
+                HStack(spacing: 8) {
+                    Button { onPlay(resume?.index ?? nextUpIndex(title.playlist, continueIndex: title.continueIndex)) } label: {
+                        Label(resume?.episode.resumeAt != nil ? "Resume" : "Play", systemImage: "play.fill")
                     }
-                    .padding(.bottom, 6)
-                    Text(factLine).textStyle(.bodySmall).foregroundStyle(.white.opacity(0.8))
-                    if let overview = title.overview {
-                        Text(overview.trimmingCharacters(in: .whitespacesAndNewlines))
-                            .textStyle(.bodySmall).foregroundStyle(.white.opacity(0.8)).lineLimit(3).padding(.top, 6)
-                    }
+                    .buttonStyle(.accent)
+                    Button(action: onOpen) { Label("More info", systemImage: "info.circle") }.buttonStyle(.tonal)
+                }
+                .padding(.top, 12)
+                if let episode = resume?.episode, episode.resumeAt != nil, let progress = episode.progress {
                     HStack(spacing: 8) {
-                        Button { onPlay(resume?.index ?? nextUpIndex(title.playlist, continueIndex: title.continueIndex)) } label: {
-                            Label(resume != nil ? "Resume" : "Play", systemImage: "play.fill")
+                        AccentProgress(progress: progress).frame(width: 120, height: 4)
+                        if let left = episode.timeLeft {
+                            Text(left).textStyle(.bodySmall).foregroundStyle(scheme.onBackground.opacity(0.8))
                         }
-                        .buttonStyle(.accent)
-                        Button("More info", action: onOpen).buttonStyle(.tonal)
                     }
                     .padding(.top, 12)
                 }
-                .padding(16)
             }
-            .clipShape(RoundedRectangle(cornerRadius: Corner.standard))
+            .frame(maxWidth: 560, alignment: .leading)
+            .padding(EdgeInsets(top: 0, leading: 16, bottom: 28, trailing: 16))
+        }
+        .animation(Motion.arrive, value: mood)
+        .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+    }
+
+    private var name: some View {
+        Text(title.displayName).textStyle(.displayLarge).foregroundStyle(scheme.onBackground).lineLimit(2).padding(.bottom, 4)
     }
 
     private var factLine: String {

@@ -63,8 +63,22 @@ this module, and keep Material's sizes. Nothing in the app draws with them.
 buttons, the tab pill. **4** (`BADGE`) for a badge over artwork. The desktop
 also has **3** (`BAR`) for progress bars and edge strips, **6** (`SM`) for a
 small control inside something else, and **12** (`LG`) for what floats — row
-cards, dialogs, toasts, the hero. **16** for an Android bottom sheet, which has
+cards, dialogs, toasts. The library's banner is square: it runs edge to edge. **16** for an Android bottom sheet, which has
 no desktop counterpart.
+
+## A picture's colour
+
+The veils over a title's backdrop — the library's banner, the top of a title's
+page — are the page colour tinted by the picture under them, so each title
+carries its own light. All three clients get the same colour from the same
+code: `pstr_core::appearance::mood` averages the picture, squeezed to a few
+hundred pixels, counting a saturated pixel up to five times a grey one
+(`MOOD_CHROMA_WEIGHT`), and `mood_veil` turns that into the veil. On a dark
+palette the mood is darkened until its brightest channel is 60 (`MOOD_DEPTH`)
+and the page moves 55% of the way to it (`MOOD_DARK`); a light palette moves
+12% (`MOOD_LIGHT`). The phones reach both through the bridge, as
+`pictureMood` and `moodVeil`. The fade at the bottom stays the page colour,
+because that is what it ends in.
 
 ## Spacing
 

@@ -280,6 +280,81 @@ pub fn worst_contrast(from: Rgb, to: Rgb, ink: Rgb) -> f32 {
 /// a tab, a play glyph, never body copy.
 pub const MIN_CONTRAST: f32 = 3.0;
 
+/// The colour a picture leaves behind: its pixels averaged, with the vivid
+/// ones counting for more. `None` for a picture with nothing opaque in it.
+///
+/// Weighted rather than a plain mean, because a plain mean of almost any
+/// still is a brownish grey — the sky and the shadows cancel out, and the one
+/// red coat that makes the poster what it is barely moves the sum. Each pixel
+/// counts once plus [`MOOD_CHROMA_WEIGHT`] times its chroma, so a saturated
+/// patch pulls the result towards itself without a single pixel deciding it.
+///
+/// Takes whatever pixels the caller has, in any order and at any size: every
+/// client hands over a picture already squeezed small, so this is a few
+/// hundred values, not a frame.
+pub fn mood(pixels: impl IntoIterator<Item = (Rgb, u8)>) -> Option<Rgb> {
+    let (mut r, mut g, mut b, mut total) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+    for (pixel, alpha) in pixels {
+        // Half transparent and below is a logo's anti-aliasing or a poster's
+        // rounded corner, not the picture.
+        if alpha < 128 {
+            continue;
+        }
+        let high = pixel.r.max(pixel.g).max(pixel.b);
+        let low = pixel.r.min(pixel.g).min(pixel.b);
+        let weight = 1.0 + MOOD_CHROMA_WEIGHT * f32::from(high - low) / 255.0;
+        r += weight * f32::from(pixel.r);
+        g += weight * f32::from(pixel.g);
+        b += weight * f32::from(pixel.b);
+        total += weight;
+    }
+    (total > 0.0).then(|| {
+        let channel = |sum: f32| (sum / total).round().clamp(0.0, 255.0) as u8;
+        Rgb::new(channel(r), channel(g), channel(b))
+    })
+}
+
+/// How much more a fully saturated pixel counts towards [`mood`] than a grey
+/// one.
+pub const MOOD_CHROMA_WEIGHT: f32 = 4.0;
+
+/// The brightest channel a mood is brought down to before it tints a dark
+/// palette. Any brighter and the veil stops being the page with a hint of the
+/// picture in it, and text over it loses the contrast the veil is there for.
+pub const MOOD_DEPTH: u8 = 60;
+
+/// How far a dark palette's veil moves from the page colour towards the mood.
+pub const MOOD_DARK: f32 = 0.55;
+
+/// The same for a light palette — much less, because a light page tinted as
+/// hard reads as a coloured page rather than a lit one.
+pub const MOOD_LIGHT: f32 = 0.12;
+
+/// The page colour, tinted by a picture's [`mood`]: what the veils over a
+/// title's backdrop are painted in, so each title's banner carries its own
+/// light rather than the same flat colour.
+///
+/// On a dark palette the mood is first darkened to [`MOOD_DEPTH`] — only its
+/// hue and saturation are wanted, never its brightness — and the page moves
+/// [`MOOD_DARK`] of the way to it. A light palette moves [`MOOD_LIGHT`] of the
+/// way to the mood as it is.
+pub fn mood_veil(background: Rgb, mood: Rgb, light: bool) -> Rgb {
+    if light {
+        return mix(background, mood, MOOD_LIGHT);
+    }
+    let high = mood.r.max(mood.g).max(mood.b);
+    if high == 0 {
+        return mix(background, mood, MOOD_DARK);
+    }
+    let scale = f32::from(MOOD_DEPTH.min(high)) / f32::from(high);
+    let deep = |channel: u8| (f32::from(channel) * scale).round() as u8;
+    mix(
+        background,
+        Rgb::new(deep(mood.r), deep(mood.g), deep(mood.b)),
+        MOOD_DARK,
+    )
+}
+
 /// Every colour a client draws with, resolved from a [`Flavor`] and an
 /// [`Accent`].
 ///
@@ -625,6 +700,51 @@ mod tests {
             data: root.to_path_buf(),
             cache: root.to_path_buf(),
         }
+    }
+
+    #[test]
+    fn a_picture_of_one_colour_has_that_colour_as_its_mood() {
+        let teal = Rgb::new(20, 140, 150);
+        assert_eq!(mood(std::iter::repeat_n((teal, 255), 16)), Some(teal));
+    }
+
+    #[test]
+    fn a_vivid_patch_outweighs_as_much_grey_in_the_mood() {
+        let red = Rgb::new(220, 30, 30);
+        let grey = Rgb::new(120, 120, 120);
+        let found = mood([(red, 255), (grey, 255)]).unwrap();
+        assert!(found.r > 180, "{found:?}");
+        assert!(found.g < 60 && found.b < 60, "{found:?}");
+    }
+
+    #[test]
+    fn transparent_pixels_do_not_count_towards_the_mood() {
+        let blue = Rgb::new(30, 60, 200);
+        assert_eq!(
+            mood([(blue, 255), (Rgb::new(255, 255, 255), 0)]),
+            Some(blue)
+        );
+        assert_eq!(mood([(blue, 10)]), None);
+        assert_eq!(mood(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn a_dark_veil_takes_the_moods_hue_but_never_its_brightness() {
+        let background = Rgb::new(11, 11, 15);
+        let veil = mood_veil(background, Rgb::new(255, 240, 40), false);
+        // Warmer than the page…
+        assert!(veil.r > background.r && veil.g > background.g, "{veil:?}");
+        // …and still dark enough to be a page under white text.
+        assert!(luminance(veil) < 0.05, "{veil:?}");
+        assert!(contrast(veil, Rgb::new(255, 255, 255)) > 12.0, "{veil:?}");
+    }
+
+    #[test]
+    fn a_light_veil_moves_only_a_little_way_to_the_mood() {
+        let background = Rgb::new(239, 241, 245);
+        let veil = mood_veil(background, Rgb::new(200, 20, 20), true);
+        assert!(veil.r >= veil.g, "{veil:?}");
+        assert!(luminance(veil) > 0.6, "{veil:?}");
     }
 
     #[test]

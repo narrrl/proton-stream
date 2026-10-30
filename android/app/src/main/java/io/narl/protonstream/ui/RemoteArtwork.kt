@@ -7,6 +7,7 @@ import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -33,6 +34,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -45,6 +48,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.TitleRecord
+import uniffi.pstr_android.moodVeil as sharedMoodVeil
+import uniffi.pstr_android.pictureMood as sharedPictureMood
 import java.net.HttpURLConnection
 import java.net.URI
 import java.io.ByteArrayOutputStream
@@ -98,6 +103,7 @@ internal fun RemoteArtwork(
     fallback: ThumbnailSource? = null,
     labelled: Boolean = true,
     maxEdge: Dp? = null,
+    onMood: ((Color) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val enabled = LocalArtworkLoading.current
@@ -110,9 +116,11 @@ internal fun RemoteArtwork(
             image = ArtworkLoad.Missing
             return@LaunchedEffect
         }
-        image = (loadArtwork(context, url, edge) ?: loadThumbnail(fallback, edge))
-            ?.let { ArtworkLoad.Loaded(it.asImageBitmap()) }
-            ?: ArtworkLoad.Missing
+        val bitmap = loadArtwork(context, url, edge) ?: loadThumbnail(fallback, edge)
+        image = bitmap?.let { ArtworkLoad.Loaded(it.asImageBitmap()) } ?: ArtworkLoad.Missing
+        if (bitmap != null && onMood != null) {
+            moodOf(url ?: fallback?.key ?: return@LaunchedEffect, bitmap)?.let(onMood)
+        }
     }
     Crossfade(image, modifier, animationSpec = tween(ARRIVE_MS), label = "artwork") { loaded ->
         when (loaded) {
@@ -151,7 +159,7 @@ private const val SHIMMER_MS = 1_400
  * stretched, is what softens it.
  */
 @Composable
-internal fun Backdrop(title: TitleRecord, modifier: Modifier = Modifier) {
+internal fun Backdrop(title: TitleRecord, modifier: Modifier = Modifier, onMood: ((Color) -> Unit)? = null) {
     val wash = title.backdropUrl == null && title.posterUrl != null
     RemoteArtwork(
         title.backdropUrl ?: title.posterUrl,
@@ -160,7 +168,50 @@ internal fun Backdrop(title: TitleRecord, modifier: Modifier = Modifier) {
         fallback = title.thumbnailSource,
         labelled = false,
         maxEdge = if (wash) WASH_EDGE else null,
+        onMood = onMood,
     )
+}
+
+/**
+ * The colour a picture leaves behind — the shared `appearance::mood`, over the
+ * picture squeezed to [MOOD_EDGE] pixels a side. Remembered per picture, so a
+ * banner paging back to a title does not work it out again.
+ */
+private suspend fun moodOf(key: String, bitmap: Bitmap): Color? {
+    moods.get(key)?.let { return Color(it) }
+    val argb = withContext(Dispatchers.Default) {
+        runCatching {
+            val small = Bitmap.createScaledBitmap(bitmap, MOOD_EDGE, MOOD_EDGE, true)
+            val pixels = IntArray(MOOD_EDGE * MOOD_EDGE)
+            small.getPixels(pixels, 0, MOOD_EDGE, 0, 0, MOOD_EDGE, MOOD_EDGE)
+            sharedPictureMood(pixels.map(Int::toUInt))?.toInt()
+        }.getOrNull()
+    } ?: return null
+    moods.put(key, argb)
+    return Color(argb)
+}
+
+private val moods = LruCache<String, Int>(64)
+
+/** A picture squeezed to this many pixels a side is still its colours, and a few hundred values to average. */
+private const val MOOD_EDGE = 24
+
+/**
+ * [background] tinted by a picture's [mood], for the veils over that picture —
+ * the shared `appearance::mood_veil`. [background] itself until the mood is
+ * known.
+ */
+@Composable
+internal fun moodVeil(mood: Color?, background: Color = MaterialTheme.colorScheme.background): Color {
+    val light = background.luminance() > 0.5f
+    val target = remember(mood, background) {
+        mood?.let {
+            runCatching {
+                Color(sharedMoodVeil(background.toArgb().toUInt(), it.toArgb().toUInt(), light).toInt())
+            }.getOrNull()
+        } ?: background
+    }
+    return animateColorAsState(target, tween(ARRIVE_MS), label = "veil").value
 }
 
 private val WASH_EDGE = 48.dp

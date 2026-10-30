@@ -13,7 +13,11 @@ The app has five pages, in the bar at the top: **Library**, **History**, **Share
 The library shows every title from every share in one place. Two shares that hold the same show
 show it once.
 
-- **The banner** at the top shows the title you watched last, with **Resume** and **More info**.
+- **The banner** across the top shows the title you watched last first, with **Resume**, how far
+  into it you are and **More info**. It then turns through up to four more titles that have a wide
+  picture, a different set each day, moving on every eight seconds. It holds still while the
+  pointer is over it; on a phone, swipe it or tap a dot under it to move on yourself. Its shading
+  takes on the colours of the picture behind it, and so does the top of a title's page.
 - **Continue watching** has the episode you stopped in for each show, or the next one when you
   finished an episode. To take a show off this row, right-click it and choose **Remove from
   Continue watching**.

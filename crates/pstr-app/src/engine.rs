@@ -3176,6 +3176,24 @@ struct Entry {
     texture: egui::TextureHandle,
     used: u64,
     bytes: usize,
+    /// The picture's colour — see [`pstr_core::appearance::mood`]. Worked out
+    /// once, at upload, from the pixels on their way to the GPU.
+    mood: Option<egui::Color32>,
+}
+
+/// About how many pixels [`mood_of`] reads. A 64×36 wash is read whole; a
+/// 1920 px backdrop is read at a stride that lands on about this many, which
+/// is plenty for an average and costs nothing worth a frame.
+const MOOD_SAMPLES: usize = 4096;
+
+/// [`pstr_core::appearance::mood`] over a decoded picture.
+fn mood_of(image: &egui::ColorImage) -> Option<egui::Color32> {
+    let stride = (image.pixels.len() / MOOD_SAMPLES).max(1);
+    pstr_core::appearance::mood(image.pixels.iter().step_by(stride).map(|pixel| {
+        let [r, g, b, a] = pixel.to_srgba_unmultiplied();
+        (pstr_core::appearance::Rgb::new(r, g, b), a)
+    }))
+    .map(|rgb| egui::Color32::from_rgb(rgb.r, rgb.g, rgb.b))
 }
 
 /// Texture memory one [`ImageCache`] may hold. A 640 px card picture is about
@@ -3243,12 +3261,14 @@ impl ImageCache {
                 break;
             };
             let bytes = image.pixels.len() * 4;
+            let mood = mood_of(&image);
             let texture = ctx.load_texture(&key, image, egui::TextureOptions::LINEAR);
             self.clock += 1;
             let entry = Entry {
                 texture,
                 used: self.clock,
                 bytes,
+                mood,
             };
             if let Some(old) = self.textures.insert(key, entry) {
                 self.bytes -= old.bytes;
@@ -3276,6 +3296,12 @@ impl ImageCache {
             // Asked for again, it is fetched again — from the disk cache.
             self.requested.remove(&oldest);
         }
+    }
+
+    /// The colour of the picture under `key`, once it is a texture. A lookup
+    /// that does not count as asking for it: only drawing a picture keeps it.
+    pub fn mood(&self, key: &str) -> Option<egui::Color32> {
+        self.textures.get(key).and_then(|entry| entry.mood)
     }
 
     pub fn mark_missing(&mut self, key: String) {
@@ -3336,6 +3362,18 @@ mod image_cache_tests {
             fetched,
             "an evicted picture is fetched again when asked for"
         );
+    }
+
+    #[test]
+    fn an_uploaded_picture_keeps_its_colour_and_a_waiting_one_has_none() {
+        let ctx = egui::Context::default();
+        let mut cache = ImageCache::default();
+        let teal = egui::Color32::from_rgb(20, 140, 150);
+        cache.texture("a", || {});
+        cache.insert("a".into(), egui::ColorImage::filled([8, 8], teal));
+        assert_eq!(cache.mood("a"), None);
+        cache.upload(&ctx);
+        assert_eq!(cache.mood("a"), Some(teal));
     }
 
     #[test]
