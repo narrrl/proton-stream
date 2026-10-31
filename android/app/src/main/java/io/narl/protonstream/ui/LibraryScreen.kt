@@ -851,9 +851,12 @@ private fun FeaturedBanner(
     val pager = rememberPagerState { titles.size }
     val dragged by pager.interactionSource.collectIsDraggedAsState()
     if (titles.size > 1 && !dragged) {
-        LaunchedEffect(pager.currentPage, titles.size) {
+        // Keyed on the settled page, not the current one: the current page
+        // flips half way through a turn, and restarting this effect there
+        // cancelled the turn and left the banner stuck between two titles.
+        LaunchedEffect(pager.settledPage, titles.size) {
             delay(HOLD_MS)
-            pager.animateScrollToPage((pager.currentPage + 1) % titles.size, animationSpec = tween(TURN_MS))
+            pager.animateScrollToPage((pager.settledPage + 1) % titles.size, animationSpec = tween(TURN_MS))
         }
     }
     // Most of a phone's first screen, but never so much of a tablet's that
