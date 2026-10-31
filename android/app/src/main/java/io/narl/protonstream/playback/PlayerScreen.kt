@@ -477,8 +477,12 @@ fun PlayerScreen(
     // four seconds after it is reached cannot be found again.
     val exploring = rememberTouchExploration()
     LaunchedEffect(exploring) { if (exploring) showControls = true }
-    LaunchedEffect(showControls, state.paused, exploring) {
-        if (showControls && !state.paused && !exploring) {
+    // A chooser open over the controls. They hold still under it: the
+    // choosers live inside the controls, so hiding them closed whatever was
+    // being picked from, four seconds after the controls came up.
+    var picking by remember { mutableStateOf(false) }
+    LaunchedEffect(showControls, state.paused, exploring, picking) {
+        if (showControls && !state.paused && !exploring && !picking) {
             delay(CONTROLS_SECONDS * 1_000)
             showControls = false
         }
@@ -698,6 +702,7 @@ fun PlayerScreen(
                 landscapeLocked = landscapeLocked,
                 media = key,
                 sleep = sleep,
+                onPicking = { picking = it },
                 onLock = {
                     locked = true
                     showControls = false
@@ -949,6 +954,7 @@ private fun PlayerControls(
     landscapeLocked: Boolean,
     media: String,
     sleep: SleepTimer?,
+    onPicking: (Boolean) -> Unit,
     onLock: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -957,6 +963,10 @@ private fun PlayerControls(
     var showEpisodes by remember { mutableStateOf(false) }
     var showChapters by remember { mutableStateOf(false) }
     var showSpeeds by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
+    val picking = more || showSleep || choosing != null || showEpisodes || showChapters || showSpeeds
+    LaunchedEffect(picking) { onPicking(picking) }
+    DisposableEffect(Unit) { onDispose { onPicking(false) } }
     // What the store says, so the dialog opens on the rate that is playing.
     var speed by remember { mutableStateOf(1.0) }
     LaunchedEffect(Unit) {
@@ -1037,7 +1047,6 @@ private fun PlayerControls(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!roomForAll) {
                     CompactIcon(Icons.Default.Subtitles, "Subtitles") { choosing = "sub" }
-                    var more by remember { mutableStateOf(false) }
                     Box {
                         CompactIcon(Icons.Default.MoreVert, "More") { more = true }
                         DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
