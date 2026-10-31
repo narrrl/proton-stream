@@ -102,7 +102,7 @@ class UniFfiBoundaryTest {
      */
     @Test
     fun chapterPlanningCrossesTheBoundaryIntact() {
-        val plan = chapterPlan(emptyList(), 1560.0)
+        val plan = chapterPlan(emptyList(), 1560.0, emptyList())
         assertNotNull(plan)
         assertNull(skipOffer(plan, 12.0))
     }

@@ -557,6 +557,7 @@ mod tests {
             still_url: None,
             air_date: None,
             runtime: None,
+            mal_id: None,
         }]);
         let guides = HashMap::from([("frieren".to_owned(), guide)]);
 

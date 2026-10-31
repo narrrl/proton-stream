@@ -215,6 +215,7 @@ impl Tmdb {
                         .map(|path| image_url(STILL_SIZE, path)),
                     air_date: episode.air_date.clone().filter(|date| !date.is_empty()),
                     runtime: episode.runtime.filter(|minutes| *minutes > 0),
+                    mal_id: None,
                 }
             }));
         }

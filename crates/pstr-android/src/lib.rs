@@ -812,6 +812,16 @@ pub struct ChapterPlan {
     pub credits_start: Option<f64>,
 }
 
+/// A stretch AniSkip says is the opening or the ending of the open file.
+/// See `pstr_core::chapters::with_skip_ranges`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SkipRangeRecord {
+    /// `Opening` or `Ending`.
+    pub kind: ChapterKind,
+    pub start: f64,
+    pub end: f64,
+}
+
 /// What the player may offer to skip right now.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct SkipOffer {
@@ -823,8 +833,15 @@ pub struct SkipOffer {
 /// Resolve a file's chapters through the same rules the desktop player uses
 /// (`pstr_core::chapters`), so an opening called `Intro` is read identically on
 /// both. Kotlin reads the list out of mpv; the verdict is reached here.
+///
+/// `skips` is what AniSkip said about the file, empty until it has: cut into
+/// the chapters when the file's own name no opening or ending.
 #[uniffi::export]
-pub fn chapter_plan(chapters: Vec<ChapterRecord>, duration: Option<f64>) -> ChapterPlan {
+pub fn chapter_plan(
+    chapters: Vec<ChapterRecord>,
+    duration: Option<f64>,
+    skips: Vec<SkipRangeRecord>,
+) -> ChapterPlan {
     let duration = duration.filter(|duration| *duration > 0.0);
     let chapters: Vec<Chapter> = chapters
         .into_iter()
@@ -837,6 +854,22 @@ pub fn chapter_plan(chapters: Vec<ChapterRecord>, duration: Option<f64>) -> Chap
             start: chapter.start,
         })
         .collect();
+    let skips: Vec<pstr_core::chapters::SkipRange> = skips
+        .into_iter()
+        .filter_map(|skip| {
+            let role = match skip.kind {
+                ChapterKind::Opening => ChapterRole::Opening,
+                ChapterKind::Ending => ChapterRole::Ending,
+                ChapterKind::Preview | ChapterKind::Content => return None,
+            };
+            Some(pstr_core::chapters::SkipRange {
+                role,
+                start: skip.start,
+                end: skip.end,
+            })
+        })
+        .collect();
+    let chapters = pstr_core::chapters::with_skip_ranges(&chapters, &skips, duration);
     let roles = pstr_core::chapters::roles(&chapters, duration);
     ChapterPlan {
         credits_start: pstr_core::chapters::credits_start(&chapters, &roles),
@@ -1966,6 +1999,56 @@ impl AndroidEngine {
                 .await
                 .map_err(BridgeError::from_display)
                 .map(|matches| matches.into_iter().map(match_record).collect())
+        })
+        .await
+        .map_err(BridgeError::from_display)?
+    }
+
+    /// Where AniSkip says the opening and ending of one episode are, in a
+    /// file `duration` seconds long. Empty when the episode's provider entry
+    /// has no MyAnimeList id or nobody has marked it; an error with enrichment
+    /// off, like every other metadata call.
+    pub async fn skip_times(
+        self: Arc<Self>,
+        title_key: String,
+        share_id: String,
+        link_id: String,
+        duration: f64,
+    ) -> Result<Vec<SkipRangeRecord>, BridgeError> {
+        let runtime = Arc::clone(&self.runtime);
+        spawned(&runtime, async move {
+            let service = self.metadata_service()?;
+            let found = self.with_library(|cached| {
+                let title = cached
+                    .library
+                    .titles
+                    .iter()
+                    .find(|title| title.key == title_key)?;
+                let episode = title.episodes().find(|episode| {
+                    episode.node.share_id == share_id && episode.node.link_id == link_id
+                })?;
+                let number = episode.node.parsed.episode?;
+                let found = cached
+                    .guides
+                    .get(&title.key)?
+                    .get(episode.node.parsed.season, number)?;
+                Some((found.mal_id?, found.entry_number?))
+            })?;
+            let Some((mal_id, number)) = found else {
+                return Ok(Vec::new());
+            };
+            let ranges = service
+                .skip_times(mal_id, number, duration)
+                .await
+                .map_err(BridgeError::from_display)?;
+            Ok(ranges
+                .into_iter()
+                .map(|range| SkipRangeRecord {
+                    kind: chapter_kind(range.role),
+                    start: range.start,
+                    end: range.end,
+                })
+                .collect())
         })
         .await
         .map_err(BridgeError::from_display)?
@@ -4318,6 +4401,7 @@ mod tests {
                 chapter(3, "Cast", 4680.0),
             ],
             Some(4800.0),
+            Vec::new(),
         );
 
         // Eleven minutes called `Intro` is the story, not a theme song.
@@ -4339,6 +4423,7 @@ mod tests {
                 chapter(1, "OP", 24.0),
             ],
             None,
+            Vec::new(),
         );
 
         assert_eq!(plan.entries[0].label, "Chapter 1");
@@ -4346,6 +4431,25 @@ mod tests {
         // Nowhere to skip to: the file's length is not known yet.
         assert_eq!(plan.entries[1].end, None);
         assert_eq!(skip_offer(&plan, 30.0), None);
+    }
+
+    /// A file with no chapters of its own offers AniSkip's opening, through
+    /// the same skip as one that came with chapters.
+    #[test]
+    fn aniskips_opening_is_offered_in_a_file_without_chapters() {
+        let plan = chapter_plan(
+            Vec::new(),
+            Some(1440.0),
+            vec![super::SkipRangeRecord {
+                kind: ChapterKind::Opening,
+                start: 60.0,
+                end: 150.0,
+            }],
+        );
+        let offer = skip_offer(&plan, 70.0).expect("inside the opening");
+        assert_eq!(offer.label, "Skip opening");
+        assert_eq!(offer.target, 150.0);
+        assert_eq!(skip_offer(&plan, 10.0), None);
     }
 
     /// A skip is offered inside the opening and nowhere else — including at its
@@ -4361,6 +4465,7 @@ mod tests {
                 chapter(3, "ED", 1320.0),
             ],
             Some(1440.0),
+            Vec::new(),
         );
 
         assert_eq!(skip_offer(&plan, 10.0), None, "content is not skippable");

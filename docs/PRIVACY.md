@@ -11,6 +11,7 @@ and to nothing else unless you turn on posters and descriptions. This page lists
 | AniList and ani.zip, or TMDB | The names of the titles in your library, and the ids of matched titles | Only with **Posters and descriptions** on |
 | TVmaze | With AniList chosen: the names of the titles AniList has no match for, and the ids of those TVmaze matched | Only with **Posters and descriptions** on |
 | TMDB, with AniList chosen | The TMDB ids of matched titles that have no wide picture or logo yet. Never a title's name | Only with **Posters and descriptions** on and a TMDB key saved |
+| AniSkip | The MyAnimeList id and episode number of what you play, and the file's length. Never a name | Only with **Posters and descriptions** on, when you play an episode whose file does not mark its opening and ending |
 
 Nothing else leaves your device. There is no telemetry, no crash reporting and no update check.
 

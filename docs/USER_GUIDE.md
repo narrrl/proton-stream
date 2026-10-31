@@ -135,7 +135,8 @@ An episode counts as watched once you have seen 90% of it.
 The picture plays inside the app's window. Move the mouse to show the controls.
 
 - **Skip opening** and **Skip ending** appear when the file's chapters mark an opening, an ending
-  or a preview. Files without chapter names get no skip button. Turn on **Skip openings and
+  or a preview. For an anime whose file marks neither, the app asks AniSkip where they are, with
+  **Posters and descriptions** on; they then show as chapters too. Turn on **Skip openings and
   credits** in Settings to skip them without asking.
 - **Up next** counts down 10 seconds when the credits start, then plays the next episode. Choose
   **Play now**, **Cancel** or **Watch till the end**.

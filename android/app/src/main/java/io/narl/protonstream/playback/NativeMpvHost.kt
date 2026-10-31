@@ -19,6 +19,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import uniffi.pstr_android.ChapterPlan
 import uniffi.pstr_android.ChapterRecord
+import uniffi.pstr_android.SkipRangeRecord
 import uniffi.pstr_android.SubtitleFilesRecord
 import uniffi.pstr_android.SubtitleTrackRecord
 import uniffi.pstr_android.chapterPlan
@@ -135,6 +136,8 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
     @Volatile private var currentMedia: String? = null
     @Volatile private var currentGeneration: Double = -1.0
     @Volatile private var plannedFor: Pair<Double, Long>? = null
+    /** What AniSkip said about the open episode, keyed by that episode. */
+    @Volatile private var skipRanges: Pair<String, List<SkipRangeRecord>>? = null
     /** The load generation whose subtitle pick has been looked at. */
     @Volatile private var subtitlesCheckedFor: Double = -1.0
     var onPlaybackStarted: (() -> Unit)? = null
@@ -226,6 +229,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
                             mutableTracks.value = emptyList()
                             mutableChapters.value = ChapterPlan(emptyList(), null)
                             plannedFor = null
+                            skipRanges = null
                         }
                     }
                 } ?: false
@@ -268,6 +272,17 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
     }
 
     fun seek(position: Double) { withOpenHandle { nativeSeek(it, position) } }
+
+    /**
+     * Take AniSkip's answer for [media], and plan the chapters again with it.
+     * Dropped when another episode has opened since it was asked for.
+     */
+    fun setSkipRanges(media: String, ranges: List<SkipRangeRecord>) {
+        if (media != currentMedia) return
+        skipRanges = media to ranges
+        plannedFor = null
+        refreshChapters(mutableState.value)
+    }
     fun setVolume(volume: Double) { withOpenHandle { nativeVolume(it, volume) } }
     fun setMuted(muted: Boolean) { withOpenHandle { nativeMute(it, muted) } }
 
@@ -394,7 +409,8 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
             }
         }.onSuccess { chapters ->
             plannedFor = wanted
-            mutableChapters.value = chapterPlan(chapters, state.duration.takeIf { it > 0.0 })
+            val skips = skipRanges?.takeIf { it.first == currentMedia }?.second.orEmpty()
+            mutableChapters.value = chapterPlan(chapters, state.duration.takeIf { it > 0.0 }, skips)
         }
     }
 

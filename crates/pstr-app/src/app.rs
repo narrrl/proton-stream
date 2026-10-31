@@ -1116,6 +1116,11 @@ impl App {
                         matcher.error = Some(error);
                     }
                 }
+                Event::SkipTimes { player, ranges } => {
+                    if let Some(playback) = self.playback.as_mut().filter(|p| p.id == player) {
+                        playback.set_skip_ranges(ranges);
+                    }
+                }
                 Event::PlaybackReady { target, stream } => {
                     let opening = self.opening.take();
                     // Dropped before the new one is built: two mpv cores would
@@ -1455,6 +1460,34 @@ impl App {
             still,
             tail,
         })
+    }
+
+    /// Once a file has loaded with no chapters naming its opening or ending,
+    /// ask AniSkip, when the episode's provider entry has a MyAnimeList id.
+    fn ask_skip_times(&mut self) {
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        let Some(length) = playback.wants_skip_times() else {
+            return;
+        };
+        playback.skips_asked = true;
+        let target = &playback.target;
+        let found = self.library.get(&target.title_key).and_then(|title| {
+            let episode = title.episodes().find(|episode| {
+                episode.node.share_id == target.share_id && episode.node.link_id == target.link_id
+            })?;
+            let number = episode.node.parsed.episode?;
+            self.episodes
+                .get(&title.key)?
+                .get(episode.node.parsed.season, number)
+        });
+        if let Some((mal_id, number)) =
+            found.and_then(|found| Some((found.mal_id?, found.entry_number?)))
+        {
+            self.engine
+                .request_skip_times(playback.id, mal_id, number, length);
+        }
     }
 
     /// Near the end of a file, fetch the opening blocks of the next one.
@@ -2311,6 +2344,7 @@ impl eframe::App for App {
             }
         }
         self.warm_next();
+        self.ask_skip_times();
         self.auto_skip(ctx);
         self.save_subtitle_style(ctx);
         self.window.observe(ctx);

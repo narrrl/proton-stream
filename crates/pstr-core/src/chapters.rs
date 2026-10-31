@@ -294,6 +294,116 @@ pub fn chapter_at(chapters: &[Chapter], position: f64) -> Option<usize> {
         .rposition(|chapter| position + f64::EPSILON >= chapter.start)
 }
 
+/// A stretch of a file someone has marked as its opening or its ending, for
+/// a file whose own chapters do not say: AniSkip's answer, in the file's
+/// seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkipRange {
+    /// [`ChapterRole::Opening`] or [`ChapterRole::Ending`].
+    pub role: ChapterRole,
+    pub start: f64,
+    pub end: f64,
+}
+
+impl SkipRange {
+    /// What the chapter cut for it is called, which is also what [`roles`]
+    /// reads it back as.
+    fn label(self) -> Option<&'static str> {
+        match self.role {
+            ChapterRole::Opening => Some("Opening"),
+            ChapterRole::Ending => Some("Ending"),
+            ChapterRole::Preview | ChapterRole::Content => None,
+        }
+    }
+}
+
+/// How close two chapter starts may be before they are the same place.
+const SAME_PLACE_SECONDS: f64 = 1.0;
+
+/// The file's chapters with `ranges` cut into them, as chapters named
+/// `Opening` and `Ending` — so that skipping, skipping on its own, the up-next
+/// countdown and the marks on the seek bar all work for a file that came with
+/// no such chapters, through the same code as one that did.
+///
+/// **The file wins.** When its own chapters already mark an opening or an
+/// ending, it is returned as it is: what the release says about its own cut
+/// beats what a viewer of some other release said. A file chapter that starts
+/// inside a range is dropped, since it would split the range in two; one that
+/// starts where a range ends gives that place its name. Every chapter is
+/// numbered again from zero, which is what the players key "already skipped"
+/// by.
+pub fn with_skip_ranges(
+    chapters: &[Chapter],
+    ranges: &[SkipRange],
+    duration: Option<f64>,
+) -> Vec<Chapter> {
+    let own = roles(chapters, duration);
+    if ranges.is_empty()
+        || own
+            .iter()
+            .any(|role| matches!(role, ChapterRole::Opening | ChapterRole::Ending))
+    {
+        return chapters.to_vec();
+    }
+
+    let mut ranges: Vec<SkipRange> = ranges
+        .iter()
+        .copied()
+        .filter(|range| range.label().is_some() && range.start >= 0.0 && range.end > range.start)
+        .collect();
+    ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
+    // Two answers that overlap cannot both be right; the earlier one stays.
+    let mut kept: Vec<SkipRange> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if kept.last().is_none_or(|last| range.start >= last.end) {
+            kept.push(range);
+        }
+    }
+
+    let title_at = |position: f64| {
+        chapter_at(chapters, position).and_then(|index| chapters[index].title.clone())
+    };
+    let mut points: Vec<(f64, Option<String>)> = Vec::new();
+    for range in &kept {
+        points.push((range.start, range.label().map(str::to_owned)));
+        let ends_the_file =
+            duration.is_some_and(|duration| range.end >= duration - SAME_PLACE_SECONDS);
+        if !ends_the_file {
+            points.push((range.end, title_at(range.end)));
+        }
+    }
+    let near_a_point = |start: f64, points: &[(f64, Option<String>)]| {
+        points
+            .iter()
+            .any(|(at, _)| (at - start).abs() < SAME_PLACE_SECONDS)
+    };
+    let inside_a_range = |start: f64| {
+        kept.iter()
+            .any(|range| start > range.start && start < range.end)
+    };
+    let from_ranges = points.clone();
+    for chapter in chapters {
+        if !near_a_point(chapter.start, &from_ranges) && !inside_a_range(chapter.start) {
+            points.push((chapter.start, chapter.title.clone()));
+        }
+    }
+    // Whatever comes before the first mark is a place in the file too.
+    if !points.iter().any(|(at, _)| *at < SAME_PLACE_SECONDS) {
+        points.push((0.0, None));
+    }
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    points
+        .into_iter()
+        .enumerate()
+        .map(|(index, (start, title))| Chapter {
+            index: index as i64,
+            title,
+            start,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +589,124 @@ mod tests {
         // No duration yet and nothing after it: there is nowhere to skip to,
         // and a button that seeks to zero would be worse than no button.
         assert_eq!(chapter_end(&chapters, 1, None), None);
+    }
+
+    fn range(role: ChapterRole, start: f64, end: f64) -> SkipRange {
+        SkipRange { role, start, end }
+    }
+
+    fn shape(chapters: &[Chapter]) -> Vec<(i64, Option<&str>, f64)> {
+        chapters
+            .iter()
+            .map(|chapter| (chapter.index, chapter.title.as_deref(), chapter.start))
+            .collect()
+    }
+
+    #[test]
+    fn a_file_with_no_chapters_gets_its_opening_and_ending_as_chapters_that_skip() {
+        let ranges = [
+            range(ChapterRole::Opening, 90.0, 180.0),
+            range(ChapterRole::Ending, 1300.0, 1390.0),
+        ];
+        let chapters = with_skip_ranges(&[], &ranges, Some(1420.0));
+        assert_eq!(
+            shape(&chapters),
+            vec![
+                (0, None, 0.0),
+                (1, Some("Opening"), 90.0),
+                (2, None, 180.0),
+                (3, Some("Ending"), 1300.0),
+                (4, None, 1390.0),
+            ]
+        );
+        let roles = roles(&chapters, Some(1420.0));
+        assert_eq!(roles[1], ChapterRole::Opening);
+        assert_eq!(roles[3], ChapterRole::Ending);
+    }
+
+    #[test]
+    fn a_files_own_opening_beats_anything_aniskip_says() {
+        let own = vec![
+            Chapter {
+                index: 0,
+                title: Some("Prologue".into()),
+                start: 0.0,
+            },
+            Chapter {
+                index: 1,
+                title: Some("OP".into()),
+                start: 60.0,
+            },
+            Chapter {
+                index: 2,
+                title: Some("Part A".into()),
+                start: 150.0,
+            },
+        ];
+        let ranges = [range(ChapterRole::Opening, 70.0, 160.0)];
+        assert_eq!(with_skip_ranges(&own, &ranges, Some(1420.0)), own);
+    }
+
+    #[test]
+    fn unnamed_chapters_inside_a_range_give_way_and_one_at_its_end_keeps_its_name() {
+        let own = vec![
+            Chapter {
+                index: 0,
+                title: None,
+                start: 0.0,
+            },
+            Chapter {
+                index: 1,
+                title: None,
+                start: 89.6,
+            },
+            Chapter {
+                index: 2,
+                title: None,
+                start: 120.0,
+            },
+            Chapter {
+                index: 3,
+                title: Some("Part A".into()),
+                start: 180.0,
+            },
+        ];
+        let ranges = [range(ChapterRole::Opening, 90.0, 180.0)];
+        let chapters = with_skip_ranges(&own, &ranges, Some(1420.0));
+        assert_eq!(
+            shape(&chapters),
+            vec![
+                (0, None, 0.0),
+                (1, Some("Opening"), 90.0),
+                (2, Some("Part A"), 180.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ending_that_runs_to_the_end_of_the_file_adds_no_chapter_after_it() {
+        let ranges = [range(ChapterRole::Ending, 1330.0, 1419.8)];
+        let chapters = with_skip_ranges(&[], &ranges, Some(1420.0));
+        assert_eq!(
+            shape(&chapters),
+            vec![(0, None, 0.0), (1, Some("Ending"), 1330.0)]
+        );
+        assert_eq!(
+            credits_start(&chapters, &roles(&chapters, Some(1420.0))),
+            Some(1330.0)
+        );
+    }
+
+    #[test]
+    fn overlapping_answers_keep_the_earlier_one() {
+        let ranges = [
+            range(ChapterRole::Opening, 0.0, 90.0),
+            range(ChapterRole::Ending, 60.0, 150.0),
+        ];
+        let chapters = with_skip_ranges(&[], &ranges, Some(1420.0));
+        assert_eq!(
+            shape(&chapters),
+            vec![(0, Some("Opening"), 0.0), (1, None, 90.0)]
+        );
     }
 }

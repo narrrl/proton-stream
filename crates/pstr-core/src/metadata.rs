@@ -420,6 +420,11 @@ pub struct EpisodeMetadata {
     /// Minutes.
     #[serde(default)]
     pub runtime: Option<u32>,
+    /// The provider entry's id on MyAnimeList, which is what AniSkip knows
+    /// openings and endings by. With `entry_number`, it names this episode
+    /// there.
+    #[serde(default)]
+    pub mal_id: Option<u32>,
 }
 
 /// What enriching a matched title found: its episodes, and art the search
@@ -735,6 +740,7 @@ mod tests {
             still_url: None,
             air_date: None,
             runtime: None,
+            mal_id: None,
         }
     }
 

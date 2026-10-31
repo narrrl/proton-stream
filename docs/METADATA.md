@@ -45,6 +45,7 @@ good. What hung off it was not:
 |---|---|---|
 | **AniList** GraphQL | none | Identity. Search, every alias, cover art, relations (`SEQUEL`, `PREQUEL`, `SIDE_STORY`…), studios, staff, tags, format, season, popularity, next airing episode, the MAL id. |
 | **ani.zip** `api.ani.zip/mappings?anilist_id=` | none | Everything AniList lacks, per AniList id: TVDB season, episode and absolute numbers; episode titles in several languages; TVDB synopses; 16:9 stills; air dates; runtime. Series art: TVDB **fanart at 1920×1080**, poster, banner, logo. Cross-ids for MAL, AniDB, TVDB, TMDB, Kitsu, IMDb. A community service — cache what it says. |
+| **AniSkip** `api.aniskip.com/v2/skip-times/` | none | Where an episode's opening and ending are, by MyAnimeList id and episode number, as viewers marked them. Asked at play time for files without such chapters; never stored. |
 | **TMDB** | free key | Film backdrops and logos; live-action TV. Chosen as the provider, or with AniList chosen, asked by id for art alone. |
 | **TVmaze** | none | Live-action TV: episodes with 16:9 stills and runtimes, network, status, full-HD backgrounds. No films; its "typography" art is a JPEG, so no logos. In use after AniList. |
 | **AniSkip** | none | Opening and ending timestamps by MAL id and episode. |
@@ -211,6 +212,27 @@ an episode row shows its own (on Android and iOS in place of the file size).
 deleting nothing. `TitleDetails::revision` makes details written before
 `runtime` existed refetch by id on the next run; they stay on screen until the
 answer lands, rather than being blanked by the migration as schema v10 did.
+
+**AniSkip.** A file whose chapters name no opening or ending — most files
+that are not fansub releases — gets them from [AniSkip](https://aniskip.com),
+where viewers mark where an episode's opening and ending are. ani.zip sends each
+entry's MyAnimeList id with its mappings; enrichment now keeps it on every
+episode row (`episode_metadata.mal_id`), next to the episode's number within
+that entry. When such a file has loaded and its length is known, the player asks
+`api.aniskip.com/v2/skip-times/{mal_id}/{number}?types=op&types=ed&episodeLength=`
+once, with enrichment on only. The answer is kept in memory for as long as the
+file is open and never stored.
+
+`pstr_core::chapters::with_skip_ranges` cuts the answer into the file's
+chapters as chapters named `Opening` and `Ending`, so the skip button, skipping
+on its own, the up-next countdown and the marks on the seek bar all work through
+the same code as for a file that came with them. A file whose own chapters
+already name an opening or an ending keeps them: what a release says about its
+own cut beats what a viewer of another release marked.
+
+**Schema v14** adds the column and marks every AniList title un-enriched,
+deleting nothing, as v13 did. Until the next match run fills it in, AniSkip is
+not asked.
 
 ## Phase 3 — reach
 

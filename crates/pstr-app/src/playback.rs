@@ -198,8 +198,16 @@ pub struct Playback {
     pub subtitle_delay: f64,
     /// What the file contains. Empty until mpv has demuxed it.
     pub tracks: Vec<Track>,
-    /// The file's chapters, in order. Empty for a file muxed without them.
+    /// The chapters to show and act on, in order: the file's own, with
+    /// AniSkip's opening and ending cut in when the file names neither. Empty
+    /// for a file muxed without chapters that AniSkip does not know.
     pub chapters: Vec<Chapter>,
+    /// The chapters as the file has them.
+    file_chapters: Vec<Chapter>,
+    /// What AniSkip said, once it has.
+    skip_ranges: Vec<pstr_core::chapters::SkipRange>,
+    /// Whether AniSkip has been asked about this file, so it is asked once.
+    pub skips_asked: bool,
     /// What each of those chapters is, resolved against the rest of the file —
     /// see [`pstr_player::roles`]. Same length as `chapters`, and recomputed
     /// whenever either the chapters or the duration change.
@@ -278,6 +286,9 @@ impl Playback {
             speed: prefs.speed,
             tracks: Vec::new(),
             chapters: Vec::new(),
+            file_chapters: Vec::new(),
+            skip_ranges: Vec::new(),
+            skips_asked: false,
             roles: Vec::new(),
             credits_at: None,
             position: target.resume_at.unwrap_or(0.0),
@@ -417,6 +428,11 @@ impl Playback {
     /// changed. Both are needed: the length of a chapter is what settles a name
     /// that could mean two things.
     fn reclassify(&mut self) {
+        self.chapters = pstr_core::chapters::with_skip_ranges(
+            &self.file_chapters,
+            &self.skip_ranges,
+            self.duration,
+        );
         self.roles = pstr_player::roles(&self.chapters, self.duration);
         self.credits_at = pstr_player::credits_start(&self.chapters, &self.roles);
     }
@@ -433,7 +449,7 @@ impl Playback {
                 self.place_subtitles();
             }
             PlayerEvent::Chapters(chapters) => {
-                self.chapters = chapters.clone();
+                self.file_chapters = chapters.clone();
                 self.reclassify();
             }
             PlayerEvent::Position(position) => {
@@ -464,6 +480,26 @@ impl Playback {
         while !self.finished.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    /// The file's length, when it is time to ask AniSkip where its opening
+    /// and ending are: once, after it has loaded, and only when its own
+    /// chapters name neither.
+    pub fn wants_skip_times(&self) -> Option<f64> {
+        if self.skips_asked || !self.loaded {
+            return None;
+        }
+        let own = pstr_player::roles(&self.file_chapters, self.duration);
+        let named = own
+            .iter()
+            .any(|role| matches!(role, ChapterRole::Opening | ChapterRole::Ending));
+        self.duration.filter(|duration| *duration > 0.0 && !named)
+    }
+
+    /// Take AniSkip's answer.
+    pub fn set_skip_ranges(&mut self, ranges: Vec<pstr_core::chapters::SkipRange>) {
+        self.skip_ranges = ranges;
+        self.reclassify();
     }
 
     /// Fraction played, for the seek bar. `None` until mpv reports a duration.

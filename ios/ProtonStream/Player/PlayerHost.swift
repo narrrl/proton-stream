@@ -120,6 +120,9 @@ final class PlayerHost {
     @ObservationIgnored private var skipped = Set<Int64>()
     /// The episode whose next one has been warmed; see `tick`.
     @ObservationIgnored private var warmedAfter: String?
+    /// The episode AniSkip has been asked about, and what it said.
+    @ObservationIgnored private var skipsAskedFor: String?
+    @ObservationIgnored private var skipRanges: (key: String, ranges: [SkipRangeRecord])?
     @ObservationIgnored private var pausedByInterruption = false
     @ObservationIgnored private var artworkFor: String?
 
@@ -414,6 +417,26 @@ final class PlayerHost {
             player.duration - player.position < warmNextSeconds
                 || chapters.creditsStart.map { player.position >= $0 } == true
         )
+        // A file whose chapters name no opening or ending asks AniSkip, once,
+        // when its length is known. Only with posters and descriptions on:
+        // anything else, an error included, leaves the file as its chapters
+        // made it.
+        if player.duration > 0, let key, skipsAskedFor != key, let title, let episode {
+            skipsAskedFor = key
+            let named = chapters.entries.contains { $0.kind == .opening || $0.kind == .ending }
+            if !named {
+                let (titleKey, shareId, linkId, duration) = (title.key, episode.shareId, episode.linkId, player.duration)
+                Task { [weak self] in
+                    let ranges = (try? await NativeRuntime.engine().skipTimes(
+                        titleKey: titleKey, shareId: shareId, linkId: linkId, duration: duration
+                    )) ?? []
+                    guard let self, !ranges.isEmpty, self.key == key, let player = self.player else { return }
+                    self.skipRanges = (key, ranges)
+                    self.plannedFor = nil
+                    self.replanChapters(player)
+                }
+            }
+        }
         if nearEnd, let key, warmedAfter != key, let next {
             warmedAfter = key
             let (shareId, volumeId, linkId) = (next.shareId, next.volumeId, next.linkId)
@@ -431,7 +454,8 @@ final class PlayerHost {
         let wanted = (player.duration, player.generation)
         if let plannedFor, plannedFor == wanted, !(chapters.entries.isEmpty && !player.chapters.isEmpty) { return }
         plannedFor = wanted
-        chapters = chapterPlan(chapters: player.chapters, duration: player.duration > 0 ? player.duration : nil)
+        let skips = skipRanges.flatMap { $0.key == key ? $0.ranges : nil } ?? []
+        chapters = chapterPlan(chapters: player.chapters, duration: player.duration > 0 ? player.duration : nil, skips: skips)
     }
 
     /// Play the dialogue rather than the signs and songs mpv picked by

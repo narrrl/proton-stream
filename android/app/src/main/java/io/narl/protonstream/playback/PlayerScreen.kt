@@ -125,6 +125,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.pstr_android.ChapterEntry
+import uniffi.pstr_android.ChapterKind
 import uniffi.pstr_android.EpisodeRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TrackPreferencesRecord
@@ -423,6 +424,20 @@ fun PlayerScreen(
         val target = offer?.target ?: return@LaunchedEffect
         val chapter = chapters.entries.lastOrNull { state.position + 0.001 >= it.start } ?: return@LaunchedEffect
         if (autoSkip && !state.paused && skipped.add(chapter.index)) nativeHost.seek(target)
+    }
+
+    // A file whose chapters name no opening or ending asks AniSkip, once, when
+    // its length is known. Only with posters and descriptions on: anything
+    // else, an error included, leaves the file as its chapters made it.
+    val lengthKnown = playingThis && state.duration > 0.0
+    LaunchedEffect(key, lengthKnown) {
+        if (!lengthKnown) return@LaunchedEffect
+        val named = chapters.entries.any { it.kind == ChapterKind.OPENING || it.kind == ChapterKind.ENDING }
+        if (named) return@LaunchedEffect
+        val ranges = runCatching {
+            NativeRuntime.engine().skipTimes(titleKey, episode.shareId, episode.linkId, state.duration)
+        }.getOrNull()
+        if (!ranges.isNullOrEmpty()) nativeHost.setSkipRanges(key, ranges)
     }
 
     var landscapeLocked by remember { mutableStateOf(false) }

@@ -292,6 +292,12 @@ pub enum Event {
     },
     /// The artwork for this title could not be had.
     PosterMissing { key: String },
+    /// Where AniSkip says the opening and ending of what player `player` has
+    /// open are. Empty when it does not know.
+    SkipTimes {
+        player: u64,
+        ranges: Vec<pstr_core::chapters::SkipRange>,
+    },
     /// A stream opened and is ready to hand to mpv.
     PlaybackReady {
         target: Box<PlaybackTarget>,
@@ -2900,6 +2906,26 @@ impl Engine {
             .poster_cache()
             .join(format!("{}.img", digest(url)));
         path.is_file().then_some(path)
+    }
+
+    /// Ask AniSkip where episode `episode` of the MyAnimeList entry `mal_id`
+    /// has its opening and ending, for player `player`, whose file runs
+    /// `length` seconds. Only with enrichment on; a failure is logged and is
+    /// the same as no answer, which leaves the file as its chapters made it.
+    pub fn request_skip_times(&self, player: u64, mal_id: u32, episode: u32, length: f64) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let Some(service) = engine.metadata_service().await else {
+                return;
+            };
+            match service.skip_times(mal_id, episode, length).await {
+                Ok(ranges) if !ranges.is_empty() => {
+                    engine.emit(Event::SkipTimes { player, ranges });
+                }
+                Ok(_) => {}
+                Err(error) => tracing::debug!("AniSkip for {mal_id}/{episode}: {error}"),
+            }
+        });
     }
 
     /// Fetch, decode and post one title's artwork.

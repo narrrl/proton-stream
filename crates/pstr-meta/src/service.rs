@@ -179,6 +179,18 @@ impl MetadataService {
         })
     }
 
+    /// Where AniSkip says an episode's opening and ending are. See
+    /// [`crate::aniskip`]; on the service so that it is only ever asked with
+    /// enrichment on, like every other source.
+    pub async fn skip_times(
+        &self,
+        mal_id: u32,
+        episode: u32,
+        length: f64,
+    ) -> Result<Vec<pstr_core::chapters::SkipRange>> {
+        crate::aniskip::skip_times(&self.http, mal_id, episode, length).await
+    }
+
     /// The provider the viewer chose: the first one asked.
     pub fn provider(&self) -> ProviderId {
         self.sources[0].id()

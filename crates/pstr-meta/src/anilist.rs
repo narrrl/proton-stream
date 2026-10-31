@@ -1164,6 +1164,7 @@ mod tests {
             still_url: None,
             air_date: None,
             runtime: None,
+            mal_id: None,
         };
         let season_one = vec![episode(1, 1, 1), episode(1, 2, 2)];
         assert!(answers_all(&season_one, &[(Some(1), 1), (None, 2)]));

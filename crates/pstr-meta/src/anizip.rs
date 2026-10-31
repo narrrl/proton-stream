@@ -106,6 +106,9 @@ struct Ids {
     kind: Option<String>,
     #[serde(default, deserialize_with = "lenient_number")]
     themoviedb_id: Option<u32>,
+    /// The same entry on MyAnimeList, which AniSkip is keyed by.
+    #[serde(default, deserialize_with = "lenient_number")]
+    mal_id: Option<u32>,
 }
 
 impl Ids {
@@ -164,6 +167,7 @@ impl Payload {
         let fanart = image("Fanart");
         let logo = image("Clearlogo");
         let tmdb = self.mappings.as_ref().and_then(Ids::tmdb);
+        let mal_id = self.mappings.as_ref().and_then(|ids| ids.mal_id);
 
         let episodes = self
             .episodes
@@ -194,6 +198,7 @@ impl Payload {
                         .runtime
                         .or(episode.length)
                         .filter(|minutes| *minutes > 0),
+                    mal_id,
                 })
             })
             .collect();
@@ -365,6 +370,17 @@ mod tests {
         .expect("parse")
         .into_mapping("en", None);
         assert_eq!(mapping.tmdb, Some(TmdbId::Movie(4977)));
+    }
+
+    #[test]
+    fn every_episode_carries_its_entrys_myanimelist_id() {
+        let mapping = serde_json::from_str::<Payload>(
+            r#"{"episodes": {"1": {"seasonNumber": 1, "episodeNumber": 1}},
+                "mappings": {"type": "TV", "mal_id": 52991}}"#,
+        )
+        .expect("parse")
+        .into_mapping("en", Some(1));
+        assert_eq!(mapping.episodes[0].mal_id, Some(52991));
     }
 
     #[test]

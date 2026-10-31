@@ -24,7 +24,7 @@ use crate::metadata::{
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -252,6 +252,16 @@ CREATE INDEX sidecars_by_video ON sidecars (share_id, video_link_id);
 const MIGRATION_V13: &str = r#"
 ALTER TABLE title_metadata ADD COLUMN logo_url TEXT;
 ALTER TABLE episode_metadata ADD COLUMN runtime INTEGER;
+UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
+"#;
+
+/// Each episode's MyAnimeList id, for AniSkip.
+///
+/// ani.zip sends it with every entry and it was not kept. As with V13, every
+/// AniList title is marked un-enriched so the next match run fills it in, and
+/// nothing is deleted meanwhile.
+const MIGRATION_V14: &str = r#"
+ALTER TABLE episode_metadata ADD COLUMN mal_id INTEGER;
 UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
 "#;
 
@@ -514,6 +524,12 @@ impl Catalog {
             let tx = self.conn.transaction()?;
             tx.execute_batch(MIGRATION_V13)?;
             tx.pragma_update(None, "user_version", 13)?;
+            tx.commit()?;
+        }
+        if version < 14 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_V14)?;
+            tx.pragma_update(None, "user_version", 14)?;
             tx.commit()?;
         }
 
@@ -1266,7 +1282,7 @@ impl Catalog {
     pub fn all_episode_metadata(&self) -> Result<HashMap<String, EpisodeGuide>> {
         let mut statement = self.conn.prepare(
             "SELECT title_key, season, number, name, overview, still_url, air_date,
-                    absolute, entry_season, entry_number, runtime
+                    absolute, entry_season, entry_number, runtime, mal_id
              FROM episode_metadata",
         )?;
         let rows = statement.query_map([], |row| {
@@ -1285,6 +1301,7 @@ impl Catalog {
                     still_url: row.get(5)?,
                     air_date: row.get(6)?,
                     runtime: row.get(10)?,
+                    mal_id: row.get(11)?,
                 },
             ))
         })?;
@@ -1391,8 +1408,8 @@ fn replace_episodes(
         "INSERT OR REPLACE INTO episode_metadata (
              title_key, season, number, provider, fetched_at,
              name, overview, still_url, air_date,
-             absolute, entry_season, entry_number, runtime
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             absolute, entry_season, entry_number, runtime, mal_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
     )?;
     for episode in episodes {
         insert.execute(params![
@@ -1409,6 +1426,7 @@ fn replace_episodes(
             episode.entry_season,
             episode.entry_number,
             episode.runtime,
+            episode.mal_id,
         ])?;
     }
     Ok(())
@@ -2106,6 +2124,7 @@ mod tests {
                     still_url: None,
                     air_date: None,
                     runtime: None,
+                    mal_id: None,
                 }],
             )
             .expect("store episodes");
@@ -2199,6 +2218,7 @@ mod tests {
                 still_url: None,
                 air_date: Some("2010-11-14".into()),
                 runtime: None,
+                mal_id: None,
             },
             EpisodeMetadata {
                 season: Some(1),
@@ -2211,6 +2231,7 @@ mod tests {
                 still_url: Some("still.jpg".into()),
                 air_date: None,
                 runtime: None,
+                mal_id: None,
             },
         ];
         catalog
@@ -2254,6 +2275,7 @@ mod tests {
             still_url: None,
             air_date: None,
             runtime: Some(24),
+            mal_id: None,
         };
         catalog
             .set_episode_metadata(
@@ -2298,6 +2320,7 @@ mod tests {
                     still_url: None,
                     air_date: None,
                     runtime: None,
+                    mal_id: None,
                 }],
             )
             .expect("store episodes");
@@ -2355,6 +2378,7 @@ mod tests {
                     still_url: None,
                     air_date: None,
                     runtime: None,
+                    mal_id: None,
                 }],
             )
             .expect("store episodes");
@@ -2463,6 +2487,7 @@ mod tests {
                 still_url: None,
                 air_date: None,
                 runtime: None,
+                mal_id: None,
             }],
             backdrop_url: None,
             logo_url: None,
@@ -2524,6 +2549,7 @@ mod tests {
             still_url: None,
             air_date: Some(air_date.into()),
             runtime: None,
+            mal_id: None,
         };
         let enrichment = Enrichment {
             episodes: vec![
@@ -2591,6 +2617,7 @@ mod tests {
                 still_url: None,
                 air_date: None,
                 runtime: None,
+                mal_id: None,
             }],
             backdrop_url: Some("fanart.jpg".into()),
             logo_url: None,
@@ -2909,6 +2936,7 @@ mod tests {
                     still_url: None,
                     air_date: None,
                     runtime: None,
+                    mal_id: None,
                 }],
             )
             .expect("store");

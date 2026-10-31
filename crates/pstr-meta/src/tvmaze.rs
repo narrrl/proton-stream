@@ -294,6 +294,7 @@ impl Show {
                         .and_then(|image| image.medium.or(image.original)),
                     air_date: episode.airdate.filter(|date| !date.is_empty()),
                     runtime: episode.runtime.filter(|minutes| *minutes > 0),
+                    mal_id: None,
                 })
             })
             .collect();

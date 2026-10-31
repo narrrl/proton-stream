@@ -33,6 +33,8 @@ your Drive**. See [Account and sync](ACCOUNT_AND_SYNC.md).
   the middle to pause.
 - The menu has **Episodes**, **Chapters**, **Playback speed**, the audio and subtitle tracks, and
   **Lock to landscape**.
+- **Skip opening** and **Skip ending** work as on the desktop, AniSkip included: see
+  [The player](USER_GUIDE.md#the-player).
 - Sound keeps playing with the screen off or the app in the background, with controls on the lock
   screen. Turn off **Background audio** in Settings to stop that.
 

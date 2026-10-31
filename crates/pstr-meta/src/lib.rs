@@ -29,6 +29,7 @@
 //! without either depending on this crate.
 
 pub mod anilist;
+pub mod aniskip;
 pub mod anizip;
 pub mod error;
 pub mod limiter;
