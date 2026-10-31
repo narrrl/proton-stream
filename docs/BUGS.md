@@ -12,20 +12,27 @@ All of B14–B33 came out of a static review of the Android client
 device** — there was no Android acceptance harness to reproduce them with, which
 is itself B42. Each states the reasoning that identifies it; treat the
 reproduction step as part of the fix. The remediation order is `plan.md` at the
-repository root; Phases 1 to 5 of it have landed except for the tail of B41 and
-one row of Phase 5's table — everything from B14 to B39 is below in **Fixed**,
-and B41 states which of its items are done.
+repository root; Phases 1 to 5 of it have landed except for one row of Phase
+5's table — everything from B14 to B39 is below in **Fixed**, and B41's items
+have all landed.
 
 ### B41 — assorted correctness and hygiene defects
 
-Individually small, grouped so they are not lost. The items marked **Landed**
-came with Phases 4 and 5; the rest are still open, which is why this entry is.
-What remains is one item: the asynchronous track-list read-back.
+Individually small, grouped so they are not lost. Every item has now landed;
+the entry stays here, with B42, until a device run confirms them.
 
-- `NativeMpvHost.kt:131-135` reads the track list back immediately after an
-  asynchronous property set, so the selection tick lags by up to a second;
-  `alang`/`slang` are applied only at load (`pstr_mpv.cpp:225-227`), so a
-  language change takes effect one episode late.
+- **Landed.** `NativeMpvHost.selectTrack` read the track list back straight
+  after setting `aid`/`sid`, before mpv had made the switch, so the tick in the
+  track chooser stayed on the old track until the next poll, up to a second
+  later. The tick now moves when the track is chosen, and the list is read again
+  300 ms after. The second half of the report, a language change landing one
+  episode late, did not hold up: the choice is saved from the chosen track, and
+  the next episode loads with it. What was wrong nearby is that `load` set
+  `alang` and `slang` only when they were not empty, and mpv keeps both across
+  `loadfile`, so a file with no language preference took the previous file's.
+  Both are set on every load now. The iOS client had the same early read in
+  `MpvPlayer.select` and takes the same fix; it already set both languages on
+  every load.
 - **Landed.** `NativeMpvHost.kt` polled on `Dispatchers.Main.immediate`, and
   `tracks_json` issues five `mpv_get_property` calls per track — 51 synchronous
   property reads on the UI thread for a 10-track file, contending on the core

@@ -32,7 +32,7 @@ struct MpvTrack: Identifiable, Hashable {
     let type: String
     let language: String
     let title: String
-    let selected: Bool
+    var selected: Bool
     /// The container marks it as the default choice.
     var isDefault = false
     /// The container marks it as forced: on-screen text only, by convention.
@@ -303,7 +303,18 @@ final class MpvPlayer {
     /// A track, or none: `nil` turns subtitles off.
     func select(type: String, track: MpvTrack?) {
         setString(type == "audio" ? "aid" : "sid", track.map { String($0.id) } ?? "no")
-        refreshTracks()
+        // mpv makes the switch on its own thread and lists it a moment later,
+        // so a track list read back now still ticks the old track. The tick
+        // moves here, and a read shortly after confirms it.
+        tracks = tracks.map { listed in
+            var listed = listed
+            if listed.type == type { listed.selected = listed.id == track?.id }
+            return listed
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            self?.refreshTracks()
+        }
     }
 
     /// Showing no picture while backgrounded keeps the audio playing: iOS

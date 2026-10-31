@@ -323,8 +323,11 @@ class Player {
         // needs no window, and a load that cannot get one plays audio anyway —
         // waiting for a surface here is what made background playback fail after
         // a five-second stall.
-        if (!audio.empty()) set_string("alang", audio);
-        if (!subtitle.empty()) set_string("slang", subtitle);
+        //
+        // Set even when empty: mpv keeps both across `loadfile`, so a file
+        // with no language preference used to inherit the last one's.
+        set_string("alang", audio);
+        set_string("slang", subtitle);
         set_string("sid", subtitles ? "auto" : "no");
         pending_start_.store(std::max(0.0, start));
         // Retire the outgoing file's position, duration and end flag *before*

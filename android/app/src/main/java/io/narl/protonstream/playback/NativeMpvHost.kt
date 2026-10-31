@@ -322,7 +322,17 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
     fun selectTrack(track: MpvTrack?) {
         val audio = track?.type == "audio"
         withOpenHandle { nativeSelectTrack(it, audio, track?.id ?: -1) }
-        refreshTracks()
+        // mpv makes the switch on its own thread and lists it a moment later,
+        // so a track list read back now still ticks the old track. The tick
+        // moves here, and a read shortly after confirms it.
+        val type = if (audio) "audio" else "sub"
+        mutableTracks.value = mutableTracks.value.map {
+            if (it.type == type) it.copy(selected = it.id == track?.id) else it
+        }
+        scope.launch(Dispatchers.Default) {
+            delay(TRACK_SETTLE_MS)
+            refreshTracks()
+        }
     }
 
     /**
@@ -557,6 +567,9 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         private const val SEEKING = 12
         private const val CACHED_UNTIL = 13
         private const val LOADED = 14
+
+        /** How long after a track switch mpv's track list is read again. */
+        private const val TRACK_SETTLE_MS = 300L
 
         init {
             System.loadLibrary("pstr_android")
