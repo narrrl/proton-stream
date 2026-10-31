@@ -281,8 +281,8 @@ pub enum Action {
         share_id: String,
         link_id: String,
     },
-    /// Open or close the list of episodes beside the picture.
-    ToggleEpisodes,
+    /// Open or close one of the panels beside the picture.
+    TogglePanel(ui::player::PlayerPanel),
     /// Put watch states back as they were — what Undo does.
     RestoreWatch(Vec<(String, String, pstr_core::catalog::WatchState)>),
     ClearStreamCache,
@@ -712,7 +712,7 @@ pub struct App {
     /// Whether the list of keyboard shortcuts is open.
     pub shortcuts_open: bool,
     /// What a key just did in the player, and when: "Volume 55%", "+30 s".
-    osd: Option<(String, f64)>,
+    osd: Option<ui::player::Flash>,
     pub view: LibraryView,
     /// Whether the catalog has been read at all yet. Until it has, an empty
     /// library means "not loaded", not "nothing in it".
@@ -733,8 +733,8 @@ pub struct App {
     auto_skipped: (u64, Vec<i64>),
     /// The subtitle style changed and has not been written yet.
     subtitle_style_unsaved: bool,
-    /// Whether the episode list is out on the player page.
-    pub episode_drawer: bool,
+    /// Which panel is out beside the picture on the player page.
+    pub player_panel: Option<ui::player::PlayerPanel>,
     /// Set while the window is fullscreen, so `F` can toggle rather than only
     /// ever entering. egui has no way to ask the platform.
     pub fullscreen: bool,
@@ -844,7 +844,7 @@ impl App {
             auto_skipped: (0, Vec::new()),
             subtitle_style_unsaved: false,
             fullscreen: false,
-            episode_drawer: false,
+            player_panel: None,
             opening: None,
             connecting: true,
             crawling: false,
@@ -869,9 +869,26 @@ impl App {
 
     /// Say over the picture what a control just did. Only on the player page;
     /// anywhere else the transport bar already shows it.
-    fn flash(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+    fn flash(&mut self, ctx: &egui::Context, icon: &'static str, text: impl Into<String>) {
+        self.flash_level(ctx, icon, text, None);
+    }
+
+    /// The same, with a level drawn under it.
+    fn flash_level(
+        &mut self,
+        ctx: &egui::Context,
+        icon: &'static str,
+        text: impl Into<String>,
+        level: Option<f32>,
+    ) {
         if self.page == Page::Player {
-            self.osd = Some((text.into(), ctx.input(|input| input.time)));
+            self.osd = Some(ui::player::Flash {
+                icon,
+                text: text.into(),
+                level,
+                seek: None,
+                at: ctx.input(|input| input.time),
+            });
         }
     }
 
@@ -1821,7 +1838,7 @@ impl App {
                     playback.position,
                 ));
                 self.send_player(crate::playback::Command::Screenshot(path));
-                self.flash(ctx, "screenshot saved".to_owned());
+                self.flash(ctx, egui_phosphor::regular::CAMERA, "Screenshot saved");
             }
             Action::PasteShare(url) => {
                 self.page = Page::Shares;
@@ -1911,15 +1928,11 @@ impl App {
                 );
             }
             Action::Player(command) => {
-                if let crate::playback::Command::SeekBy(seconds) = command {
-                    self.flash(
-                        ctx,
-                        if seconds < 0.0 {
-                            format!("− {:.0} s", -seconds)
-                        } else {
-                            format!("+ {seconds:.0} s")
-                        },
-                    );
+                if let crate::playback::Command::SeekBy(seconds) = command
+                    && self.page == Page::Player
+                {
+                    let now = ctx.input(|input| input.time);
+                    self.osd = Some(ui::player::Flash::seek(self.osd.as_ref(), seconds, now));
                 }
                 if let Some(playback) = &self.playback {
                     playback.send(command);
@@ -1947,7 +1960,7 @@ impl App {
                 }
                 let text = format!("Speed {}", ui::format_speed(speed));
                 if self.page == Page::Player {
-                    self.flash(ctx, text);
+                    self.flash(ctx, egui_phosphor::regular::GAUGE, text);
                 } else {
                     self.note(ctx, text, false);
                 }
@@ -2032,7 +2045,9 @@ impl App {
             Action::RemoveFromHistory { share_id, link_id } => {
                 self.forget_watch(ctx, share_id, link_id, "history");
             }
-            Action::ToggleEpisodes => self.episode_drawer = !self.episode_drawer,
+            Action::TogglePanel(panel) => {
+                self.player_panel = (self.player_panel != Some(panel)).then_some(panel);
+            }
             Action::RestoreWatch(states) => {
                 for (share_id, link_id, state) in states {
                     self.engine.save_watch_state(share_id, link_id, state);
@@ -2077,13 +2092,13 @@ impl App {
                         "Subtitle delay {}",
                         ui::format_delay(playback.subtitle_delay)
                     );
-                    self.flash(ctx, text);
+                    self.flash(ctx, egui_phosphor::regular::SUBTITLES, text);
                 }
             }
             Action::ResetSubtitleDelay => {
                 if let Some(playback) = &mut self.playback {
                     playback.set_subtitle_delay(0.0);
-                    self.flash(ctx, "Subtitle delay 0 s");
+                    self.flash(ctx, egui_phosphor::regular::SUBTITLES, "Subtitle delay 0 s");
                 }
             }
             Action::SetAppearance(appearance) => {
@@ -2094,7 +2109,18 @@ impl App {
                 self.set_volume(volume, commit);
                 // A slider shows its own value; a key press shows it here.
                 if commit {
-                    self.flash(ctx, format!("Volume {volume:.0}%"));
+                    self.flash_level(
+                        ctx,
+                        if volume <= 0.0 {
+                            egui_phosphor::regular::SPEAKER_SLASH
+                        } else if volume < 50.0 {
+                            egui_phosphor::regular::SPEAKER_LOW
+                        } else {
+                            egui_phosphor::regular::SPEAKER_HIGH
+                        },
+                        format!("Volume {volume:.0}%"),
+                        Some((volume / pstr_player::MAX_VOLUME) as f32),
+                    );
                 }
             }
             Action::ToggleMute => {
@@ -2107,7 +2133,11 @@ impl App {
                     None => !prefs.muted,
                 };
                 self.send_player(crate::playback::Command::SetMuted(prefs.muted));
-                self.flash(ctx, if prefs.muted { "Muted" } else { "Sound on" });
+                if prefs.muted {
+                    self.flash(ctx, egui_phosphor::regular::SPEAKER_SLASH, "Muted");
+                } else {
+                    self.flash(ctx, egui_phosphor::regular::SPEAKER_HIGH, "Sound on");
+                }
                 self.engine.set_playback_prefs(prefs, true);
             }
             Action::SelectTrack { kind, id } => {
@@ -2323,13 +2353,7 @@ impl eframe::App for App {
                 speed: playback.speed,
                 skip_to: playback.skippable().map(|(_, end)| end),
             });
-            shortcuts(
-                ctx,
-                self.fullscreen,
-                self.episode_drawer,
-                state,
-                &mut actions,
-            );
+            shortcuts(ctx, self.fullscreen, self.player_panel, state, &mut actions);
 
             // Before the draw, because drawing does not mutate — and it can
             // push an action of its own, which is why it takes the same list.
@@ -2345,7 +2369,7 @@ impl eframe::App for App {
                 posters,
                 metadata,
                 episodes,
-                episode_drawer,
+                player_panel,
                 ..
             } = self;
             // Before the list borrows the art caches for the rest of the frame.
@@ -2369,6 +2393,45 @@ impl eframe::App for App {
                         next: opening.from == Page::Player,
                     }
                 });
+            // Only while paused, which is the only time the pause screen
+            // can show: the logo is a texture lookup, and could be a fetch.
+            let about = playback
+                .as_ref()
+                .filter(|playback| playback.paused)
+                .and_then(|playback| {
+                    let title = library.get(&playback.target.title_key)?;
+                    let mut art = ui::Art {
+                        engine,
+                        thumbs,
+                        posters,
+                        metadata,
+                        episodes,
+                        names: engine.appearance().names,
+                    };
+                    let target = &playback.target;
+                    let episode = title
+                        .seasons
+                        .iter()
+                        .flat_map(|season| &season.episodes)
+                        .find(|episode| {
+                            episode.node.share_id == target.share_id
+                                && episode.node.link_id == target.link_id
+                        });
+                    let synopsis = episode
+                        .and_then(|episode| art.episode(&title.key, episode))
+                        .and_then(|found| found.overview.clone())
+                        .or_else(|| {
+                            art.metadata
+                                .get(&title.key)
+                                .and_then(|record| record.metadata.as_ref())
+                                .and_then(|found| found.overview.clone())
+                        });
+                    Some(ui::player::About {
+                        name: art.name(title).to_owned(),
+                        logo: art.logo(title),
+                        synopsis,
+                    })
+                });
             let list = playback
                 .as_ref()
                 .and_then(|playback| library.get(&playback.target.title_key))
@@ -2383,7 +2446,6 @@ impl eframe::App for App {
                         episodes,
                         names: engine.appearance().names,
                     },
-                    open: *episode_drawer,
                 });
             // No panels: the controls are drawn over the picture, and a nav bar
             // above a film is the one thing every player agrees not to do.
@@ -2400,12 +2462,14 @@ impl eframe::App for App {
                             up_next,
                             neighbours,
                             episodes: list,
+                            panel: *player_panel,
+                            about,
                         },
                         &mut actions,
                     );
                 });
-            if let Some((text, at)) = &self.osd
-                && !ui::player::osd(ctx, text, *at)
+            if let Some(flash) = &self.osd
+                && !flash.show(ctx, ctx.content_rect())
             {
                 self.osd = None;
             }
@@ -3069,7 +3133,7 @@ struct PlayerKeys {
 
 /// The speeds `[` and `]` step through. Fixed steps rather than a nudge of a
 /// tenth, because 1.0 has to be somewhere a viewer can land on again.
-const SPEEDS: [f64; 8] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0];
+use crate::ui::transport::SPEEDS;
 
 /// The next step from `speed` in `direction`, from wherever it is now.
 fn step_speed(speed: f64, faster: bool) -> f64 {
@@ -3092,7 +3156,7 @@ fn step_speed(speed: f64, faster: bool) -> f64 {
 fn shortcuts(
     ctx: &egui::Context,
     fullscreen: bool,
-    drawer: bool,
+    panel: Option<ui::player::PlayerPanel>,
     playing: Option<PlayerKeys>,
     actions: &mut Vec<Action>,
 ) {
@@ -3171,9 +3235,11 @@ fn shortcuts(
             // mpv's own keys for it, and the step mpv uses.
             Key::Z => actions.push(Action::NudgeSubtitleDelay(-0.1)),
             Key::X => actions.push(Action::NudgeSubtitleDelay(0.1)),
-            Key::E => actions.push(Action::ToggleEpisodes),
-            // The episode list is the innermost thing open, so it goes first.
-            Key::Escape if drawer => actions.push(Action::ToggleEpisodes),
+            Key::E => actions.push(Action::TogglePanel(ui::player::PlayerPanel::Episodes)),
+            // A panel is the innermost thing open, so it goes first.
+            Key::Escape if panel.is_some() => {
+                actions.push(Action::TogglePanel(panel.expect("checked above")));
+            }
             Key::Escape if fullscreen => actions.push(Action::ToggleFullscreen),
             Key::Escape => actions.push(Action::LeavePlayer),
             _ => {}

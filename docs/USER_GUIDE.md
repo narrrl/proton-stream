@@ -139,11 +139,17 @@ The picture plays inside the app's window. Move the mouse to show the controls.
   credits** in Settings to skip them without asking.
 - **Up next** counts down 10 seconds when the credits start, then plays the next episode. Choose
   **Play now**, **Cancel** or **Watch till the end**.
-- **Subtitles and audio** are chosen from the buttons at the bottom right. The app remembers your
-  choice for each show. The subtitle menu also has **Size** and **Position**, which are saved like
-  the ones in Settings and change styled subtitles only when they are restyled, and **Delay**,
-  which moves subtitles earlier or later for this file only.
+- **Subtitles and audio**, **Speed** and **Chapters** are buttons at the bottom right. Each opens
+  a panel down the right of the picture; click the button again, or press Esc, to close it.
+- **Subtitles and audio** remembers your choice for each show. The panel also has **Size** and
+  **Position**, which are saved like the ones in Settings and change styled subtitles only when
+  they are restyled, and **Delay**, which moves subtitles earlier or later for this file only.
 - **Speed** goes from 0.5× to 3×, and stays for the next episode.
+- **Seeking and volume** show what they did in the middle of the picture. Several presses of ← or
+  → add up, so three presses of → say "+ 90 s".
+- **Paused** for 5 seconds with the mouse still, the picture dims and shows what you are watching:
+  the show's logo or name, the episode, and what it is about. Move the mouse to get the controls
+  back.
 
 ### Keyboard
 
@@ -173,7 +179,7 @@ Press **?** anywhere to see this list in the app.
 | E | The list of episodes |
 | F or double-click | Fullscreen |
 | Ctrl+S | Save the frame to `Pictures/proton-stream` |
-| Esc | Leave fullscreen, then the player |
+| Esc | Close a panel, leave fullscreen, then leave the player |
 
 Media keys and your desktop's media controls work too.
 

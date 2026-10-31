@@ -39,7 +39,10 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Z  /  X", "Subtitles 0.1 s earlier and later"),
             ("E", "The list of episodes"),
             ("F  or  double-click", "Fullscreen"),
-            ("Esc", "Leave fullscreen, then the player"),
+            (
+                "Esc",
+                "Close a panel, leave fullscreen, then leave the player",
+            ),
         ],
     ),
 ];

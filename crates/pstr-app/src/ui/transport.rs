@@ -18,6 +18,7 @@ use crate::app::{Action, Adjacent, Page};
 use crate::playback::{Command, Playback};
 use crate::theme;
 use crate::ui;
+use crate::ui::player::PlayerPanel;
 use crate::ui::widgets::Named;
 
 /// Height of the clickable seek bar. Comfortably larger than the few pixels it
@@ -42,6 +43,9 @@ const ROW_HEIGHT_FULL: f32 = 44.0;
 /// The same, for the library strip. See [`ROW_HEIGHT_FULL`].
 const ROW_HEIGHT_MINI: f32 = 34.0;
 
+/// The speeds on offer, and the steps `[` and `]` walk.
+pub const SPEEDS: [f64; 8] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0];
+
 /// Whether there is a file before and after this one in the same title.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Neighbours {
@@ -54,6 +58,7 @@ pub fn full(
     ui: &mut egui::Ui,
     playback: &Playback,
     neighbours: Neighbours,
+    panel: Option<PlayerPanel>,
     actions: &mut Vec<Action>,
 ) {
     seek_bar(ui, playback, actions, 6.0);
@@ -99,13 +104,11 @@ pub fn full(
             }));
         }
 
-        // Right cluster: everything that is a choice rather than a move.
+        // Right cluster: everything that is a choice rather than a move. Each
+        // opens its panel down the right of the picture rather than a menu
+        // under the pointer: a list of twelve chapters is read, not aimed at.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            track_menus(ui, playback, actions);
-            ui.add_space(theme::space::M);
-            speed_menu(ui, playback, actions);
-            ui.add_space(theme::space::M);
-            chapter_menu(ui, playback, actions);
+            panel_buttons(ui, playback, panel, actions);
             ui.add_space(theme::space::M);
             volume(ui, playback, actions);
         });
@@ -494,7 +497,7 @@ fn track_menus(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>
 
 /// What is worth changing mid-episode without a trip to Settings: the size and
 /// place of the line, and its timing for a release that is out of step.
-fn subtitle_adjustments(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
+pub fn subtitle_adjustments(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
     let mut style = playback.subtitle_style.clone();
     egui::Grid::new("subtitle-adjustments")
         .num_columns(2)
@@ -547,54 +550,65 @@ fn track_options(ui: &mut egui::Ui, tracks: &[&Track], kind: TrackKind, actions:
     }
 }
 
-/// How fast it plays. Says so on the button only when it is not normal speed,
-/// because that is the one case worth noticing at a glance.
-fn speed_menu(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
-    let label = if (playback.speed - 1.0).abs() < 1e-6 {
-        "Speed".to_owned()
-    } else {
-        format!("Speed · {}", ui::format_speed(playback.speed))
+/// The buttons that open the player's panels, right to left: tracks, speed,
+/// chapters. Each shows only when there is a choice to make, and says what is
+/// chosen when that is worth noticing at a glance.
+fn panel_buttons(
+    ui: &mut egui::Ui,
+    playback: &Playback,
+    open: Option<PlayerPanel>,
+    actions: &mut Vec<Action>,
+) {
+    let mut button = |ui: &mut egui::Ui, panel: PlayerPanel, text: String, hint: &str| {
+        let response = if open == Some(panel) {
+            ui::accent_button(ui, &text)
+        } else {
+            ui::glass_button(ui, &text)
+        };
+        if response.on_hover_text(hint).clicked() {
+            actions.push(Action::TogglePanel(panel));
+        }
+        ui.add_space(theme::space::S);
     };
-    ui.menu_button(label, |ui| {
-        // The same steps `[` and `]` walk.
-        for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0] {
-            if ui
-                .selectable_label(
-                    (playback.speed - speed).abs() < 1e-6,
-                    ui::format_speed(speed),
-                )
-                .clicked()
-            {
-                actions.push(Action::SetSpeed(speed));
-                ui.close();
-            }
-        }
-    })
-    .response
-    .on_hover_text("Playback speed ([ and ])");
-}
 
-/// Jump to a chapter. Only drawn for a file that has more than one, which for
-/// most releases means anime and not much else.
-fn chapter_menu(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
-    if playback.chapters.len() < 2 {
-        return;
+    let subtitles = playback.tracks_of(TrackKind::Subtitle).count();
+    let audio = playback.tracks_of(TrackKind::Audio).count();
+    if subtitles > 0 || audio > 1 {
+        let shown = match playback.selected_track(TrackKind::Subtitle) {
+            Some(track) => short(track),
+            None if subtitles > 0 => "Off".to_owned(),
+            None => playback
+                .selected_track(TrackKind::Audio)
+                .map(short)
+                .unwrap_or_default(),
+        };
+        button(
+            ui,
+            PlayerPanel::Tracks,
+            format!("{}  {shown}", egui_phosphor::regular::SUBTITLES),
+            "Audio and subtitles",
+        );
     }
-    let current = playback.chapter().map(|chapter| chapter.index);
-    ui.menu_button("Chapters", |ui| {
-        for chapter in &playback.chapters {
-            let label = format!("{}   {}", ui::format_time(chapter.start), chapter.label());
-            if ui
-                .selectable_label(current == Some(chapter.index), label)
-                .clicked()
-            {
-                actions.push(Action::Player(Command::SeekTo(chapter.start)));
-                ui.close();
-            }
-        }
-    })
-    .response
-    .on_hover_text("Chapters");
+    let speed = if (playback.speed - 1.0).abs() < 1e-6 {
+        egui_phosphor::regular::GAUGE.to_owned()
+    } else {
+        format!(
+            "{}  {}",
+            egui_phosphor::regular::GAUGE,
+            ui::format_speed(playback.speed)
+        )
+    };
+    button(ui, PlayerPanel::Speed, speed, "Playback speed ([ and ])");
+    // Only for a file with more than one, which for most releases means anime
+    // and not much else.
+    if playback.chapters.len() > 1 {
+        button(
+            ui,
+            PlayerPanel::Chapters,
+            egui_phosphor::regular::LIST_NUMBERS.to_owned(),
+            "Chapters",
+        );
+    }
 }
 
 /// A track in as few words as fit on a button: what distinguishes it from the

@@ -72,6 +72,53 @@ const DRAWER_WIDTH: f32 = 380.0;
 /// The stills in the episode list.
 const DRAWER_STILL: Vec2 = Vec2::new(112.0, 63.0);
 
+/// How long the picture has to sit paused, with the mouse still, before the
+/// controls give way to what is playing. Long enough that a pause to answer
+/// the door is not one, short enough that coming back to it finds the name.
+const RESTING_SECONDS: f64 = 5.0;
+/// How long the pause screen takes to settle over the picture: slower than
+/// the controls fade, because nobody is waiting on it.
+const REST_FADE: f32 = 0.6;
+
+/// The panels that open down the right of the picture. One at a time: each is
+/// a list read at leisure, and two of them side by side would cover the film.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerPanel {
+    Episodes,
+    /// Audio and subtitles, and the subtitles' size, place and timing.
+    Tracks,
+    Speed,
+    Chapters,
+}
+
+impl PlayerPanel {
+    fn heading(self) -> &'static str {
+        match self {
+            Self::Episodes => "Episodes",
+            Self::Tracks => "Audio and subtitles",
+            Self::Speed => "Playback speed",
+            Self::Chapters => "Chapters",
+        }
+    }
+}
+
+/// Whether the title has an episode panel to offer, and which panel is out.
+#[derive(Debug, Clone, Copy)]
+struct Panels {
+    episodes: bool,
+    open: Option<PlayerPanel>,
+}
+
+/// What the pause screen says about what is playing.
+pub struct About {
+    /// The title's name, as the library shows it.
+    pub name: String,
+    /// The title's logo, when its provider has one; its name otherwise.
+    pub logo: Option<egui::TextureHandle>,
+    /// What this episode is about, or failing that the whole title.
+    pub synopsis: Option<String>,
+}
+
 /// State the page keeps between frames.
 ///
 /// Held by the app and passed in by reference, because one thing here *is*
@@ -89,6 +136,9 @@ pub struct Overlay {
     /// How tall the controls were the last time they were drawn, padding
     /// included. Measured rather than assumed — see [`CHROME_PAD_X`].
     chrome_height: f32,
+    /// When the picture was last seen to pause, on egui's clock, for the
+    /// pause screen. `None` while it plays.
+    paused_since: Option<f64>,
 }
 
 impl Default for Overlay {
@@ -97,6 +147,7 @@ impl Default for Overlay {
             last_movement: None,
             last_position: None,
             chrome_height: CHROME_HEIGHT_GUESS + CHROME_PAD_TOP + CHROME_PAD_BOTTOM,
+            paused_since: None,
         }
     }
 }
@@ -114,17 +165,19 @@ pub struct Chrome<'a> {
     pub up_next: Option<UpNextCard>,
     /// Whether stepping to another episode is possible in either direction.
     pub neighbours: Neighbours,
-    /// The title's episodes, when it has more than one — what the list down
-    /// the right of the picture shows.
+    /// The title's episodes, when it has more than one — what the episode
+    /// panel shows.
     pub episodes: Option<Episodes<'a>>,
+    /// Which panel is out down the right of the picture, if any.
+    pub panel: Option<PlayerPanel>,
+    /// What the pause screen shows, while the picture is paused.
+    pub about: Option<About>,
 }
 
 /// The playing title's episodes, for the list beside the picture.
 pub struct Episodes<'a> {
     pub title: &'a pstr_core::library::Title,
     pub art: ui::Art<'a>,
-    /// Whether the list is out.
-    pub open: bool,
 }
 
 /// What the end-of-episode card says, when there is one.
@@ -187,6 +240,25 @@ impl Overlay {
         };
         ctx.input(|input| input.time) - last_movement < IDLE_SECONDS
     }
+
+    /// Whether the picture has sat paused long enough, with nobody touching
+    /// the mouse, for the pause screen to take over from the controls.
+    fn resting(&mut self, ctx: &egui::Context, playback: &Playback) -> bool {
+        let now = ctx.input(|input| input.time);
+        if !playback.paused || !playback.loaded {
+            self.paused_since = None;
+            return false;
+        }
+        let since = *self.paused_since.get_or_insert(now);
+        let still = since.max(self.last_movement.unwrap_or(now));
+        let left = RESTING_SECONDS - (now - still);
+        if left > 0.0 {
+            // Nothing else causes a frame while a paused picture sits there.
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+            return false;
+        }
+        true
+    }
 }
 
 /// What the player page shows while a file opens and there is no picture yet.
@@ -219,6 +291,8 @@ pub fn show(
         up_next,
         neighbours,
         mut episodes,
+        panel,
+        about,
     } = chrome_state;
     let ctx = ui.ctx().clone();
     let rect = ui.available_rect_before_wrap();
@@ -260,10 +334,21 @@ pub fn show(
         actions.push(Action::ToggleFullscreen);
     }
 
-    let drawer_open = episodes.as_ref().is_some_and(|list| list.open);
-    // The controls stay up while the list is out: it hangs off the button in
-    // the title strip, and is read at leisure.
-    let visible = overlay.visible(&ctx, playback) || drawer_open;
+    // The episode panel needs episodes; anything else asked for opens as is.
+    let panel = panel.filter(|panel| *panel != PlayerPanel::Episodes || episodes.is_some());
+    if panel.is_some() {
+        // Reading a panel is using the player: closing it should find the
+        // controls, not a pause screen that was waiting behind it.
+        overlay.last_movement = Some(ctx.input(|input| input.time));
+    }
+    let resting = panel.is_none() && overlay.resting(&ctx, playback);
+    let rest = ctx.animate_bool_with_time(ui.id().with("resting"), resting, REST_FADE);
+    if rest > 0.0 {
+        pause_screen(ui, playback, about.as_ref(), rect, rest);
+    }
+    // The controls stay up while a panel is out: it hangs off a button in
+    // them, and is read at leisure. They give way to the pause screen.
+    let visible = (overlay.visible(&ctx, playback) && !resting) || panel.is_some();
     // Above the chrome when it is up, at the bottom corner when it is not —
     // and clear of it either way, which is what the measured height buys.
     let float_above = if visible {
@@ -295,7 +380,10 @@ pub fn show(
                     ui,
                     playback,
                     neighbours,
-                    episodes.as_ref().map(|list| list.open),
+                    Panels {
+                        episodes: episodes.is_some(),
+                        open: panel,
+                    },
                     rect,
                     overlay.chrome_height,
                     actions,
@@ -303,9 +391,23 @@ pub fn show(
             })
             .inner;
     }
-    if let Some(list) = episodes.as_mut().filter(|list| list.open) {
-        episode_drawer(&ctx, list, playback, rect, overlay.chrome_height, actions);
-    } else {
+    if let Some(panel) = panel {
+        side_panel(
+            &ctx,
+            panel,
+            rect,
+            overlay.chrome_height,
+            actions,
+            |ui, actions| match (panel, episodes.as_mut()) {
+                (PlayerPanel::Episodes, Some(list)) => episode_list(ui, list, playback, actions),
+                (PlayerPanel::Tracks, _) => track_list(ui, playback, actions),
+                (PlayerPanel::Speed, _) => speed_list(ui, playback, actions),
+                (PlayerPanel::Chapters, _) => chapter_list(ui, playback, actions),
+                (PlayerPanel::Episodes, None) => {}
+            },
+        );
+    }
+    if panel != Some(PlayerPanel::Episodes) {
         ctx.data_mut(|data| data.remove::<String>(egui::Id::new(DRAWER_SCROLLED)));
     }
     if !visible {
@@ -695,7 +797,7 @@ fn chrome(
     ui: &mut egui::Ui,
     playback: &Playback,
     neighbours: Neighbours,
-    drawer: Option<bool>,
+    panels: Panels,
     rect: Rect,
     previous_height: f32,
     actions: &mut Vec<Action>,
@@ -748,18 +850,18 @@ fn chrome(
                 {
                     actions.push(Action::ToggleFullscreen);
                 }
-                if let Some(open) = drawer {
+                if panels.episodes {
                     ui.add_space(theme::space::S);
-                    // In the accent while the drawer is out, so the button
+                    // In the accent while the list is out, so the button
                     // that closes it is the one that says it is open.
                     let icon = egui_phosphor::regular::LIST_BULLETS;
-                    let button = if open {
+                    let button = if panels.open == Some(PlayerPanel::Episodes) {
                         ui::accent_button(ui, icon)
                     } else {
                         ui::glass_button(ui, icon)
                     };
                     if button.hint("Episodes (E)").clicked() {
-                        actions.push(Action::ToggleEpisodes);
+                        actions.push(Action::TogglePanel(PlayerPanel::Episodes));
                     }
                 }
                 // Esc leaves the page and keeps playing; this is the one-step
@@ -800,7 +902,7 @@ fn chrome(
                 .max_rect(content)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
             |ui| {
-                ui::transport::full(ui, playback, neighbours, actions);
+                ui::transport::full(ui, playback, neighbours, panels.open, actions);
                 ui.min_rect().height()
             },
         )
@@ -813,15 +915,15 @@ fn chrome(
 /// scrolls to the playing one once when it opens rather than every frame.
 const DRAWER_SCROLLED: &str = "episode-drawer-scrolled";
 
-/// The title's episodes, down the right of the picture between the title
-/// strip and the controls. A season at a time, opened on the playing one.
-fn episode_drawer(
+/// A panel down the right of the picture, between the title strip and the
+/// controls: a heading, a way to close it, and `add` under them.
+fn side_panel(
     ctx: &egui::Context,
-    list: &mut Episodes<'_>,
-    playback: &Playback,
+    panel: PlayerPanel,
     rect: Rect,
     chrome_height: f32,
     actions: &mut Vec<Action>,
+    add: impl FnOnce(&mut egui::Ui, &mut Vec<Action>),
 ) {
     let width = DRAWER_WIDTH.min(rect.width() * 0.45);
     let area = Rect::from_min_max(
@@ -831,6 +933,216 @@ fn episode_drawer(
     if area.height() < 160.0 {
         return;
     }
+    let margin = theme::space::L;
+    egui::Area::new(egui::Id::new("player-panel"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(area.min)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(theme::surface().gamma_multiply(0.96))
+                .corner_radius(CornerRadius::same(theme::radius::LG))
+                .inner_margin(egui::Margin::same(margin as i8))
+                .shadow(theme::tile_shadow(1.0))
+                .show(ui, |ui| {
+                    ui.set_width(area.width() - 2.0 * margin);
+                    ui.set_height(area.height() - 2.0 * margin);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            theme::Role::Heading
+                                .rich(panel.heading())
+                                .color(theme::text()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        theme::Role::Subhead
+                                            .rich(egui_phosphor::regular::X)
+                                            .color(theme::muted()),
+                                    )
+                                    .frame(false),
+                                )
+                                .hint("Close (Esc)")
+                                .clicked()
+                            {
+                                actions.push(Action::TogglePanel(panel));
+                            }
+                        });
+                    });
+                    ui.add_space(theme::space::S);
+                    add(ui, actions);
+                });
+        });
+}
+
+/// One choice in a panel: the whole row is the button, and the chosen one is
+/// filled and ticked, so it reads from across the room.
+fn option_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    text: &str,
+    detail: Option<&str>,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), Sense::click());
+    let hover = ui.ctx().animate_bool_with_time(
+        response.id.with("hover"),
+        response.hovered(),
+        theme::motion::HOVER,
+    );
+    let painter = ui.painter();
+    let radius = CornerRadius::same(theme::radius::MD);
+    if selected {
+        painter.rect_filled(rect, radius, theme::accent_dim());
+    } else if hover > 0.0 {
+        painter.rect_filled(rect, radius, theme::card_hover().gamma_multiply(hover));
+    }
+    let mut left = rect.left() + theme::space::L;
+    if let Some(detail) = detail {
+        let galley =
+            painter.layout_no_wrap(detail.to_owned(), theme::Role::Label.font(), theme::muted());
+        let width = galley.size().x;
+        painter.galley(
+            egui::pos2(left, rect.center().y - galley.size().y / 2.0),
+            galley,
+            theme::muted(),
+        );
+        left += width + theme::space::L;
+    }
+    let tick = 28.0;
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        text.to_owned(),
+        theme::Role::Body.font(),
+        theme::text(),
+    );
+    job.wrap.max_width = rect.right() - tick - left;
+    job.wrap.max_rows = 1;
+    job.wrap.overflow_character = Some('…');
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(left, rect.center().y - galley.size().y / 2.0),
+        galley,
+        theme::text(),
+    );
+    if selected {
+        painter.text(
+            egui::pos2(rect.right() - theme::space::L, rect.center().y),
+            Align2::RIGHT_CENTER,
+            egui_phosphor::regular::CHECK,
+            theme::Role::Body.font(),
+            theme::text(),
+        );
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, text)
+    });
+    response
+}
+
+/// A heading inside a panel, over the choices it names.
+fn panel_section(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(theme::space::S);
+    ui.label(
+        theme::Role::Caption
+            .rich(text)
+            .family(theme::semibold())
+            .color(theme::muted()),
+    );
+    ui.add_space(theme::space::XS);
+}
+
+/// The audio and subtitle tracks, and what is worth changing about subtitles
+/// mid-episode.
+fn track_list(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
+    use pstr_player::TrackKind;
+
+    egui::ScrollArea::vertical()
+        .id_salt("panel-tracks")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let audio: Vec<_> = playback.tracks_of(TrackKind::Audio).collect();
+            if !audio.is_empty() {
+                panel_section(ui, "Audio");
+                for track in &audio {
+                    if option_row(ui, track.selected, &track.label(), None).clicked() {
+                        actions.push(Action::SelectTrack {
+                            kind: TrackKind::Audio,
+                            id: Some(track.id),
+                        });
+                    }
+                }
+            }
+            let subtitles: Vec<_> = playback.tracks_of(TrackKind::Subtitle).collect();
+            panel_section(ui, "Subtitles");
+            // "Off" first, and always: it is the choice most often wanted, and
+            // the only one that is not in the file.
+            let off = playback.selected_track(TrackKind::Subtitle).is_none();
+            if option_row(ui, off, "Off", None).clicked() {
+                actions.push(Action::SelectTrack {
+                    kind: TrackKind::Subtitle,
+                    id: None,
+                });
+            }
+            for track in &subtitles {
+                if option_row(ui, track.selected, &track.label(), None).clicked() {
+                    actions.push(Action::SelectTrack {
+                        kind: TrackKind::Subtitle,
+                        id: Some(track.id),
+                    });
+                }
+            }
+            if !subtitles.is_empty() {
+                panel_section(ui, "Subtitle size, place and timing");
+                ui::transport::subtitle_adjustments(ui, playback, actions);
+            }
+        });
+}
+
+/// The speeds `[` and `]` step through.
+fn speed_list(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
+    for speed in ui::transport::SPEEDS {
+        let label = if speed == 1.0 {
+            "Normal".to_owned()
+        } else {
+            ui::format_speed(speed)
+        };
+        if option_row(ui, (playback.speed - speed).abs() < 1e-6, &label, None).clicked() {
+            actions.push(Action::SetSpeed(speed));
+        }
+    }
+}
+
+/// Every chapter, with where it starts, the one playing marked.
+fn chapter_list(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>) {
+    let current = playback.chapter().map(|chapter| chapter.index);
+    egui::ScrollArea::vertical()
+        .id_salt("panel-chapters")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for chapter in &playback.chapters {
+                let start = ui::format_time(chapter.start);
+                if option_row(
+                    ui,
+                    current == Some(chapter.index),
+                    &chapter.label(),
+                    Some(&start),
+                )
+                .clicked()
+                {
+                    actions.push(Action::Player(Command::SeekTo(chapter.start)));
+                }
+            }
+        });
+}
+
+/// The title's episodes, a season at a time, opened on the playing one.
+fn episode_list(
+    ui: &mut egui::Ui,
+    list: &mut Episodes<'_>,
+    playback: &Playback,
+    actions: &mut Vec<Action>,
+) {
+    let ctx = ui.ctx().clone();
     let title = list.title;
     let target = &playback.target;
     let is_playing = |episode: &pstr_core::library::Episode| {
@@ -847,95 +1159,146 @@ fn episode_drawer(
         .unwrap_or(playing_season)
         .min(title.seasons.len().saturating_sub(1));
 
-    let margin = theme::space::L;
-    egui::Area::new(egui::Id::new("episode-drawer"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(area.min)
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(theme::surface().gamma_multiply(0.96))
-                .corner_radius(CornerRadius::same(theme::radius::LG))
-                .inner_margin(egui::Margin::same(margin as i8))
-                .shadow(theme::tile_shadow(1.0))
-                .show(ui, |ui| {
-                    ui.set_width(area.width() - 2.0 * margin);
-                    ui.set_height(area.height() - 2.0 * margin);
-                    ui.horizontal(|ui| {
-                        ui.label(theme::Role::Heading.rich("Episodes").color(theme::text()));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        theme::Role::Subhead
-                                            .rich(egui_phosphor::regular::X)
-                                            .color(theme::muted()),
-                                    )
-                                    .frame(false),
-                                )
-                                .hint("Close (E)")
-                                .clicked()
-                            {
-                                actions.push(Action::ToggleEpisodes);
-                            }
-                        });
-                    });
-                    if title.seasons.len() > 1 {
-                        ui.add_space(theme::space::XS);
-                        let labels: Vec<(usize, String)> = title
-                            .seasons
-                            .iter()
-                            .enumerate()
-                            .map(|(index, season)| (index, season.label()))
-                            .collect();
-                        let choices: Vec<(usize, &str)> = labels
-                            .iter()
-                            .map(|(index, label)| (*index, label.as_str()))
-                            .collect();
-                        egui::ScrollArea::horizontal()
-                            .id_salt("drawer-seasons")
-                            .show(ui, |ui| {
-                                if let Some(picked) = ui::widgets::segmented(ui, season, &choices) {
-                                    season = picked;
-                                    ctx.data_mut(|data| data.insert_temp(season_id, picked));
-                                }
-                            });
-                    }
-                    ui.add_space(theme::space::S);
+    if title.seasons.len() > 1 {
+        let labels: Vec<(usize, String)> = title
+            .seasons
+            .iter()
+            .enumerate()
+            .map(|(index, season)| (index, season.label()))
+            .collect();
+        let choices: Vec<(usize, &str)> = labels
+            .iter()
+            .map(|(index, label)| (*index, label.as_str()))
+            .collect();
+        egui::ScrollArea::horizontal()
+            .id_salt("drawer-seasons")
+            .show(ui, |ui| {
+                if let Some(picked) = ui::widgets::segmented(ui, season, &choices) {
+                    season = picked;
+                    ctx.data_mut(|data| data.insert_temp(season_id, picked));
+                }
+            });
+        ui.add_space(theme::space::S);
+    }
 
-                    let Some(shown) = title.seasons.get(season) else {
-                        return;
-                    };
-                    egui::ScrollArea::vertical()
-                        .id_salt("drawer-episodes")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for episode in &shown.episodes {
-                                let row = drawer_row(
-                                    ui,
-                                    &mut list.art,
-                                    title,
-                                    episode,
-                                    is_playing(episode),
-                                    actions,
-                                );
-                                if is_playing(episode) {
-                                    let scrolled = ctx.data(|data| {
-                                        data.get_temp::<String>(egui::Id::new(DRAWER_SCROLLED))
-                                    });
-                                    if scrolled.as_deref() != Some(target.link_id.as_str()) {
-                                        row.scroll_to_me(Some(egui::Align::Center));
-                                        ctx.data_mut(|data| {
-                                            data.insert_temp(
-                                                egui::Id::new(DRAWER_SCROLLED),
-                                                target.link_id.clone(),
-                                            )
-                                        });
-                                    }
-                                }
-                            }
+    let Some(shown) = title.seasons.get(season) else {
+        return;
+    };
+    egui::ScrollArea::vertical()
+        .id_salt("drawer-episodes")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for episode in &shown.episodes {
+                let row = drawer_row(
+                    ui,
+                    &mut list.art,
+                    title,
+                    episode,
+                    is_playing(episode),
+                    actions,
+                );
+                if is_playing(episode) {
+                    let scrolled =
+                        ctx.data(|data| data.get_temp::<String>(egui::Id::new(DRAWER_SCROLLED)));
+                    if scrolled.as_deref() != Some(target.link_id.as_str()) {
+                        row.scroll_to_me(Some(egui::Align::Center));
+                        ctx.data_mut(|data| {
+                            data.insert_temp(egui::Id::new(DRAWER_SCROLLED), target.link_id.clone())
                         });
-                });
+                    }
+                }
+            }
         });
+}
+
+/// What takes over from the controls once the picture has sat paused: the
+/// picture dimmed, and over it what is playing, the way a cinema's screen says
+/// what the film is between showings.
+fn pause_screen(ui: &egui::Ui, playback: &Playback, about: Option<&About>, rect: Rect, fade: f32) {
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        CornerRadius::ZERO,
+        Color32::from_black_alpha((150.0 * fade) as u8),
+    );
+    // Darker down the left, where the words are, so they hold over any frame.
+    let side = Rect::from_min_size(rect.min, Vec2::new(rect.width() * 0.6, rect.height()));
+    let mut mesh = egui::Mesh::default();
+    let dark = Color32::from_black_alpha((120.0 * fade) as u8);
+    mesh.colored_vertex(side.left_top(), dark);
+    mesh.colored_vertex(side.right_top(), Color32::TRANSPARENT);
+    mesh.colored_vertex(side.left_bottom(), dark);
+    mesh.colored_vertex(side.right_bottom(), Color32::TRANSPARENT);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    painter.add(egui::Shape::mesh(mesh));
+
+    let ink = |alpha: u8| Color32::from_white_alpha(alpha).gamma_multiply(fade);
+    let left = rect.left() + (rect.width() * 0.07).max(32.0);
+    let width = (rect.width() * 0.42).clamp(260.0, 620.0);
+    // Built from the bottom of the block up, so its lowest line sits at the
+    // same height whatever the synopsis runs to.
+    let mut y = rect.bottom() - rect.height() * 0.22;
+
+    if let Some(synopsis) = about.and_then(|about| about.synopsis.as_deref()) {
+        let mut job = egui::text::LayoutJob::simple(
+            synopsis.to_owned(),
+            theme::Role::Body.font(),
+            ink(215),
+            width,
+        );
+        job.wrap.max_rows = 4;
+        job.wrap.overflow_character = Some('…');
+        let galley = painter.layout_job(job);
+        y -= galley.size().y;
+        painter.galley(egui::pos2(left, y), galley, ink(215));
+        y -= theme::space::L;
+    }
+    let caption = playback.target.caption();
+    if !caption.is_empty() {
+        let galley = painter.layout(caption, theme::Role::Subhead.font(), ink(235), width);
+        y -= galley.size().y;
+        painter.galley(egui::pos2(left, y), galley, ink(235));
+        y -= theme::space::M;
+    }
+    match about.and_then(|about| about.logo.as_ref()) {
+        Some(logo) => {
+            let size = logo.size_vec2();
+            let scale = (width * 0.8 / size.x).min(110.0 / size.y);
+            let shown = size * scale;
+            y -= shown.y;
+            painter.image(
+                logo.id(),
+                Rect::from_min_size(egui::pos2(left, y), shown),
+                Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE.gamma_multiply(fade),
+            );
+        }
+        None => {
+            let name = about.map_or(&playback.target.title_name, |about| &about.name);
+            let galley = painter.layout(name.clone(), theme::Role::Hero.font(), ink(255), width);
+            y -= galley.size().y;
+            painter.galley(egui::pos2(left, y), galley, ink(255));
+        }
+    }
+    y -= theme::space::M;
+    painter.text(
+        egui::pos2(left, y),
+        Align2::LEFT_BOTTOM,
+        "You're watching",
+        theme::Role::Label.font(),
+        ink(190),
+    );
+    painter.text(
+        egui::pos2(
+            rect.right() - left + rect.left(),
+            rect.bottom() - rect.height() * 0.22,
+        ),
+        Align2::RIGHT_BOTTOM,
+        "Paused",
+        theme::Role::Title.font(),
+        ink(200),
+    );
 }
 
 /// One episode in the list: its still, which plays it, and what it is.
@@ -1080,40 +1443,131 @@ fn fade(painter: &egui::Painter, rect: Rect, curve: impl Fn(f32) -> f32) {
     painter.add(egui::Shape::mesh(mesh));
 }
 
-/// What a key just did, in a pill near the top of the picture, for a moment.
-///
-/// Returns whether it is still showing.
-pub fn osd(ctx: &egui::Context, text: &str, at: f64) -> bool {
-    /// How long it stays, and how much of that is fading out.
-    const SECONDS: f64 = 0.9;
-    const FADE: f64 = 0.25;
+/// How long a [`Flash`] stays, and how much of that is fading out.
+pub const FLASH_SECONDS: f64 = 0.9;
+const FLASH_FADE: f64 = 0.25;
 
-    let age = ctx.input(|input| input.time) - at;
-    if age >= SECONDS {
-        return false;
+/// What a key or a click just did, shown in the middle of the picture for a
+/// moment: "+30 s", "Volume 70%" with the level under it.
+#[derive(Debug, Clone)]
+pub struct Flash {
+    pub icon: &'static str,
+    pub text: String,
+    /// A level to draw as a bar under the text, from 0 to 1: the volume.
+    pub level: Option<f32>,
+    /// What a run of seeks in one direction adds up to, so that three
+    /// presses of → read "+90 s" rather than "+30 s" three times.
+    pub seek: Option<f64>,
+    /// When, on egui's clock.
+    pub at: f64,
+}
+
+impl Flash {
+    /// A seek of `seconds`, added to the one still showing when it went the
+    /// same way.
+    pub fn seek(previous: Option<&Flash>, seconds: f64, now: f64) -> Self {
+        let total = previous
+            .filter(|flash| now - flash.at < FLASH_SECONDS)
+            .and_then(|flash| flash.seek)
+            .filter(|total| total.signum() == seconds.signum())
+            .unwrap_or(0.0)
+            + seconds;
+        Self {
+            icon: if total < 0.0 {
+                egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE
+            } else {
+                egui_phosphor::regular::CLOCK_CLOCKWISE
+            },
+            text: if total < 0.0 {
+                format!("− {:.0} s", -total)
+            } else {
+                format!("+ {total:.0} s")
+            },
+            level: None,
+            seek: Some(total),
+            at: now,
+        }
     }
-    let opacity = ((SECONDS - age) / FADE).clamp(0.0, 1.0) as f32;
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("osd"),
-    ));
-    let galley = painter.layout_no_wrap(text.to_owned(), theme::Role::Title.font(), Color32::WHITE);
-    let size = galley.size() + Vec2::new(36.0, 18.0);
-    let screen = ctx.content_rect();
-    let frame = Rect::from_center_size(
-        egui::pos2(screen.center().x, screen.top() + TITLE_HEIGHT + 40.0),
-        size,
-    );
-    painter.rect_filled(
-        frame,
-        CornerRadius::same((size.y / 2.0) as u8),
-        Color32::from_black_alpha((190.0 * opacity) as u8),
-    );
-    painter.galley_with_override_text_color(
-        frame.min + Vec2::new(18.0, 9.0),
-        galley,
-        Color32::WHITE.gamma_multiply(opacity),
-    );
-    ctx.request_repaint();
-    true
+
+    /// Draw it over `rect`. Returns whether it is still showing.
+    pub fn show(&self, ctx: &egui::Context, rect: Rect) -> bool {
+        let age = ctx.input(|input| input.time) - self.at;
+        if age >= FLASH_SECONDS {
+            return false;
+        }
+        let opacity = ((FLASH_SECONDS - age) / FLASH_FADE).clamp(0.0, 1.0) as f32;
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("osd"),
+        ));
+        let ink = Color32::WHITE.gamma_multiply(opacity);
+        let icon = painter.layout_no_wrap(self.icon.to_owned(), theme::Role::Hero.font(), ink);
+        let text = painter.layout_no_wrap(self.text.clone(), theme::Role::Subhead.font(), ink);
+        let bar = Vec2::new(120.0, 4.0);
+        let width = icon.size().x.max(text.size().x).max(bar.x) + 40.0;
+        let height = icon.size().y
+            + theme::space::S
+            + text.size().y
+            + if self.level.is_some() {
+                theme::space::L + bar.y
+            } else {
+                0.0
+            }
+            + 32.0;
+        let frame = Rect::from_center_size(rect.center(), Vec2::new(width, height));
+        painter.rect_filled(
+            frame,
+            CornerRadius::same(theme::radius::LG * 2),
+            Color32::from_black_alpha((170.0 * opacity) as u8),
+        );
+        let mut y = frame.top() + 16.0;
+        let icon_height = icon.size().y;
+        painter.galley(
+            egui::pos2(frame.center().x - icon.size().x / 2.0, y),
+            icon,
+            ink,
+        );
+        y += icon_height + theme::space::S;
+        let text_height = text.size().y;
+        painter.galley(
+            egui::pos2(frame.center().x - text.size().x / 2.0, y),
+            text,
+            ink,
+        );
+        y += text_height + theme::space::L;
+        if let Some(level) = self.level {
+            let track = Rect::from_min_size(egui::pos2(frame.center().x - bar.x / 2.0, y), bar);
+            let radius = CornerRadius::same(theme::radius::BAR);
+            painter.rect_filled(
+                track,
+                radius,
+                Color32::from_white_alpha(60).gamma_multiply(opacity),
+            );
+            let mut filled = track;
+            filled.set_width(track.width() * level.clamp(0.0, 1.0));
+            painter.rect_filled(filled, radius, theme::accent().gamma_multiply(opacity));
+        }
+        ctx.request_repaint();
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seeks_the_same_way_in_quick_succession_add_up_and_a_turn_or_a_pause_starts_again() {
+        let first = Flash::seek(None, 30.0, 10.0);
+        let second = Flash::seek(Some(&first), 30.0, 10.4);
+        assert_eq!(second.seek, Some(60.0));
+        assert_eq!(second.text, "+ 60 s");
+
+        let back = Flash::seek(Some(&second), -10.0, 10.6);
+        assert_eq!(back.seek, Some(-10.0));
+        assert_eq!(back.text, "− 10 s");
+
+        let later = Flash::seek(Some(&second), 30.0, 10.4 + FLASH_SECONDS);
+        assert_eq!(later.seek, Some(30.0));
+    }
 }
