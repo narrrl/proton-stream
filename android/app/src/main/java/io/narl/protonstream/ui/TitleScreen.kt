@@ -92,6 +92,8 @@ import io.narl.protonstream.ui.theme.TonalButton
 import io.narl.protonstream.ui.theme.solid
 import androidx.compose.foundation.border
 import uniffi.pstr_android.BrowseFacet
+import uniffi.pstr_android.CastRecord
+import androidx.compose.material.icons.filled.Movie
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TitleType
 import uniffi.pstr_android.EpisodeRecord
@@ -351,6 +353,21 @@ internal fun TitleScreen(
                                 .clickable { overviewOpen = !overviewOpen },
                         )
                     }
+                    // In the browser: the app itself never requests it.
+                    title.trailerUrl?.let { url ->
+                        QuietButton(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+                                }.onFailure(onPreferenceError)
+                            },
+                            modifier = Modifier.padding(top = 4.dp),
+                        ) {
+                            Icon(Icons.Default.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Trailer")
+                        }
+                    }
                     // Genres as chips, then the provider's tags quieter after
                     // them: a tag is its community describing it, not what it
                     // is filed as.
@@ -492,6 +509,26 @@ internal fun TitleScreen(
                     }
                 }
             }
+            if (title.cast.isNotEmpty()) {
+                item(key = "cast") {
+                    Column(Modifier.padding(top = 16.dp)) {
+                        Text(
+                            "Cast",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = side + 16.dp),
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            contentPadding = PaddingValues(start = side + 16.dp, end = side + 16.dp, top = 10.dp),
+                        ) {
+                            // Unkeyed: two characters can share a name.
+                            items(title.cast) { member ->
+                                CastTile(member) { actor -> onBrowse(BrowseFacet.Person(actor)) }
+                            }
+                        }
+                    }
+                }
+            }
             // Under the episodes rather than over them: where to go once this
             // one is done, not what the page is for.
             if (moreLike.isNotEmpty()) {
@@ -581,6 +618,48 @@ private fun TitleBar(name: String, list: LazyListState, backdrop: Float, onBack:
 }
 
 private val TITLE_BAR = 56.dp
+
+/**
+ * One character: a round portrait over their name and who voices them. A voice
+ * actor opens every title in the library they are in.
+ */
+@Composable
+private fun CastTile(member: CastRecord, onActor: (String) -> Unit) {
+    Column(
+        Modifier
+            .width(88.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .then(
+                member.actor?.let { actor ->
+                    Modifier.clickable(onClickLabel = "Browse $actor") { onActor(actor) }
+                } ?: Modifier,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        RemoteArtwork(
+            member.characterImage ?: member.actorImage,
+            member.character,
+            Modifier.size(76.dp).clip(CircleShape),
+            labelled = false,
+        )
+        Text(
+            member.character,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        member.actor?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
 
 /**
  * One part of the franchise, or one title like this one: its cover, what it is

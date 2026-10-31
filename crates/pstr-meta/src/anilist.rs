@@ -18,7 +18,8 @@ use std::collections::HashSet;
 
 use pstr_core::library::{self, TitleKind};
 use pstr_core::metadata::{
-    Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleDetails, TitleMetadata,
+    CastMember, Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleDetails, TitleMetadata,
+    Trailer,
 };
 use serde::Deserialize;
 
@@ -60,7 +61,9 @@ const SCORE_SCALE: f32 = 10.0;
 /// Everything one entry is asked for, by search and by id alike.
 ///
 /// The relations are the franchise's — see `pstr_core::franchise` — and the
-/// staff are only the most relevant few, which is where a director sits.
+/// staff are only the most relevant few, which is where a director sits. The
+/// characters are the first ten by role, main ones first, each with their
+/// Japanese voice actor.
 macro_rules! entry_fragment {
     () => {
         r#"
@@ -84,6 +87,14 @@ fragment entry on Media {
   siteUrl
   studios(isMain: true) { nodes { name } }
   staff(sort: RELEVANCE, perPage: 6) { edges { role node { name { full } } } }
+  characters(sort: [ROLE, RELEVANCE, ID], perPage: 10) {
+    edges {
+      role
+      node { name { full } image { medium } }
+      voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) { name { full } image { medium } }
+    }
+  }
+  trailer { id site }
   nextAiringEpisode { episode airingAt }
   relations { edges { relationType node { id type } } }
 }
@@ -591,6 +602,8 @@ struct Media {
     site_url: Option<String>,
     studios: Option<Studios>,
     staff: Option<Staff>,
+    characters: Option<Characters>,
+    trailer: Option<AniTrailer>,
     #[serde(rename = "nextAiringEpisode")]
     next_airing_episode: Option<NextAiring>,
     relations: Option<Relations>,
@@ -636,6 +649,32 @@ struct StaffEdge {
 #[derive(Deserialize)]
 struct Person {
     name: PersonName,
+    image: Option<Image>,
+}
+
+#[derive(Deserialize)]
+struct Image {
+    medium: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Characters {
+    #[serde(default)]
+    edges: Vec<CharacterEdge>,
+}
+
+#[derive(Deserialize)]
+struct CharacterEdge {
+    role: Option<String>,
+    node: Option<Person>,
+    #[serde(rename = "voiceActors", default)]
+    voice_actors: Vec<Person>,
+}
+
+#[derive(Deserialize)]
+struct AniTrailer {
+    id: Option<String>,
+    site: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -759,6 +798,35 @@ impl Media {
             popularity: self.popularity,
             status: self.status,
             runtime: self.duration.filter(|minutes| *minutes > 0),
+            cast: self
+                .characters
+                .map(|characters| {
+                    characters
+                        .edges
+                        .into_iter()
+                        .filter_map(|edge| {
+                            let character = edge.node?;
+                            let actor = edge.voice_actors.into_iter().next();
+                            Some(CastMember {
+                                character: character.name.full?,
+                                character_image: character.image.and_then(|image| image.medium),
+                                role: edge.role,
+                                actor_image: actor
+                                    .as_ref()
+                                    .and_then(|actor| actor.image.as_ref())
+                                    .and_then(|image| image.medium.clone()),
+                                actor: actor.and_then(|actor| actor.name.full),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            trailer: self.trailer.and_then(|trailer| {
+                Some(Trailer {
+                    site: trailer.site?,
+                    id: trailer.id?,
+                })
+            }),
             revision: TitleDetails::REVISION,
             next_episode: self
                 .next_airing_episode
@@ -971,6 +1039,51 @@ mod tests {
         // Out of 10, not out of 100.
         assert_eq!(candidate.metadata.rating, Some(8.4));
         assert_eq!(candidate.metadata.poster_url.as_deref(), Some("big.jpg"));
+    }
+
+    #[test]
+    fn the_cast_comes_with_its_voice_actors_and_the_trailer_with_its_site() {
+        let media: Media = serde_json::from_str(
+            r#"{
+                "id": 154587,
+                "title": {"romaji": "Sousou no Frieren", "english": null, "native": null},
+                "characters": {"edges": [
+                    {"role": "MAIN",
+                     "node": {"name": {"full": "Frieren"}, "image": {"medium": "frieren.png"}},
+                     "voiceActors": [{"name": {"full": "Atsumi Tanezaki"},
+                                      "image": {"medium": "tanezaki.png"}}]},
+                    {"role": "SUPPORTING",
+                     "node": {"name": {"full": "Himmel"}, "image": null},
+                     "voiceActors": []},
+                    {"role": "BACKGROUND", "node": {"name": {"full": null}}, "voiceActors": []}
+                ]},
+                "trailer": {"id": "tR8YH0G67Rk", "site": "youtube"}
+            }"#,
+        )
+        .expect("parse");
+        let details = media.into_candidate().metadata.details.expect("details");
+        assert_eq!(
+            details.cast,
+            [
+                CastMember {
+                    character: "Frieren".into(),
+                    character_image: Some("frieren.png".into()),
+                    role: Some("MAIN".into()),
+                    actor: Some("Atsumi Tanezaki".into()),
+                    actor_image: Some("tanezaki.png".into()),
+                },
+                // No voice actor yet is still a character; no name is not.
+                CastMember {
+                    character: "Himmel".into(),
+                    role: Some("SUPPORTING".into()),
+                    ..CastMember::default()
+                },
+            ]
+        );
+        assert_eq!(
+            details.trailer.and_then(|trailer| trailer.url()).as_deref(),
+            Some("https://www.youtube.com/watch?v=tR8YH0G67Rk")
+        );
     }
 
     fn edge(relation: &str, id: i64, kind: &str, format: &str) -> RelationEdge {

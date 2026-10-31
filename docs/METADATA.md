@@ -162,6 +162,17 @@ match. The same scoring, seeded by the title most recently watched to the end
 and limited to titles not started, is the library's *Because you watched* row.
 No request: it reads only what the match already stored.
 
+**Cast and trailer.** The AniList query also asks for the first ten
+characters by role, main ones first, each with their Japanese voice actor and
+both portraits, and for the trailer's site and id. They are
+`TitleDetails::cast` and `TitleDetails::trailer`, in the same JSON column — no
+migration. `TitleDetails::REVISION` is 2, so a match stored before them is
+fetched again by id on the next match run, as `runtime` was. A voice actor's
+chip opens the same page as a director's (`Facet::Person`). The trailer is
+only ever a link: `Trailer::url` builds the YouTube or Dailymotion address,
+keeping only an id's own characters, and the browser opens it. Portraits are
+fetched like posters, from AniList's image host.
+
 **Android.** The same, through the bridge: `AndroidEngine::arrangement`
 returns the grid's tiles and the shelves as keys into `library`'s titles, and
 each `TitleRecord` carries its display name, franchise and details. The

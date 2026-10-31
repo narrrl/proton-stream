@@ -114,6 +114,12 @@ top.
   franchise, and shows one title from each other franchise. It needs posters and descriptions.
 - The genre chips under the description open a page with every title of that genre in your
   library. So do the **Studio** and **Director** chips. Back, or **Esc**, returns to the title.
+- **Cast** lists the main characters and who voices them in Japanese. Click one to see every title
+  in your library with that voice actor. Search finds voice actors too.
+- **Trailer** opens the title's trailer in your web browser. The app does not play it or load it
+  itself.
+- Titles matched before this version get their cast and trailer by themselves the next time the
+  app looks up posters and descriptions.
 - With posters and descriptions on, a show's logo takes the place of its name at the top of the
   page and on the library's banner, and each episode says how long it runs. A film says how long
   it runs in the line under its name.

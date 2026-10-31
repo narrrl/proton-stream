@@ -99,6 +99,9 @@ struct TitleView: View {
                             .padding(.horizontal, side)
                         }
                     }
+                    if !title.cast.isEmpty {
+                        castRow(side: side)
+                    }
                     // Under the episodes rather than over them: where to go
                     // once this one is done, not what the page is for.
                     if !moreLike.isEmpty {
@@ -284,6 +287,14 @@ struct TitleView: View {
                     .padding(.top, 12)
                     .onTapGesture { overviewOpen.toggle() }
             }
+            // In the browser: the app itself never requests it.
+            if let trailer = title.trailerUrl.flatMap(URL.init(string:)) {
+                Button { openURL(trailer) } label: {
+                    Label("Trailer", systemImage: "film")
+                }
+                .buttonStyle(.quiet)
+                .padding(.top, 4)
+            }
             // Genres as chips, then the provider's tags quieter after them: a
             // tag is its community describing it, not what it is filed as.
             if !title.genres.isEmpty {
@@ -342,6 +353,39 @@ struct TitleView: View {
         if title.watchedCount > 0 { return "Continue with \(upNext.label)" }
         if playlist.count == 1 { return "Play" }
         return "Play \(upNext.label)"
+    }
+
+    /// The characters, each a round portrait over their name and who voices
+    /// them. A voice actor opens every title in the library they are in.
+    private func castRow(side: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Cast").textStyle(.titleMedium).foregroundStyle(scheme.onSurface)
+                .padding(.horizontal, side + 16)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 16) {
+                    // By position: two characters can share a name.
+                    ForEach(Array(title.cast.enumerated()), id: \.offset) { _, member in
+                        VStack(spacing: 2) {
+                            RemoteArtwork(member.characterImage ?? member.actorImage, member.character, labelled: false)
+                                .frame(width: 76, height: 76)
+                                .clipShape(Circle())
+                            Text(member.character).textStyle(.labelMedium).foregroundStyle(scheme.onSurface)
+                                .lineLimit(1).padding(.top, 4)
+                            if let actor = member.actor {
+                                Text(actor).textStyle(.labelSmall).foregroundStyle(scheme.onSurfaceVariant).lineLimit(1)
+                            }
+                        }
+                        .frame(width: 88)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if let actor = member.actor { onBrowse(.person(name: actor)) } }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityHint(member.actor.map { "Browse \($0)" } ?? "")
+                    }
+                }
+                .padding(.horizontal, side + 16)
+            }
+        }
+        .padding(.top, 16)
     }
 
     /// A row of covers: the franchise, with this title marked, or the titles

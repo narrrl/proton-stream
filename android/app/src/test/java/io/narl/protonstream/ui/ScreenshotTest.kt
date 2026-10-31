@@ -36,6 +36,7 @@ import uniffi.pstr_android.ShareRecord
 import uniffi.pstr_android.ShelfRecord
 import uniffi.pstr_android.StorageUsageRecord
 import uniffi.pstr_android.TileRecord
+import uniffi.pstr_android.CastRecord
 import uniffi.pstr_android.TitleRecord
 import uniffi.pstr_android.TitleType
 
@@ -291,6 +292,11 @@ class ScreenshotTest {
             directors = listOf("Daisuke Hiramaki"),
             tags = listOf("Idol", "Reincarnation"),
             franchise = listOf("oshi-no-ko", "oshi-no-ko-film"),
+            trailerUrl = "https://www.youtube.com/watch?v=trailer",
+            cast = listOf(
+                CastRecord("Ai Hoshino", null, "Rie Takahashi", null),
+                CastRecord("Aqua", null, "Takeo Ootsuka", null),
+            ),
         )
 
         /** The rest of [SERIES]'s franchise, for the title page's row of it. */

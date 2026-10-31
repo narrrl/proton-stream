@@ -81,6 +81,17 @@ impl Art<'_> {
             .texture(&thumbnail_key(node), || engine.request_thumbnail(node))
     }
 
+    /// A provider's picture that belongs to no one title's tile — a cast
+    /// member's portrait — fetched like a poster the first time it is asked
+    /// for.
+    pub fn picture(&mut self, url: &str) -> Option<egui::TextureHandle> {
+        let key = format!("picture:{url}");
+        let engine = self.engine;
+        let url = url.to_owned();
+        self.posters
+            .texture(&key, || engine.request_poster(key.clone(), url))
+    }
+
     /// The name to show for `title`. See [`title_name`].
     pub fn name<'t>(&'t self, title: &'t Title) -> &'t str {
         title_name(title, self.metadata, self.names)

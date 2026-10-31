@@ -16,7 +16,7 @@ use crate::shelves::Shelf;
 pub enum Facet {
     Genre(String),
     Studio(String),
-    /// A director.
+    /// A director, or a voice actor in the cast.
     Person(String),
 }
 
@@ -33,7 +33,7 @@ impl Facet {
         match self {
             Self::Genre(_) => "Genre",
             Self::Studio(_) => "Studio",
-            Self::Person(_) => "Director",
+            Self::Person(_) => "Person",
         }
     }
 
@@ -45,9 +45,13 @@ impl Facet {
             Self::Studio(name) => {
                 details.is_some_and(|details| details.studios.iter().any(|studio| studio == name))
             }
-            Self::Person(name) => {
-                details.is_some_and(|details| details.directors.iter().any(|person| person == name))
-            }
+            Self::Person(name) => details.is_some_and(|details| {
+                details.directors.iter().any(|person| person == name)
+                    || details
+                        .cast
+                        .iter()
+                        .any(|member| member.actor.as_deref() == Some(name.as_str()))
+            }),
         }
     }
 
@@ -161,17 +165,27 @@ pub fn find(
         let Some(details) = &found.details else {
             continue;
         };
-        let made = details
+        // One count per title, however many characters a voice actor has
+        // in it.
+        let made: HashSet<Facet> = details
             .directors
             .iter()
+            .chain(
+                details
+                    .cast
+                    .iter()
+                    .filter_map(|member| member.actor.as_ref()),
+            )
             .map(|name| Facet::Person(name.clone()))
             .chain(
                 details
                     .studios
                     .iter()
                     .map(|name| Facet::Studio(name.clone())),
-            );
-        for facet in made.filter(|facet| holds(facet.name())) {
+            )
+            .filter(|facet| holds(facet.name()))
+            .collect();
+        for facet in made {
             *people.entry(facet).or_default() += 1;
         }
     }
@@ -570,7 +584,7 @@ mod tests {
             3,
             "both Frieren titles and Bocchi"
         );
-        assert_eq!(person.kind(), "Director");
+        assert_eq!(person.kind(), "Person");
         let genre = Facet::Genre("Comedy".into());
         let mut comedy = genre.titles(&library.titles, &metadata);
         comedy.sort();

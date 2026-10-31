@@ -18,6 +18,9 @@ Nothing else leaves your device. There is no telemetry, no crash reporting and n
 of the titles in your library. It does not learn your files, your watch history or your shares.
 Turning them off deletes every stored answer.
 
+**Trailer** on a title's page opens the trailer's YouTube or Dailymotion page in your web
+browser. The app sends nothing there itself; your browser loads the page as it would any link.
+
 ## Secrets
 
 - **The part of a share link after `#`** is the key that decrypts the share. The app treats it as

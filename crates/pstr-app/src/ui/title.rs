@@ -151,6 +151,20 @@ pub fn show(
             }
             ui.add_space(theme::space::L);
 
+            let cast = art
+                .metadata
+                .get(&title.key)
+                .and_then(|record| record.metadata.as_ref())
+                .and_then(|found| found.details.as_ref())
+                .map(|details| details.cast.clone())
+                .unwrap_or_default();
+            if !cast.is_empty() {
+                ui.add_space(theme::space::L);
+                ui::section(ui, "Cast");
+                cast_row(ui, art, &title.key, &cast, actions);
+                ui.add_space(theme::space::L);
+            }
+
             // Under the episodes rather than over them: it is where to go
             // once this one is done, not what the page is for.
             let similar: Vec<&Title> = similar.iter().filter_map(|key| library.get(key)).collect();
@@ -161,6 +175,95 @@ pub fn show(
                 ui.add_space(theme::space::L);
             }
         });
+}
+
+/// The characters, each a round portrait over their name and who voices
+/// them. A voice actor opens every title in the library they are in.
+fn cast_row(
+    ui: &mut egui::Ui,
+    art: &mut Art<'_>,
+    key: &str,
+    cast: &[pstr_core::metadata::CastMember],
+    actions: &mut Vec<Action>,
+) {
+    const SIZE: f32 = 88.0;
+    ui::shelf(ui, ("cast", key), |ui| {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = theme::space::L;
+            for (i, member) in cast.iter().enumerate() {
+                let tile = ui.allocate_ui(egui::vec2(SIZE + 16.0, SIZE + 52.0), |ui| {
+                    ui.vertical_centered(|ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(SIZE, SIZE), egui::Sense::hover());
+                        let picture = member
+                            .character_image
+                            .as_deref()
+                            .or(member.actor_image.as_deref())
+                            .and_then(|url| art.picture(url));
+                        let painter = ui.painter();
+                        match picture {
+                            Some(texture) => {
+                                let shape = egui::epaint::RectShape::filled(
+                                    rect,
+                                    egui::CornerRadius::same((SIZE / 2.0) as u8),
+                                    egui::Color32::WHITE,
+                                )
+                                .with_texture(
+                                    texture.id(),
+                                    super::cover_uv(texture.size_vec2(), rect.size()),
+                                );
+                                painter.add(shape);
+                            }
+                            None => {
+                                painter.circle_filled(rect.center(), SIZE / 2.0, theme::card());
+                            }
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                theme::Role::Caption
+                                    .rich(&member.character)
+                                    .color(theme::text()),
+                            )
+                            .truncate()
+                            .selectable(false),
+                        );
+                        if let Some(actor) = &member.actor {
+                            ui.add(
+                                egui::Label::new(ui::muted(actor))
+                                    .truncate()
+                                    .selectable(false),
+                            );
+                        }
+                        rect
+                    })
+                    .inner
+                });
+                // The whole tile opens the actor's page, names included, not only the portrait.
+                let Some(actor) = &member.actor else { continue };
+                let response = ui
+                    .interact(
+                        tile.response.rect,
+                        ui.id().with(("cast", i)),
+                        egui::Sense::click(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(format!("Everything in the library with {actor}"));
+                if response.hovered() {
+                    ui.painter().circle_stroke(
+                        tile.inner.center(),
+                        SIZE / 2.0,
+                        egui::Stroke::new(2.0, theme::accent()),
+                    );
+                }
+                if response.clicked() {
+                    actions.push(Action::Goto(Page::Browse {
+                        facet: pstr_core::discover::Facet::Person(actor.clone()),
+                        from: Some(key.to_owned()),
+                    }));
+                }
+            }
+        });
+    });
 }
 
 /// A row of covers: every title of the franchise in release order, with
@@ -739,12 +842,28 @@ fn description(ui: &mut egui::Ui, found: &TitleMetadata, key: &str, actions: &mu
             }
         }
     }
-    if let Some(url) = &found.url {
+    let trailer = details
+        .and_then(|details| details.trailer.as_ref())
+        .and_then(|trailer| trailer.url());
+    if found.url.is_some() || trailer.is_some() {
         ui.add_space(theme::space::M);
-        ui.hyperlink_to(
-            ui::muted(format!("More on {}", found.provider.label())),
-            url,
-        );
+        ui.horizontal(|ui| {
+            // In the browser: the app itself never requests the trailer.
+            if let Some(trailer) = &trailer {
+                ui.hyperlink_to(
+                    ui::muted(format!("{}  Trailer", egui_phosphor::regular::FILM_STRIP)),
+                    trailer,
+                )
+                .on_hover_text("Opens in your browser");
+                ui.add_space(theme::space::L);
+            }
+            if let Some(url) = &found.url {
+                ui.hyperlink_to(
+                    ui::muted(format!("More on {}", found.provider.label())),
+                    url,
+                );
+            }
+        });
     }
 }
 

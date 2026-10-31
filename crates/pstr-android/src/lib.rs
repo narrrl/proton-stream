@@ -545,7 +545,7 @@ pub fn airing_countdown(episode: u32, at: i64, now: i64) -> String {
 }
 
 /// What kind of thing a [`BrowseFacet`] names — `Genre`, `Studio`,
-/// `Director` — for over the heading of its page.
+/// `Person` — for over the heading of its page.
 #[uniffi::export]
 pub fn facet_kind(facet: BrowseFacet) -> String {
     facet.core().kind().to_owned()
@@ -706,6 +706,23 @@ pub struct TitleRecord {
     /// `New`, or `3 new` on a show being watched; see `pstr_core::news`.
     #[uniffi(default = None)]
     pub badge: Option<String>,
+    /// The characters, main ones first, with who voices them.
+    #[uniffi(default = [])]
+    pub cast: Vec<CastRecord>,
+    /// The trailer's page, to open in the browser; see
+    /// `pstr_core::metadata::Trailer::url`.
+    #[uniffi(default = None)]
+    pub trailer_url: Option<String>,
+}
+
+/// One character and who voices them: the shared
+/// `pstr_core::metadata::CastMember`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CastRecord {
+    pub character: String,
+    pub character_image: Option<String>,
+    pub actor: Option<String>,
+    pub actor_image: Option<String>,
 }
 
 /// Playback preferences that outlive one file, one title and one launch.
@@ -3893,6 +3910,21 @@ fn title_record(
         next_airing_at: None,
         on_list: false,
         badge: None,
+        cast: details.map_or_else(Vec::new, |details| {
+            details
+                .cast
+                .iter()
+                .map(|member| CastRecord {
+                    character: member.character.clone(),
+                    character_image: member.character_image.clone(),
+                    actor: member.actor.clone(),
+                    actor_image: member.actor_image.clone(),
+                })
+                .collect()
+        }),
+        trailer_url: details
+            .and_then(|details| details.trailer.as_ref())
+            .and_then(|trailer| trailer.url()),
         franchise: Vec::new(),
         logo_url: metadata.and_then(|found| found.logo_url.clone()),
         runtime: details.and_then(|details| details.runtime),

@@ -180,6 +180,11 @@ pub struct TitleDetails {
     /// Minutes: an episode's length for a series, the whole running time for
     /// a film.
     pub runtime: Option<u32>,
+    /// The main characters and then the supporting ones, each with who voices
+    /// them in the original language.
+    pub cast: Vec<CastMember>,
+    /// Where the provider says its trailer is.
+    pub trailer: Option<Trailer>,
     /// Which [`TitleDetails::REVISION`] wrote this. A stored record from an
     /// older one lacks a field a newer build asks for, and is fetched again
     /// by id — see `pstr_meta::service::plan`. Not a reason to blank it in a
@@ -193,12 +198,56 @@ pub struct TitleDetails {
     pub chain: Vec<String>,
 }
 
+/// One character, and who voices them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CastMember {
+    pub character: String,
+    /// The character's portrait.
+    pub character_image: Option<String>,
+    /// `MAIN`, `SUPPORTING` or `BACKGROUND`.
+    pub role: Option<String>,
+    /// The voice actor in the original language.
+    pub actor: Option<String>,
+    pub actor_image: Option<String>,
+}
+
+/// A trailer, as the provider names it: a site and that site's id for it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Trailer {
+    /// `youtube` or `dailymotion`.
+    pub site: String,
+    pub id: String,
+}
+
+impl Trailer {
+    /// The trailer's page, to open in the browser. The app itself never
+    /// requests it. `None` for a site this build does not know.
+    pub fn url(&self) -> Option<String> {
+        let id: String = self
+            .id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            .collect();
+        if id.is_empty() {
+            return None;
+        }
+        match self.site.to_ascii_lowercase().as_str() {
+            "youtube" => Some(format!("https://www.youtube.com/watch?v={id}")),
+            "dailymotion" => Some(format!("https://www.dailymotion.com/video/{id}")),
+            _ => None,
+        }
+    }
+}
+
 impl TitleDetails {
     /// What a provider that fills these in today writes into
     /// [`TitleDetails::revision`]. Raise it with a field that existing
     /// records should be fetched again for. `1` added
-    /// [`TitleDetails::runtime`].
-    pub const REVISION: u32 = 1;
+    /// [`TitleDetails::runtime`], `2` [`TitleDetails::cast`] and
+    /// [`TitleDetails::trailer`].
+    pub const REVISION: u32 = 2;
 
     /// Whether these were written by this build's [`TitleDetails::REVISION`]
     /// or a later one.
@@ -602,6 +651,39 @@ impl Default for MetadataConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trailer_opens_on_its_own_site_and_an_unknown_site_or_odd_id_opens_nothing() {
+        let trailer = |site: &str, id: &str| Trailer {
+            site: site.into(),
+            id: id.into(),
+        };
+        assert_eq!(
+            trailer("youtube", "tR8YH0G67Rk").url().as_deref(),
+            Some("https://www.youtube.com/watch?v=tR8YH0G67Rk")
+        );
+        assert_eq!(
+            trailer("dailymotion", "x7tgad0").url().as_deref(),
+            Some("https://www.dailymotion.com/video/x7tgad0")
+        );
+        assert_eq!(trailer("vimeo", "1").url(), None);
+        // Whatever the provider sent, only an id's own characters reach the
+        // address.
+        assert_eq!(
+            trailer("youtube", "a&b=c").url().as_deref(),
+            Some("https://www.youtube.com/watch?v=abc")
+        );
+        assert_eq!(trailer("youtube", "&?").url(), None);
+    }
+
+    #[test]
+    fn details_stored_before_the_cast_existed_still_read() {
+        let old = r#"{"studios":["MAPPA"],"revision":1}"#;
+        let details: TitleDetails = serde_json::from_str(old).unwrap();
+        assert!(details.cast.is_empty());
+        assert_eq!(details.trailer, None);
+        assert!(!details.is_current(), "fetched again for the cast");
+    }
 
     #[test]
     fn a_status_is_said_for_a_person_and_an_unknown_one_is_not_said_at_all() {
