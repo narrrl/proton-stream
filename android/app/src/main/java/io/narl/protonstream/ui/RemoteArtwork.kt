@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.core.graphics.scale
 import io.narl.protonstream.native.NativeRuntime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -181,7 +182,7 @@ private suspend fun moodOf(key: String, bitmap: Bitmap): Color? {
     moods.get(key)?.let { return Color(it) }
     val argb = withContext(Dispatchers.Default) {
         runCatching {
-            val small = Bitmap.createScaledBitmap(bitmap, MOOD_EDGE, MOOD_EDGE, true)
+            val small = bitmap.scale(MOOD_EDGE, MOOD_EDGE)
             val pixels = IntArray(MOOD_EDGE * MOOD_EDGE)
             small.getPixels(pixels, 0, MOOD_EDGE, 0, 0, MOOD_EDGE, MOOD_EDGE)
             sharedPictureMood(pixels.map(Int::toUInt))?.toInt()

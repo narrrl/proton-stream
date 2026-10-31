@@ -17,7 +17,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.Dp
@@ -861,7 +861,8 @@ private fun FeaturedBanner(
     }
     // Most of a phone's first screen, but never so much of a tablet's that
     // nothing under it shows.
-    val height = (LocalConfiguration.current.screenHeightDp * 0.62f).dp.coerceIn(360.dp, 620.dp)
+    val screenHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+    val height = (screenHeight * 0.62f).coerceIn(360.dp, 620.dp)
     Box(modifier.fillMaxWidth().height(height)) {
         HorizontalPager(pager, Modifier.fillMaxSize(), key = { titles[it].key }) { page ->
             val title = titles[page]
