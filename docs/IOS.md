@@ -94,6 +94,8 @@ Each of these is the platform's doing, not a choice to diverge.
   runs inside a `NavigationStack`, and the title page is shown over the library
   by hand, so it keeps its slide in from the edge — Android's shared poster has
   no counterpart here.
+- **The volume swipe turns the player's own volume**, the one its slider sets.
+  iOS lets no app set the device's media volume, which Android's swipe turns.
 - **Nothing is backed up**, as on Android (`allowBackup="false"`). The share
   secrets are this-device-only Keychain items, so a restored share list would
   arrive without them, and a restored `sync.json` would give two devices one sync

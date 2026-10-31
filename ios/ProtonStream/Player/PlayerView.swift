@@ -15,6 +15,16 @@ private let inlineControlsMinWidth: CGFloat = 560
 /// How far a double tap on either side of the picture seeks.
 private let doubleTapSeconds = 10
 
+/// How much of the file one swipe across the whole width is worth, in seconds.
+private let seekSpanSeconds = 90.0
+
+/// A finger that comes down this close to the top or bottom of the screen is
+/// the system's: Control Centre, the home indicator.
+private let systemEdge: CGFloat = 48
+
+/// How long the unlock button stays up after a tap on a locked player.
+private let unlockShownSeconds = 3.0
+
 /// The rates worth offering. A short list rather than a slider: the useful
 /// rates are a handful of ratios, and a slider lands on 1.07 as often as 1.0.
 private let speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
@@ -37,6 +47,16 @@ struct PlayerView: View {
     /// to have happened; the count makes a second tap on one side show again.
     @State private var nudge: (seconds: Int, count: Int)?
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    /// Locked, the picture takes no touches but one: the button that unlocks
+    /// it, which a tap brings up for a moment.
+    @State private var locked = false
+    @State private var unlockShown = 0
+    /// What a swipe on the picture is doing, while it is under way.
+    @State private var swipe: Swipe?
+    @State private var swipeStart: (axis: SwipeAxis, level: Double, position: Double)?
+    /// The screen's brightness before the first swipe changed it, put back
+    /// when the player goes.
+    @State private var brightnessBefore: CGFloat?
 
     var body: some View {
         GeometryReader { geometry in
@@ -49,8 +69,13 @@ struct PlayerView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
-                    .onTapGesture(count: 2) { location in doubleTap(at: location.x, width: geometry.size.width) }
-                    .onTapGesture { setControls(!showControls) }
+                    .onTapGesture(count: 2) { location in
+                        if !locked { doubleTap(at: location.x, width: geometry.size.width) }
+                    }
+                    .onTapGesture {
+                        if locked { unlockShown += 1 } else { setControls(!showControls) }
+                    }
+                    .gesture(swipeGesture(geometry.size), including: locked ? .none : .all)
                     .accessibilityElement()
                     .accessibilityLabel(showControls ? "Hide controls" : "Show controls")
                     .accessibilityAddTraits(.isButton)
@@ -72,10 +97,28 @@ struct PlayerView: View {
                         }
                 }
 
+                if let swipe {
+                    SwipeBubble(swipe: swipe).allowsHitTesting(false).accessibilityHidden(true)
+                }
+
+                if locked, unlockShown > 0 {
+                    Button("Unlock", systemImage: "lock.open") {
+                        locked = false
+                        unlockShown = 0
+                        setControls(true)
+                    }
+                    .buttonStyle(.tonal)
+                    .transition(.opacity)
+                    .task(id: unlockShown) {
+                        try? await Task.sleep(for: .seconds(unlockShownSeconds))
+                        if !Task.isCancelled { unlockShown = 0 }
+                    }
+                }
+
                 VStack(spacing: 0) {
-                    if showControls { topBar.transition(.opacity) }
+                    if showControls, !locked { topBar.transition(.opacity) }
                     Spacer(minLength: 0)
-                    if showControls {
+                    if showControls, !locked {
                         PlayerControls(
                             host: host,
                             player: player,
@@ -87,7 +130,12 @@ struct PlayerView: View {
                                 landscapeLocked = OrientationLock.toggle()
                             },
                             onSheet: { sheet = $0 },
-                            onInteract: { setControls(true) }
+                            onInteract: { setControls(true) },
+                            onLock: {
+                                locked = true
+                                unlockShown = 1
+                                setControls(false)
+                            }
                         )
                         .transition(.opacity)
                     }
@@ -113,7 +161,7 @@ struct PlayerView: View {
                     }()
                     UpNextCard(
                         next: host.next,
-                        visible: host.autoplay && !host.stay && !player.paused && player.endReason == nil
+                        visible: host.autoplay && !host.stay && !host.stopsAfterThis && !player.paused && player.endReason == nil
                             && host.playingOpenEpisode
                             && (tailLeft != nil || host.chapters.creditsStart.map { player.position >= $0 } == true),
                         secondsLeft: tailLeft.map { Int($0.rounded(.up)) },
@@ -144,7 +192,7 @@ struct PlayerView: View {
                 // Played to the end with nothing starting after it: the last
                 // episode, autoplay off, or the viewer stayed.
                 if host.playingOpenEpisode, player.endReason == .eof,
-                   host.next == nil || !host.autoplay || host.stay {
+                   host.next == nil || !host.autoplay || host.stay || host.stopsAfterThis {
                     EndCard(host: host)
                 }
 
@@ -174,6 +222,10 @@ struct PlayerView: View {
         .statusBarHidden(!showControls)
         .persistentSystemOverlays(.hidden)
         .onAppear { setControls(true) }
+        // Brightness set by a swipe is the player's, not the phone's.
+        .onDisappear {
+            if let brightnessBefore { Screen.brightness = brightnessBefore }
+        }
         .onChange(of: player.paused) { setControls(showControls) }
         // VoiceOver moves between controls by swiping, and a control that
         // fades four seconds after it is reached cannot be found again.
@@ -192,6 +244,8 @@ struct PlayerView: View {
             case .chapters: ChapterSheet(chapters: host.chapters.entries, position: player.position) { host.seek(to: $0.start) }
             case let .tracks(type):
                 TrackSheet(type: type, tracks: player.tracks.filter { $0.type == type }) { host.select(type: type, track: $0) }
+            case .sleep:
+                SleepSheet(current: host.sleep, media: host.key, onSelect: host.setSleep)
             }
         }
     }
@@ -246,6 +300,54 @@ struct PlayerView: View {
         }
     }
 
+    /// The swipes every phone video player has taught: up and down on the
+    /// left for brightness, on the right for volume, and sideways to seek —
+    /// shown while the finger is down and only seeking when it lifts. Volume
+    /// is the player's own: iOS lets no app set the device's.
+    private func swipeGesture(_ size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 16)
+            .onChanged { drag in
+                if swipeStart == nil {
+                    let start = drag.startLocation
+                    guard start.y > systemEdge, start.y < size.height - systemEdge else { return }
+                    let axis: SwipeAxis = abs(drag.translation.width) > abs(drag.translation.height)
+                        ? .seek : start.x < size.width / 2 ? .brightness : .volume
+                    let level: Double = switch axis {
+                    case .brightness: Double(Screen.brightness)
+                    case .volume: player.volume / 100
+                    case .seek: 0
+                    }
+                    if axis == .brightness, brightnessBefore == nil { brightnessBefore = Screen.brightness }
+                    swipeStart = (axis, level, player.position)
+                }
+                guard let start = swipeStart else { return }
+                switch start.axis {
+                // A swipe the whole height of the screen goes from none to all.
+                case .brightness:
+                    let level = min(max(start.level - drag.translation.height / size.height, 0.01), 1)
+                    Screen.brightness = CGFloat(level)
+                    swipe = .brightness(level)
+                case .volume:
+                    let level = min(max(start.level - drag.translation.height / size.height, 0), 1)
+                    player.setVolume(level * 100)
+                    swipe = .volume(level)
+                case .seek:
+                    guard player.duration > 0 else { return }
+                    let target = min(max(start.position + drag.translation.width / size.width * seekSpanSeconds, 0), player.duration)
+                    swipe = .seek(from: start.position, to: target)
+                }
+            }
+            .onEnded { _ in
+                if case let .seek(from, to) = swipe, to != from {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    host.seek(to: to)
+                }
+                if case let .volume(level) = swipe { host.rememberVolume(volume: level * 100) }
+                swipe = nil
+                swipeStart = nil
+            }
+    }
+
     private func doubleTap(at x: CGFloat, width: CGFloat) {
         let third = width / 3
         let seconds = x < third ? -doubleTapSeconds : x > width - third ? doubleTapSeconds : 0
@@ -261,7 +363,7 @@ struct PlayerView: View {
 }
 
 enum PlayerSheet: Identifiable {
-    case speed, episodes, chapters
+    case speed, episodes, chapters, sleep
     case tracks(String)
 
     var id: String {
@@ -269,8 +371,63 @@ enum PlayerSheet: Identifiable {
         case .speed: "speed"
         case .episodes: "episodes"
         case .chapters: "chapters"
+        case .sleep: "sleep"
         case let .tracks(type): "tracks-\(type)"
         }
+    }
+}
+
+/// Which way a swipe went, settled by its first movement.
+private enum SwipeAxis { case brightness, volume, seek }
+
+/// What a swipe on the picture is doing, for the bubble that says so.
+private enum Swipe {
+    /// From 0 to 1.
+    case brightness(Double)
+    case volume(Double)
+    /// Where the playhead will land when the finger lifts, and where it was.
+    case seek(from: Double, to: Double)
+}
+
+/// The screen the player is on, for its brightness.
+@MainActor
+private enum Screen {
+    static var brightness: CGFloat {
+        get { scene?.screen.brightness ?? 0.5 }
+        set { scene?.screen.brightness = newValue }
+    }
+
+    private static var scene: UIWindowScene? {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+    }
+}
+
+/// The bubble in the middle of the picture while a swipe is under way.
+private struct SwipeBubble: View {
+    let swipe: Swipe
+    @Environment(\.scheme) private var scheme
+
+    var body: some View {
+        VStack(spacing: 8) {
+            switch swipe {
+            case let .brightness(value): level(icon: "sun.max.fill", label: "Brightness", value: value)
+            case let .volume(value): level(icon: "speaker.wave.2.fill", label: "Volume", value: value)
+            case let .seek(from, to):
+                Image(systemName: to < from ? "backward.fill" : "forward.fill").font(.system(size: 28))
+                Text((to < from ? "−" : "+") + clock(abs(to - from))).textStyle(.titleMedium)
+                Text(clock(to)).textStyle(.labelMedium).opacity(0.7)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    @ViewBuilder private func level(icon: String, label: String, value: Double) -> some View {
+        Image(systemName: icon).font(.system(size: 28))
+        Text("\(label) \(Int((value * 100).rounded()))%").textStyle(.labelLarge)
+        ProgressView(value: value).tint(scheme.primary).frame(width: 120)
     }
 }
 
@@ -286,6 +443,7 @@ private struct PlayerControls: View {
     let onRotate: () -> Void
     let onSheet: (PlayerSheet) -> Void
     let onInteract: () -> Void
+    let onLock: () -> Void
     @Environment(\.scheme) private var scheme
     // Where the thumb is while a finger is on it: a seek per drag step is a
     // block fetch per drag step, and the thumb would snap back under the
@@ -352,6 +510,8 @@ private struct PlayerControls: View {
                             systemImage: landscapeLocked ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                             action: onRotate
                         )
+                        Button(SleepTimer.label(host.sleep), systemImage: "moon.zzz") { onSheet(.sleep) }
+                        Button("Lock touch", systemImage: "lock", action: onLock)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                             .font(.system(size: 20))
@@ -413,6 +573,8 @@ private struct PlayerControls: View {
             landscapeLocked ? "Unlock rotation" : "Lock to landscape",
             action: onRotate
         )
+        CompactIcon("moon.zzz", SleepTimer.label(host.sleep)) { onSheet(.sleep) }
+        CompactIcon("lock", "Lock touch", action: onLock)
     }
 }
 
@@ -547,6 +709,43 @@ private struct EndCard: View {
         .frame(maxWidth: 360)
         .background(scheme.surfaceContainerHighest, in: RoundedRectangle(cornerRadius: Corner.standard))
         .padding(32)
+    }
+}
+
+/// Off, the end of this episode, or a number of minutes.
+private struct SleepSheet: View {
+    let current: SleepTimer?
+    /// The open episode, which "End of this episode" is about.
+    let media: String?
+    let onSelect: (SleepTimer?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        DialogSheet("Sleep timer") {
+            if case .at = current {
+                Text(SleepTimer.label(current).replacingOccurrences(of: "Sleep timer: ", with: "") + " left")
+                    .textStyle(.bodyMedium)
+            }
+            choice("Off", chosen: current == nil) { nil }
+            if let media {
+                choice("End of this episode", chosen: current == .endOf(media)) { .endOf(media) }
+            }
+            ForEach([30, 60], id: \.self) { minutes in
+                choice("\(minutes) minutes", chosen: false) { .at(.now.addingTimeInterval(Double(minutes) * 60)) }
+            }
+        } buttons: {
+            Button("Close") { dismiss() }.buttonStyle(.tonal)
+        }
+    }
+
+    private func choice(_ label: String, chosen: Bool, timer: @escaping () -> SleepTimer?) -> some View {
+        Button {
+            onSelect(timer())
+            dismiss()
+        } label: {
+            Text((chosen ? "✓  " : "") + label).frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.edgedWide)
     }
 }
 

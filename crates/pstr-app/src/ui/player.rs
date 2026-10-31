@@ -89,7 +89,21 @@ pub enum PlayerPanel {
     Tracks,
     Speed,
     Chapters,
+    Sleep,
 }
+
+/// A sleep timer, as chosen or as it stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SleepChoice {
+    /// Stop at the end of the episode playing, rather than go on to the next.
+    EndOfEpisode,
+    /// Pause after this many minutes. As it stands, the minutes left, rounded
+    /// up.
+    Minutes(u32),
+}
+
+/// The timers on offer, besides the end of the episode.
+const SLEEP_MINUTES: [u32; 2] = [30, 60];
 
 impl PlayerPanel {
     fn heading(self) -> &'static str {
@@ -98,6 +112,7 @@ impl PlayerPanel {
             Self::Tracks => "Audio and subtitles",
             Self::Speed => "Playback speed",
             Self::Chapters => "Chapters",
+            Self::Sleep => "Sleep timer",
         }
     }
 }
@@ -107,6 +122,7 @@ impl PlayerPanel {
 struct Panels {
     episodes: bool,
     open: Option<PlayerPanel>,
+    sleep: Option<SleepChoice>,
 }
 
 /// What the pause screen says about what is playing.
@@ -172,6 +188,8 @@ pub struct Chrome<'a> {
     pub panel: Option<PlayerPanel>,
     /// What the pause screen shows, while the picture is paused.
     pub about: Option<About>,
+    /// The sleep timer, when one is running.
+    pub sleep: Option<SleepChoice>,
 }
 
 /// The playing title's episodes, for the list beside the picture.
@@ -293,6 +311,7 @@ pub fn show(
         mut episodes,
         panel,
         about,
+        sleep,
     } = chrome_state;
     let ctx = ui.ctx().clone();
     let rect = ui.available_rect_before_wrap();
@@ -383,6 +402,7 @@ pub fn show(
                     Panels {
                         episodes: episodes.is_some(),
                         open: panel,
+                        sleep,
                     },
                     rect,
                     overlay.chrome_height,
@@ -403,6 +423,7 @@ pub fn show(
                 (PlayerPanel::Tracks, _) => track_list(ui, playback, actions),
                 (PlayerPanel::Speed, _) => speed_list(ui, playback, actions),
                 (PlayerPanel::Chapters, _) => chapter_list(ui, playback, actions),
+                (PlayerPanel::Sleep, _) => sleep_list(ui, sleep, actions),
                 (PlayerPanel::Episodes, None) => {}
             },
         );
@@ -902,7 +923,7 @@ fn chrome(
                 .max_rect(content)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
             |ui| {
-                ui::transport::full(ui, playback, neighbours, panels.open, actions);
+                ui::transport::full(ui, playback, neighbours, panels.open, panels.sleep, actions);
                 ui.min_rect().height()
             },
         )
@@ -1108,6 +1129,30 @@ fn speed_list(ui: &mut egui::Ui, playback: &Playback, actions: &mut Vec<Action>)
         };
         if option_row(ui, (playback.speed - speed).abs() < 1e-6, &label, None).clicked() {
             actions.push(Action::SetSpeed(speed));
+        }
+    }
+}
+
+/// The sleep timers, and what the running one has left.
+fn sleep_list(ui: &mut egui::Ui, sleep: Option<SleepChoice>, actions: &mut Vec<Action>) {
+    if let Some(SleepChoice::Minutes(left)) = sleep {
+        ui.label(
+            theme::Role::Label
+                .rich(format!("Pausing in {left} min"))
+                .color(theme::muted()),
+        );
+        ui.add_space(theme::space::S);
+    }
+    if option_row(ui, sleep.is_none(), "Off", None).clicked() {
+        actions.push(Action::SetSleep(None));
+    }
+    let end = sleep == Some(SleepChoice::EndOfEpisode);
+    if option_row(ui, end, "End of this episode", None).clicked() {
+        actions.push(Action::SetSleep(Some(SleepChoice::EndOfEpisode)));
+    }
+    for minutes in SLEEP_MINUTES {
+        if option_row(ui, false, &format!("{minutes} minutes"), None).clicked() {
+            actions.push(Action::SetSleep(Some(SleepChoice::Minutes(minutes))));
         }
     }
 }

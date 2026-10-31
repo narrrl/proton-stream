@@ -31,8 +31,15 @@ your Drive**. See [Account and sync](ACCOUNT_AND_SYNC.md).
 - Tap to show or hide the controls.
 - **Double-tap** the left or right third of the screen to go back or forward 10 seconds. Double-tap
   the middle to pause.
-- The menu has **Episodes**, **Chapters**, **Playback speed**, the audio and subtitle tracks, and
-  **Lock to landscape**.
+- **Swipe** up and down on the left half for brightness and on the right half for volume. Swipe
+  sideways to seek: the bubble shows where you will land, and the seek happens when you let go.
+  Swipes that start at the very top or bottom of the screen are left to the system.
+- The menu has **Episodes**, **Chapters**, **Playback speed**, the audio and subtitle tracks,
+  **Lock to landscape**, **Sleep timer** and **Lock touch**.
+- **Sleep timer** pauses after 30 or 60 minutes, or stops at the end of this episode instead of
+  going on to the next. It keeps running with the screen off.
+- **Lock touch** makes the picture ignore touches, for a phone in a pocket or a child's hands. Tap
+  to bring up **Unlock**.
 - **Skip opening** and **Skip ending** work as on the desktop, AniSkip included: see
   [The player](USER_GUIDE.md#the-player).
 - Sound keeps playing with the screen off or the app in the background, with controls on the lock

@@ -18,7 +18,7 @@ use crate::app::{Action, Adjacent, Page};
 use crate::playback::{Command, Playback};
 use crate::theme;
 use crate::ui;
-use crate::ui::player::PlayerPanel;
+use crate::ui::player::{PlayerPanel, SleepChoice};
 use crate::ui::widgets::Named;
 
 /// Height of the clickable seek bar. Comfortably larger than the few pixels it
@@ -59,6 +59,7 @@ pub fn full(
     playback: &Playback,
     neighbours: Neighbours,
     panel: Option<PlayerPanel>,
+    sleep: Option<SleepChoice>,
     actions: &mut Vec<Action>,
 ) {
     seek_bar(ui, playback, actions, 6.0);
@@ -108,7 +109,7 @@ pub fn full(
         // opens its panel down the right of the picture rather than a menu
         // under the pointer: a list of twelve chapters is read, not aimed at.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            panel_buttons(ui, playback, panel, actions);
+            panel_buttons(ui, playback, panel, sleep, actions);
             ui.add_space(theme::space::M);
             volume(ui, playback, actions);
         });
@@ -551,12 +552,13 @@ fn track_options(ui: &mut egui::Ui, tracks: &[&Track], kind: TrackKind, actions:
 }
 
 /// The buttons that open the player's panels, right to left: tracks, speed,
-/// chapters. Each shows only when there is a choice to make, and says what is
-/// chosen when that is worth noticing at a glance.
+/// chapters, sleep. Each shows only when there is a choice to make, and says
+/// what is chosen when that is worth noticing at a glance.
 fn panel_buttons(
     ui: &mut egui::Ui,
     playback: &Playback,
     open: Option<PlayerPanel>,
+    sleep: Option<SleepChoice>,
     actions: &mut Vec<Action>,
 ) {
     let mut button = |ui: &mut egui::Ui, panel: PlayerPanel, text: String, hint: &str| {
@@ -609,6 +611,13 @@ fn panel_buttons(
             "Chapters",
         );
     }
+    let moon = egui_phosphor::regular::MOON;
+    let sleep = match sleep {
+        None => moon.to_owned(),
+        Some(SleepChoice::EndOfEpisode) => format!("{moon}  End"),
+        Some(SleepChoice::Minutes(left)) => format!("{moon}  {left} min"),
+    };
+    button(ui, PlayerPanel::Sleep, sleep, "Sleep timer");
 }
 
 /// A track in as few words as fit on a button: what distinguishes it from the

@@ -105,6 +105,10 @@ final class PlayerHost {
     private(set) var autoplay = true
     /// The rate playing, so the speed list opens on it.
     var speed = 1.0
+    /// The sleep timer, when one is running. Here rather than on the view,
+    /// because the episode it is about plays on with the screen off.
+    private(set) var sleep: SleepTimer?
+    @ObservationIgnored private var sleepTask: Task<Void, Never>?
 
     /// Persist where an episode was left: position, duration, watched.
     @ObservationIgnored var onSaveProgress: ((EpisodeRecord, Double, Double, Bool) -> Void)?
@@ -377,11 +381,32 @@ final class PlayerHost {
 
     // MARK: - Reacting to the player
 
+    /// Start a sleep timer, replacing any running one, or turn it off.
+    func setSleep(_ timer: SleepTimer?) {
+        sleepTask?.cancel()
+        sleep = timer
+        guard case let .at(when) = timer else { return }
+        sleepTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(when.timeIntervalSinceNow, 0)))
+            guard !Task.isCancelled, let self else { return }
+            self.sleep = nil
+            self.setPaused(true)
+        }
+    }
+
+    /// Whether the sleep timer stops this episode at its end.
+    var stopsAfterThis: Bool {
+        if case let .endOf(media) = sleep { media == key } else { false }
+    }
+
     private func ended(_ reason: EndReason, _ media: String) {
         guard media == key else { return }
         save()
         // Autoplay fires on a clean end of file only — never on a failure.
-        if reason == .eof, autoplay, !stay, next != nil {
+        // The sleep timer set for the end of this episode stops it there.
+        if reason == .eof, stopsAfterThis {
+            setSleep(nil)
+        } else if reason == .eof, autoplay, !stay, next != nil {
             advance()
         } else if reason == .failed {
             playbackError = player?.problem ?? "This episode could not be played."
@@ -390,6 +415,9 @@ final class PlayerHost {
     }
 
     private func tick() {
+        // A timer for the end of an episode the viewer has since moved on
+        // from was about that episode.
+        if case let .endOf(media) = sleep, media != key { setSleep(nil) }
         guard let player, playingOpenEpisode else { return }
         replanChapters(player)
         // A stall that does not clear is a dropped connection far more often
@@ -699,6 +727,23 @@ final class PlayerHost {
                 guard let self, self.isOpen else { return }
                 self.setPaused(true)
             }
+        }
+    }
+}
+
+/// A sleep timer that is running.
+enum SleepTimer: Equatable {
+    /// Stop when this episode ends, rather than going on to the next.
+    case endOf(String)
+    /// Pause at this moment.
+    case at(Date)
+
+    /// What its button says: whether one is running, and how long it has.
+    static func label(_ timer: SleepTimer?) -> String {
+        switch timer {
+        case nil: "Sleep timer"
+        case .endOf: "Sleep timer: end of episode"
+        case let .at(when): "Sleep timer: \(Int(max(when.timeIntervalSinceNow, 0) / 60) + 1) min"
         }
     }
 }

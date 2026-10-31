@@ -2,6 +2,7 @@ package io.narl.protonstream.playback
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.os.SystemClock
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
@@ -35,7 +36,10 @@ import androidx.compose.material.icons.automirrored.filled.Toc
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Fullscreen
@@ -144,6 +148,9 @@ private const val DOUBLE_TAP_SECONDS = 10
 
 /** How long the double-tap seek mark stays up. */
 private const val NUDGE_MS = 700L
+
+/** How long the unlock button stays up after a tap on a locked player. */
+private const val UNLOCK_SHOWN_MS = 3_000L
 
 /** How close to the end the next episode's opening blocks are fetched. */
 private const val WARM_NEXT_SECONDS = 120.0
@@ -371,8 +378,22 @@ fun PlayerScreen(
     // own reading — never on a failure, and never on the outgoing file's.
     // Cancelled from the end-of-file card: the viewer chose to stay.
     var stay by remember(key) { mutableStateOf(false) }
+    // The sleep timer set for the end of this episode stops it there instead.
+    val sleep by nativeHost.sleep.collectAsState()
+    val stopsAfterThis = (sleep as? SleepTimer.EndOf)?.media == key
     LaunchedEffect(state.endReason, state.media) {
-        if (state.endReason == EndReason.Eof && state.media == key && autoplay && !stay && next != null) advance()
+        if (state.endReason != EndReason.Eof || state.media != key) return@LaunchedEffect
+        if (stopsAfterThis) {
+            nativeHost.setSleepTimer(null)
+        } else if (autoplay && !stay && next != null) {
+            advance()
+        }
+    }
+    // A timer for the end of an episode the viewer has since moved on from
+    // was about that episode.
+    LaunchedEffect(key) {
+        val timer = nativeHost.sleep.value
+        if (timer is SleepTimer.EndOf && timer.media != key) nativeHost.setSleepTimer(null)
     }
     // A file mpv could not play ends like any other. Saying so is the whole
     // difference between a broken episode and an app that silently skipped one.
@@ -472,6 +493,21 @@ fun PlayerScreen(
         }
     }
     val current by rememberUpdatedState(state)
+    // Locked, the picture takes no touches but one: the button that unlocks
+    // it, which a tap brings up for a moment. For a phone in a pocket, or in
+    // a child's hands.
+    var locked by remember { mutableStateOf(false) }
+    var unlockShown by remember { mutableIntStateOf(0) }
+    LaunchedEffect(unlockShown) {
+        if (unlockShown > 0) {
+            delay(UNLOCK_SHOWN_MS)
+            unlockShown = 0
+        }
+    }
+    BackHandler(enabled = locked && !minimized) { unlockShown++ }
+    var swipe by remember { mutableStateOf<Swipe?>(null) }
+    // Brightness set by a swipe is the player's, not the app's.
+    DisposableEffect(activity) { onDispose { activity?.releaseBrightness() } }
     // Where a remote's keys land while the controls are down. Once they are
     // up, the D-pad moves between their buttons as it does anywhere else.
     val keys = remember { FocusRequester() }
@@ -515,7 +551,22 @@ fun PlayerScreen(
             // Double-tap a side to seek ten seconds, as every phone video
             // player has taught; the middle plays or pauses. A single tap
             // waits out the double-tap timeout, which is the price of both.
-            .pointerInput(host) {
+            .playerSwipes(
+                enabled = !locked,
+                activity = activity,
+                position = { current.position },
+                duration = { current.duration },
+                onSwipe = { swipe = it },
+                onSeek = { target ->
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    host.seek(target)
+                },
+            )
+            .pointerInput(host, locked) {
+                if (locked) {
+                    detectTapGestures(onTap = { unlockShown++ })
+                    return@pointerInput
+                }
                 detectTapGestures(
                     onTap = { showControls = !showControls },
                     onDoubleTap = { offset ->
@@ -559,7 +610,7 @@ fun PlayerScreen(
         )
 
         AnimatedVisibility(
-            visible = showControls,
+            visible = showControls && !locked,
             modifier = Modifier.align(Alignment.TopStart),
             enter = fadeIn(),
             exit = fadeOut(),
@@ -622,7 +673,7 @@ fun PlayerScreen(
         }
 
         AnimatedVisibility(
-            visible = showControls,
+            visible = showControls && !locked,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = fadeIn(),
             exit = fadeOut(),
@@ -645,7 +696,32 @@ fun PlayerScreen(
                     landscapeLocked = activity?.toggleLandscape() ?: false
                 },
                 landscapeLocked = landscapeLocked,
+                media = key,
+                sleep = sleep,
+                onLock = {
+                    locked = true
+                    showControls = false
+                    unlockShown++
+                },
             )
+        }
+
+        swipe?.let { SwipeBubble(it, ::formatTime, Modifier.align(Alignment.Center)) }
+
+        AnimatedVisibility(
+            visible = locked && unlockShown > 0,
+            modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            TonalButton(onClick = {
+                locked = false
+                unlockShown = 0
+                showControls = true
+            }) {
+                Icon(Icons.Default.LockOpen, contentDescription = null)
+                Text("Unlock", modifier = Modifier.padding(start = 8.dp))
+            }
         }
 
         // Drawn whether or not the rest of the controls are up: an opening lasts
@@ -684,7 +760,7 @@ fun PlayerScreen(
         }
         UpNextCard(
             next = next,
-            visible = autoplay && !stay && !state.paused && !state.ended && playingThis &&
+            visible = autoplay && !stay && !stopsAfterThis && !state.paused && !state.ended && playingThis &&
                 (tailLeft != null || chapters.creditsStart?.let { state.position >= it } == true),
             secondsLeft = tailLeft?.let { ceil(it).toInt() },
             onPlayNow = { advance() },
@@ -697,7 +773,7 @@ fun PlayerScreen(
 
         // Played to the end with nothing starting after it: the last episode,
         // autoplay off, or the viewer stayed. A black screen said none of that.
-        if (playingThis && state.endReason == EndReason.Eof && (next == null || !autoplay || stay)) {
+        if (playingThis && state.endReason == EndReason.Eof && (next == null || !autoplay || stay || stopsAfterThis)) {
             EndCard(
                 finished = episode.label,
                 show = title.displayName,
@@ -871,8 +947,12 @@ private fun PlayerControls(
     onEpisode: (Int) -> Unit,
     onRotate: () -> Unit,
     landscapeLocked: Boolean,
+    media: String,
+    sleep: SleepTimer?,
+    onLock: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    var showSleep by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf<String?>(null) }
     var showEpisodes by remember { mutableStateOf(false) }
     var showChapters by remember { mutableStateOf(false) }
@@ -980,6 +1060,8 @@ private fun PlayerControls(
                                         onRotate,
                                     ),
                                 )
+                                add(Triple(Icons.Default.Bedtime, sleepLabel(sleep)) { showSleep = true })
+                                add(Triple(Icons.Default.Lock, "Lock touch", onLock))
                             }
                             entries.forEach { (icon, label, action) ->
                                 DropdownMenuItem(
@@ -1028,11 +1110,29 @@ private fun PlayerControls(
                         if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
                         onClick = onRotate,
                     )
+                    CompactIcon(Icons.Default.Bedtime, sleepLabel(sleep)) { showSleep = true }
+                    CompactIcon(Icons.Default.Lock, "Lock touch", onClick = onLock)
                 }
             }
         }
     }
 
+    if (showSleep) {
+        SleepChooser(
+            current = sleep,
+            onDismiss = { showSleep = false },
+            onSelect = { minutes ->
+                showSleep = false
+                host.setSleepTimer(
+                    when (minutes) {
+                        null -> null
+                        0 -> SleepTimer.EndOf(media)
+                        else -> SleepTimer.At(SystemClock.elapsedRealtime() + minutes * 60_000L)
+                    },
+                )
+            },
+        )
+    }
     if (showSpeeds) {
         SpeedChooser(
             current = speed,
@@ -1149,6 +1249,59 @@ private fun SpeedChooser(current: Double, onDismiss: () -> Unit, onSelect: (Doub
                             (if (kotlin.math.abs(rate - current) < 0.001) "✓  " else "") +
                                 if (rate == 1.0) "Normal" else "${rate}×",
                         )
+                    }
+                }
+            }
+        },
+        confirmButton = { AccentButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/** What the sleep timer button says: whether one is running, and how long it has. */
+private fun sleepLabel(sleep: SleepTimer?): String = when (sleep) {
+    null -> "Sleep timer"
+    is SleepTimer.EndOf -> "Sleep timer: end of episode"
+    is SleepTimer.At -> {
+        val left = ((sleep.at - SystemClock.elapsedRealtime()) / 60_000L + 1).coerceAtLeast(1)
+        "Sleep timer: $left min"
+    }
+}
+
+/**
+ * Off, the end of this episode, or a number of minutes. [onSelect] gets
+ * `null` for off, `0` for the end of the episode, and the minutes otherwise.
+ */
+@Composable
+private fun SleepChooser(current: SleepTimer?, onDismiss: () -> Unit, onSelect: (Int?) -> Unit) {
+    val choices = listOf<Pair<Int?, String>>(
+        null to "Off",
+        0 to "End of this episode",
+        30 to "30 minutes",
+        60 to "60 minutes",
+    )
+    val chosen: Int? = when (current) {
+        null -> null
+        is SleepTimer.EndOf -> 0
+        is SleepTimer.At -> -1
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Sleep timer") },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                if (current is SleepTimer.At) {
+                    Text(
+                        sleepLabel(current).removePrefix("Sleep timer: ") + " left",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                choices.forEach { (minutes, label) ->
+                    EdgedButton(
+                        onClick = { onSelect(minutes) },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    ) {
+                        Text((if (minutes == chosen) "✓  " else "") + label)
                     }
                 }
             }

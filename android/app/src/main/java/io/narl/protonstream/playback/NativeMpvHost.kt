@@ -1,5 +1,6 @@
 package io.narl.protonstream.playback
 
+import android.os.SystemClock
 import android.view.Surface
 import io.narl.protonstream.ui.ThumbnailSource
 import kotlinx.coroutines.CoroutineScope
@@ -105,6 +106,15 @@ data class NowPlaying(
     val hasNext: Boolean,
 )
 
+/** A sleep timer that is running. */
+sealed interface SleepTimer {
+    /** Stop when [media] ends, rather than going on to the next episode. */
+    data class EndOf(val media: String) : SleepTimer
+
+    /** Pause at [at], on the [SystemClock.elapsedRealtime] clock. */
+    data class At(val at: Long) : SleepTimer
+}
+
 data class MpvTrack(
     val id: Long,
     val type: String,
@@ -131,6 +141,8 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
     private val mutableNowPlaying = MutableStateFlow<NowPlaying?>(null)
     private val mutableAdvancing = MutableStateFlow(false)
     private val mutableProblem = MutableStateFlow<String?>(null)
+    private val mutableSleep = MutableStateFlow<SleepTimer?>(null)
+    private var sleepJob: Job? = null
     private var poller: Job? = null
     /** The episode key and load generation the native player currently holds. */
     @Volatile private var currentMedia: String? = null
@@ -177,6 +189,25 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
      * returned successfully by the time they happen.
      */
     val problem: StateFlow<String?> = mutableProblem.asStateFlow()
+
+    /**
+     * The sleep timer. Kept here rather than on the screen, because the
+     * episode it is about keeps playing with the screen off.
+     */
+    val sleep: StateFlow<SleepTimer?> = mutableSleep.asStateFlow()
+
+    /** Start a sleep timer, replacing any running one, or turn it off. */
+    fun setSleepTimer(timer: SleepTimer?) {
+        sleepJob?.cancel()
+        mutableSleep.value = timer
+        if (timer is SleepTimer.At) {
+            sleepJob = scope.launch {
+                delay((timer.at - SystemClock.elapsedRealtime()).coerceAtLeast(0))
+                mutableSleep.value = null
+                setPaused(true)
+            }
+        }
+    }
 
     /** Dismiss the current [problem]. */
     fun clearProblem() { mutableProblem.value = null }

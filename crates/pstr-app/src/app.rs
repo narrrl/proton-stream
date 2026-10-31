@@ -283,6 +283,8 @@ pub enum Action {
     },
     /// Open or close one of the panels beside the picture.
     TogglePanel(ui::player::PlayerPanel),
+    /// Pause when this runs out, or turn the timer off.
+    SetSleep(Option<ui::player::SleepChoice>),
     /// Put watch states back as they were — what Undo does.
     RestoreWatch(Vec<(String, String, pstr_core::catalog::WatchState)>),
     ClearStreamCache,
@@ -735,6 +737,8 @@ pub struct App {
     subtitle_style_unsaved: bool,
     /// Which panel is out beside the picture on the player page.
     pub player_panel: Option<ui::player::PlayerPanel>,
+    /// The sleep timer, when one is set.
+    sleep: Option<Sleep>,
     /// Set while the window is fullscreen, so `F` can toggle rather than only
     /// ever entering. egui has no way to ask the platform.
     pub fullscreen: bool,
@@ -845,6 +849,7 @@ impl App {
             subtitle_style_unsaved: false,
             fullscreen: false,
             player_panel: None,
+            sleep: None,
             opening: None,
             connecting: true,
             crawling: false,
@@ -1376,7 +1381,7 @@ impl App {
         actions: &mut Vec<Action>,
     ) -> Option<UpNextCard> {
         let has_next = self.neighbours().next;
-        let autoplay = self.engine.playback_prefs().autoplay_next;
+        let autoplay = self.engine.playback_prefs().autoplay_next && !self.stops_after_this();
         let next = self.adjacent(Adjacent::Next);
 
         let Some(playback) = &self.playback else {
@@ -1460,6 +1465,34 @@ impl App {
             still,
             tail,
         })
+    }
+
+    /// Whether the sleep timer is set to stop at the end of what is playing.
+    fn stops_after_this(&self) -> bool {
+        matches!(
+            (self.sleep, &self.playback),
+            (Some(Sleep::EndOfEpisode(id)), Some(playback)) if playback.id == id
+        )
+    }
+
+    /// Pause once the sleep timer runs out. A timer for the end of an episode
+    /// that is no longer playing — the viewer moved on to another — is
+    /// dropped: it was about that episode.
+    fn tick_sleep(&mut self, ctx: &egui::Context) {
+        match (self.sleep, &self.playback) {
+            (Some(Sleep::At(at)), Some(playback)) if std::time::Instant::now() >= at => {
+                if !playback.paused {
+                    playback.send(crate::playback::Command::TogglePause);
+                }
+                self.sleep = None;
+                self.note(ctx, "Sleep timer: paused", false);
+            }
+            (Some(Sleep::EndOfEpisode(id)), Some(playback)) if playback.id != id => {
+                self.sleep = None;
+            }
+            (Some(_), None) => self.sleep = None,
+            _ => {}
+        }
     }
 
     /// Once a file has loaded with no chapters naming its opening or ending,
@@ -1555,6 +1588,11 @@ impl App {
     /// end too, and auto-advancing through a broken share one episode at a
     /// time is how a player earns being turned off.
     fn autoplay_next(&mut self, ctx: &egui::Context) {
+        if self.stops_after_this() {
+            // The timer has done its job.
+            self.sleep = None;
+            return;
+        }
         if !self.engine.playback_prefs().autoplay_next {
             return;
         }
@@ -2078,6 +2116,29 @@ impl App {
             Action::RemoveFromHistory { share_id, link_id } => {
                 self.forget_watch(ctx, share_id, link_id, "history");
             }
+            Action::SetSleep(choice) => {
+                self.sleep = match choice {
+                    None => None,
+                    Some(ui::player::SleepChoice::EndOfEpisode) => self
+                        .playback
+                        .as_ref()
+                        .map(|playback| Sleep::EndOfEpisode(playback.id)),
+                    Some(ui::player::SleepChoice::Minutes(minutes)) => Some(Sleep::At(
+                        std::time::Instant::now()
+                            + std::time::Duration::from_secs(u64::from(minutes) * 60),
+                    )),
+                };
+                let text = match choice {
+                    None => "Sleep timer off".to_owned(),
+                    Some(ui::player::SleepChoice::EndOfEpisode) => {
+                        "Stopping after this episode".to_owned()
+                    }
+                    Some(ui::player::SleepChoice::Minutes(minutes)) => {
+                        format!("Pausing in {minutes} min")
+                    }
+                };
+                self.flash(ctx, egui_phosphor::regular::MOON, text);
+            }
             Action::TogglePanel(panel) => {
                 self.player_panel = (self.player_panel != Some(panel)).then_some(panel);
             }
@@ -2345,6 +2406,7 @@ impl eframe::App for App {
         }
         self.warm_next();
         self.ask_skip_times();
+        self.tick_sleep(ctx);
         self.auto_skip(ctx);
         self.save_subtitle_style(ctx);
         self.window.observe(ctx);
@@ -2404,6 +2466,7 @@ impl eframe::App for App {
                 metadata,
                 episodes,
                 player_panel,
+                sleep,
                 ..
             } = self;
             // Before the list borrows the art caches for the rest of the frame.
@@ -2498,6 +2561,7 @@ impl eframe::App for App {
                             episodes: list,
                             panel: *player_panel,
                             about,
+                            sleep: sleep.map(Sleep::choice),
                         },
                         &mut actions,
                     );
@@ -3163,6 +3227,30 @@ struct PlayerKeys {
     speed: f64,
     /// Where the skip button would go, while there is one.
     skip_to: Option<f64>,
+}
+
+/// A sleep timer that is running.
+#[derive(Debug, Clone, Copy)]
+enum Sleep {
+    /// Stop when player `id`'s file ends, rather than going on to the next.
+    EndOfEpisode(u64),
+    /// Pause at this moment.
+    At(std::time::Instant),
+}
+
+impl Sleep {
+    /// What the panel shows as chosen.
+    fn choice(self) -> ui::player::SleepChoice {
+        match self {
+            Self::EndOfEpisode(_) => ui::player::SleepChoice::EndOfEpisode,
+            Self::At(at) => ui::player::SleepChoice::Minutes(
+                (at.saturating_duration_since(std::time::Instant::now())
+                    .as_secs()
+                    / 60) as u32
+                    + 1,
+            ),
+        }
+    }
 }
 
 /// The speeds `[` and `]` step through. Fixed steps rather than a nudge of a
