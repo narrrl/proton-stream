@@ -39,7 +39,6 @@
 
         <activity
             android:name=".MainActivity"
-            android:label="@string/app_name"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|uiMode|density|fontScale|locale|layoutDirection|keyboardHidden"
             android:exported="true"
             android:launchMode="singleTask"
