@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.1"
+version = "2.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/narrrl/proton-stream"
@@ -28,8 +28,8 @@ authors = ["Nils Pukropp <contact@narl.io>"]
 opt-level = 2
 
 [workspace.dependencies]
-proton-sdk = { version = "0.9.0" }
-proton-drive-rs = { version = "0.9.0" }
+proton-sdk = { version = "0.12.1" }
+proton-drive-rs = { version = "0.12.1" }
 
 # Internal crates.
 pstr-core = { path = "crates/pstr-core" }

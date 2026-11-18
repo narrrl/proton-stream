@@ -5218,13 +5218,14 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "proton-drive-rs"
-version = "0.9.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb9638bbcc807188ce43e6012361d0f5ce4ab70011f6160240df05e474eb3b54"
+checksum = "d05ad4be849ce2104759631063dd06867fbe6b6f0e5c37a172a84b5a90203fa7"
 dependencies = [
  "async-trait",
  "base64 0.23.0",
  "bytes",
+ "chrono",
  "futures",
  "getrandom 0.4.3",
  "hex",
@@ -5245,9 +5246,9 @@ dependencies = [
 
 [[package]]
 name = "proton-sdk"
-version = "0.9.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79557071826330cebd39cf4081d6b75a42721134e5b442682d8e82e709584875"
+checksum = "80c381e9066c0bca3c32597df2e902eecaa4c6e05e202e70ec9d0ac2eec78bfe"
 dependencies = [
  "aes-gcm 0.11.0",
  "async-trait",
@@ -5279,7 +5280,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-android"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "android_logger",
  "futures",
@@ -5299,7 +5300,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-app"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5333,7 +5334,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-cli"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5352,7 +5353,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-core"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "directories",
  "futures",
@@ -5372,7 +5373,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-meta"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "pstr-core",
  "reqwest",
@@ -5385,7 +5386,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-player"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "libloading",
@@ -5400,7 +5401,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-stream"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "futures",
