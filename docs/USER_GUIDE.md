@@ -3,6 +3,10 @@
 This page describes the desktop app. The Android and iOS apps have the same pages as tabs at the
 bottom of the screen; [Android and iOS](MOBILE.md) covers what is different there.
 
+The app uses a violet–pink play prism with a narrow metallic copper edge. The same
+mark appears in the launcher and desktop notifications, with a white silhouette
+for Android status-bar notifications and themed launcher icons.
+
 The app has five pages, in the bar at the top: **Library**, **History**, **Shares**,
 **Downloads** and **Settings**. **Ctrl+1** to **Ctrl+5** open them.
 

@@ -4,6 +4,11 @@ The Android and iOS apps share the desktop app's engine, so a library, its watch
 settings behave the same everywhere. This page covers what is different on a phone, a tablet and
 a TV. [Installation](INSTALL.md) explains how to install each one.
 
+The Android launcher, app settings and share sheet use the full name **Proton Stream**.
+Its violet–pink play prism with metallic copper depth belongs to the same icon family as Drive
+and Gallery. Android launchers that support themed icons can also display its
+monochrome play mark.
+
 <table>
   <tr>
     <td><img src="../images/android-home.png" alt="Home" width="200"></td>

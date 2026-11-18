@@ -54,9 +54,10 @@ every push to `main` and every pull request that touches the iOS sources or the 
 crates under them. `release.yml` calls it too, and publishes the `.ipa` next to the
 other artifacts.
 
-`scripts/render-ios-icon.sh` renders `ios/ProtonStream/Resources/AppIcon.svg`, which
-is Android's adaptive launcher icon with both layers on one canvas, into the asset
-catalog.
+`python scripts/render-branding.py` generates the platform icons from the canonical
+`images/logo.svg`, including the opaque 1024 px iOS icon and its full-bleed source
+`ios/ProtonStream/Resources/AppIcon.svg`. `scripts/render-ios-icon.sh` delegates to
+the same generator. Use `--check` to verify that all generated assets are current.
 
 ## Where iOS differs
 

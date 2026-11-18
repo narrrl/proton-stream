@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"
+    role="img" aria-label="Proton Stream" data-app="stream">
+  <title>Proton Stream</title>
+  <desc>A forward play mark with three motion trails, in violet warming to copper at its tip.</desc>
+  <!-- Canonical artwork. Regenerate platform assets with scripts/render-branding.py. -->
+  <defs>
+    <linearGradient id="face" x1="18" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6F2FC"/>
+      <stop offset="1" stop-color="#E5DDEE"/>
+    </linearGradient>
+    <linearGradient id="material" x1="32" y1="40" x2="105" y2="75" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9170E2"/>
+      <stop offset=".38" stop-color="#6D4AFF"/>
+      <stop offset=".6" stop-color="#7044D1"/>
+      <stop offset=".82" stop-color="#A66598"/>
+      <stop offset="1" stop-color="#B56D51"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="104" height="104" rx="27" fill="url(#face)"/>
+  <rect x="12.75" y="12.75" width="102.5" height="102.5" rx="26.25"
+      fill="none" stroke="#A18CB7" stroke-width="1.5"/>
+  <g id="mark">
+    <path d="M52 38C52 34.2 56.1 31.8 59.4 33.8L97.6 57C101.4 59.3 101.4 64.8 97.6 67.1L59.4 90.3C56.1 92.3 52 89.9 52 86.1Z" fill="url(#material)" fill-rule="nonzero"/>
+    <path d="M33 42H40A4 4 0 0 1 40 50H33A4 4 0 0 1 33 42Z M28 58H40A4 4 0 0 1 40 66H28A4 4 0 0 1 28 58Z M33 74H40A4 4 0 0 1 40 82H33A4 4 0 0 1 33 74Z" fill="url(#material)" fill-rule="nonzero"/>
+  </g>
+</svg>

@@ -7,6 +7,11 @@ screens, while UniFFI exposes the existing catalog, share, streaming, watch-stat
 and offline logic. Keep reusable behavior in the Rust crates rather than
 reimplementing it in Kotlin.
 
+The application and launcher activity both use **Proton Stream** from `app_name`;
+keep the full name on phones, tablets and TV. The adaptive color and
+monochrome icons and TV banner are generated from `images/logo.svg` with
+`python scripts/render-branding.py` (`--check` verifies generated assets).
+
 ## Android TV
 
 The same build installs on Android TV: it is listed in the TV launcher

@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="images/logo.svg" alt="" width="112" height="112">
+<a href="images/logo.svg"><img src="images/logo.svg" alt="Proton Stream icon" width="128" height="128"></a>
 
-# proton-stream
+# Proton Stream
 
 **Your Proton Drive, streaming.** A Netflix-style library for the videos in your Proton Drive and
 the share links people send you, on Linux, Windows, Android, Android TV and iOS.

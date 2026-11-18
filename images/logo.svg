@@ -1,39 +1,40 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="proton-stream">
-  <defs>
-    <linearGradient id="ps-face" x1="12" y1="12" x2="116" y2="112" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#A48BFF"/>
-      <stop offset="0.55" stop-color="#7552FF"/>
-      <stop offset="1" stop-color="#5B36F2"/>
-    </linearGradient>
-    <linearGradient id="ps-glyph" x1="0" y1="36" x2="0" y2="88" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#ECE6FF"/>
-    </linearGradient>
-    <!-- The play mark, cut into the blocks a revision is fetched in: each one
-         decrypts on its own, which is the whole reason this app can seek. -->
-    <mask id="ps-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
-      <path d="M50 41.5v41a6 6 0 0 0 9.1 5.1l34.2-20.5a6 6 0 0 0 0-10.3L59.1 36.4A6 6 0 0 0 50 41.5z" fill="#FFFFFF"/>
-      <g fill="#000000">
-        <rect x="63" y="0" width="5.5" height="128"/>
-        <rect x="78.5" y="0" width="5.5" height="128"/>
-      </g>
-    </mask>
-  </defs>
-
-  <!-- base: a rounded tile with a darker lower edge for depth -->
-  <rect x="12" y="16" width="104" height="100" rx="26" fill="#4424C0"/>
-  <rect x="12" y="12" width="104" height="100" rx="26" fill="url(#ps-face)"/>
-  <rect x="12.5" y="12.5" width="103" height="99" rx="25.5" stroke="#FFFFFF" stroke-opacity="0.2"/>
-
-  <!-- glyph shadow, then the glyph itself. The mark's box centres on x=73 and
-       its centroid on x=66; it sits at 70 -> 64, between the two, because the
-       box centre reads as too far left and the centroid as too far right. The
-       Android and iOS icons centre it the same way. -->
-  <g transform="translate(-6 0)">
-    <g transform="translate(0 3)">
-      <rect width="128" height="128" fill="#2E1596" fill-opacity="0.3" mask="url(#ps-cut)"/>
-    </g>
-    <rect width="128" height="128" fill="url(#ps-glyph)" mask="url(#ps-cut)"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" data-app="stream" role="img" aria-labelledby="stream-title stream-desc">
+<title id="stream-title">Proton Stream</title>
+<desc id="stream-desc">Frontal violet and pink vector icon with shallow metallic copper backing.</desc>
+<defs>
+  <linearGradient id="stream-face" x1="36" y1="212" x2="220" y2="54" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#6240DA"/><stop offset=".52" stop-color="#8056EF"/><stop offset="1" stop-color="#D58BDF"/>
+  </linearGradient>
+  <linearGradient id="stream-rear" x1="26" y1="42" x2="218" y2="220" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#8C68EE"/><stop offset="1" stop-color="#5533B5"/>
+  </linearGradient>
+  <linearGradient id="stream-paper" x1="60" y1="80" x2="180" y2="162" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#E7DFFA"/><stop offset="1" stop-color="#BDA5EF"/>
+  </linearGradient>
+  <linearGradient id="stream-copper" x1="32" y1="32" x2="232" y2="224" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#703E30"/><stop offset=".16" stop-color="#B47456"/>
+    <stop offset=".28" stop-color="#E6B296"/><stop offset=".32" stop-color="#F8D8C3"/>
+    <stop offset=".37" stop-color="#BB7C5A"/><stop offset=".56" stop-color="#8A4D36"/>
+    <stop offset=".69" stop-color="#D69B77"/><stop offset=".75" stop-color="#F2C9AA"/>
+    <stop offset=".81" stop-color="#B87956"/><stop offset="1" stop-color="#713F30"/>
+  </linearGradient>
+  <linearGradient id="stream-sun" x1="172" y1="82" x2="201" y2="112" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#8D513A"/><stop offset=".33" stop-color="#DDA581"/>
+    <stop offset=".47" stop-color="#F7D8B8"/><stop offset=".53" stop-color="#D69B74"/>
+    <stop offset="1" stop-color="#925439"/>
+  </linearGradient>
+  <linearGradient id="stream-mountain" x1="44" y1="148" x2="186" y2="218" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#D9C9FA"/><stop offset="1" stop-color="#A582E9"/>
+  </linearGradient>
+  <linearGradient id="stream-far-mountain" x1="142" y1="152" x2="211" y2="216" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#E8B4EB"/><stop offset="1" stop-color="#BB7BD7"/>
+  </linearGradient>
+  <clipPath id="stream-photo-clip"><rect x="28" y="54" width="194" height="172" rx="24"/></clipPath>
+</defs>
+<!-- Canonical vector artwork; regenerate platform assets with scripts/render-branding.py. -->
+<g id="mark">
+<path d="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" fill="url(#stream-copper)" transform="translate(6 -6)" stroke="#7D4936" stroke-width=".8" stroke-linejoin="round"/>
+<path d="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" fill="url(#stream-face)" stroke="#5936B7" stroke-width=".9" stroke-linejoin="round"/>
+<path d="M44 69V52C44 42 54 36 63 41L217 119" fill="none" stroke="#F3DDF9" stroke-opacity=".55" stroke-width="1.5" stroke-linecap="round"/>
+</g>
 </svg>
