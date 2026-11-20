@@ -20,6 +20,7 @@ pub mod metadata;
 pub mod mylist;
 pub mod naming;
 pub mod news;
+pub mod pictures;
 pub mod prefs;
 pub mod profile;
 pub mod recent;

@@ -19,7 +19,6 @@
 //! mouse.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -199,6 +198,20 @@ enum Fit {
     /// which read as broken; this reads as the poster's light.
     Ambient,
 }
+
+impl Fit {
+    /// The picture-store variant this fit is kept under.
+    fn variant(self) -> String {
+        match self {
+            Fit::Scaled(edge) => format!("w{edge}"),
+            Fit::Logo => "logo".into(),
+            Fit::Ambient => "ambient".into(),
+        }
+    }
+}
+
+/// The picture-store variant of a Proton thumbnail sized for a card.
+const THUMBNAIL_VARIANT: &str = "card";
 
 /// What the background side tells the UI.
 pub enum Event {
@@ -408,6 +421,10 @@ pub struct Engine {
     /// each is a round-trip plus a decrypt — unbounded, they crowd out the reads
     /// the player is blocked on.
     thumbnails: Arc<tokio::sync::Semaphore>,
+    /// Proton thumbnails kept between launches.
+    thumbnail_store: Arc<pstr_core::pictures::PictureStore>,
+    /// Provider artwork kept between launches.
+    poster_store: Arc<pstr_core::pictures::PictureStore>,
     /// Provider lookups in flight. Far tighter than the thumbnail limit, and
     /// not for our benefit: both providers rate-limit by the minute, and a
     /// library of three hundred titles fired off at once earns a 429 for the
@@ -576,6 +593,8 @@ impl Engine {
         let engine = Self {
             runtime,
             store: Arc::new(ShareStore::new(dirs.clone())),
+            thumbnail_store: Arc::new(dirs.thumbnail_store()),
+            poster_store: Arc::new(dirs.poster_store()),
             dirs,
             connection: Arc::new(Mutex::new(None)),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
@@ -2466,17 +2485,12 @@ impl Engine {
         let key = thumbnail_key(node);
         let share_id = node.share_id.clone();
         let uid = node_uid(&node.volume_id, &node.link_id);
-        let path = self.dirs.thumbnail_cache().join(format!("{key}.bin"));
+        let stored = Arc::clone(&self.thumbnail_store);
 
         self.runtime.spawn(async move {
-            if let Ok(bytes) = tokio::fs::read(&path).await {
+            if let Some(bytes) = stored.get(&key, THUMBNAIL_VARIANT).await {
                 match decode_thumbnail(&bytes) {
                     Ok(decoded) => {
-                        // A cache written before entries were stored shrunk
-                        // holds the full preview; shrink it once, on its way out.
-                        if let Some(smaller) = &decoded.smaller {
-                            store_image(&path, smaller).await;
-                        }
                         return engine.emit(Event::Thumbnail {
                             key,
                             image: decoded.image,
@@ -2526,7 +2540,13 @@ impl Engine {
 
             match decode_thumbnail(&bytes) {
                 Ok(decoded) => {
-                    store_image(&path, decoded.smaller.as_deref().unwrap_or(&bytes)).await;
+                    stored
+                        .put(
+                            &key,
+                            THUMBNAIL_VARIANT,
+                            decoded.smaller.as_deref().unwrap_or(&bytes),
+                        )
+                        .await;
                     engine.emit(Event::Thumbnail {
                         key,
                         image: decoded.image,
@@ -2901,11 +2921,8 @@ impl Engine {
 
     /// Where a provider's picture is cached, if it is.
     pub fn poster_file(&self, url: &str) -> Option<std::path::PathBuf> {
-        let path = self
-            .dirs
-            .poster_cache()
-            .join(format!("{}.img", digest(url)));
-        path.is_file().then_some(path)
+        self.poster_store
+            .file(url, &Fit::Scaled(THUMBNAIL_MAX_EDGE).variant())
     }
 
     /// Ask AniSkip where episode `episode` of the MyAnimeList entry `mal_id`
@@ -2958,23 +2975,15 @@ impl Engine {
 
     fn fetch_art(&self, title_key: String, url: String, fit: Fit) {
         let engine = self.clone();
-        // A size of its own on disk: the tile-sized copy of the same URL is
-        // already there under the plain name, scaled down.
-        let name = match fit {
-            Fit::Scaled(THUMBNAIL_MAX_EDGE) => format!("{}.img", digest(&url)),
-            Fit::Scaled(edge) => format!("{}-{edge}.img", digest(&url)),
-            Fit::Logo => format!("{}-logo.img", digest(&url)),
-            Fit::Ambient => format!("{}-ambient.img", digest(&url)),
-        };
-        let path = self.dirs.poster_cache().join(name);
+        // Each fit is its own entry: the tile-sized copy of the same URL is
+        // a different, smaller picture.
+        let variant = fit.variant();
+        let stored = Arc::clone(&self.poster_store);
 
         self.runtime.spawn(async move {
-            if let Ok(bytes) = tokio::fs::read(&path).await {
+            if let Some(bytes) = stored.get(&url, &variant).await {
                 match decode_fitted(&bytes, fit) {
                     Ok(decoded) => {
-                        if let Some(smaller) = &decoded.smaller {
-                            store_image(&path, smaller).await;
-                        }
                         return engine.emit(Event::Poster {
                             key: title_key,
                             image: decoded.image,
@@ -2999,7 +3008,9 @@ impl Engine {
 
             match decode_fitted(&bytes, fit) {
                 Ok(decoded) => {
-                    store_image(&path, decoded.smaller.as_deref().unwrap_or(&bytes)).await;
+                    stored
+                        .put(&url, &variant, decoded.smaller.as_deref().unwrap_or(&bytes))
+                        .await;
                     engine.emit(Event::Poster {
                         key: title_key,
                         image: decoded.image,
@@ -3024,16 +3035,6 @@ fn download_targets(library: &Library) -> HashMap<DownloadKey, PlaybackTarget> {
         }
     }
     targets
-}
-
-/// A short, filesystem-safe name for a URL.
-fn digest(url: &str) -> String {
-    use sha2::{Digest as _, Sha256};
-    let hash = Sha256::digest(url.as_bytes());
-    hash.iter()
-        .take(16)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 /// Unix seconds, for the "when was this asked" columns.
@@ -3239,15 +3240,6 @@ fn encode_for_cache(image: &image::DynamicImage) -> Option<Vec<u8>> {
             .encode_image(&image.to_rgb8())
     };
     encoded.ok().map(|()| bytes.into_inner())
-}
-
-/// Write a cached picture. Best effort: the cache is a convenience, and a
-/// write that fails only means the next launch fetches it again.
-async fn store_image(path: &Path, bytes: &[u8]) {
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    let _ = tokio::fs::write(path, bytes).await;
 }
 
 /// Watch state as of now, for a position in a file.
