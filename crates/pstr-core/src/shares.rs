@@ -857,12 +857,11 @@ pub(crate) fn client_configuration() -> ProtonClientConfiguration {
     ProtonClientConfiguration::new(APP_VERSION).with_user_agent(USER_AGENT)
 }
 
-/// The token out of a share URL: the path segment after `/urls/`.
-///
-/// Parsed here as well as in the SDK because the store needs a stable id for a
-/// share *before* it has opened it — and the id must not be derived from the
-/// password, which would put a secret in the config file by the back door.
 /// The share token a link names, or why it is not a usable share link.
+///
+/// The store needs a stable id for a share *before* it has opened it, and the
+/// id must not be derived from the password, which would put a secret in the
+/// config file by the back door.
 ///
 /// Public so a form can say what is wrong with a link while it is still being
 /// pasted, rather than after a round trip through [`ShareStore::add`] — which
@@ -871,28 +870,21 @@ pub fn share_token(url: &str) -> Result<String> {
     token_from_url(url)
 }
 
+/// The SDK's parser, with messages that say what to fix. None of them repeat
+/// the URL, whose fragment is the password.
 fn token_from_url(url: &str) -> Result<String> {
-    let (_, tail) = url
-        .split_once("/urls/")
-        .ok_or_else(|| Error::Config("not a Proton share URL".to_owned()))?;
-
-    let token = tail
-        .split(['#', '?'])
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches('/');
-
-    if token.is_empty() {
-        return Err(Error::Config(
-            "Proton share URL carries no share token".to_owned(),
-        ));
-    }
-    if !url.contains('#') {
-        return Err(Error::Config(
+    match proton_drive_rs::parse_public_link_url(url) {
+        Ok((token, _password)) => Ok(token),
+        Err(_) if !url.contains("/urls/") => {
+            Err(Error::Config("not a Proton share URL".to_owned()))
+        }
+        Err(_) if !url.contains('#') => Err(Error::Config(
             "Proton share URL has no #password fragment; copy the full share link".to_owned(),
-        ));
+        )),
+        Err(_) => Err(Error::Config(
+            "Proton share URL is incomplete; copy the full share link".to_owned(),
+        )),
     }
-    Ok(token.to_string())
 }
 
 #[cfg(test)]
@@ -1031,6 +1023,8 @@ mod tests {
     fn a_url_that_is_not_a_share_link_is_refused() {
         assert!(token_from_url("https://example.com/thing#x").is_err());
         assert!(token_from_url("https://drive.proton.me/urls/#s3cr3t").is_err());
+        // An empty fragment is no password either.
+        assert!(token_from_url("https://drive.proton.me/urls/ABC123#").is_err());
     }
 
     #[test]

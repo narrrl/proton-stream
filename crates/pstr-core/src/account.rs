@@ -32,12 +32,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use proton_auth_rs::session::{self, SessionTokens, SignInError, Step};
 use proton_drive_rs::{NodeKind, ProtonDriveClient};
 use proton_sdk::account::KeyPassphrases;
-use proton_sdk::api::HumanVerificationCredential;
+use proton_sdk::api::{HumanVerification, HumanVerificationCredential};
 use proton_sdk::ids::NodeUid;
-use proton_sdk::session::{ProtonApiSession, ResumeParameters};
+use proton_sdk::login::{self, LoginError, Step};
+use proton_sdk::session::{PasswordMode, ProtonApiSession, ResumeParameters};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -67,15 +67,16 @@ struct StoredSession {
 }
 
 impl StoredSession {
-    fn capture(tokens: SessionTokens, key_passphrases: HashMap<String, String>) -> Self {
+    fn capture(params: ResumeParameters, key_passphrases: HashMap<String, String>) -> Self {
         Self {
-            session_id: tokens.session_id,
-            username: tokens.username,
-            user_id: tokens.user_id,
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
-            scopes: tokens.scopes,
-            password_mode: session::password_mode_to_wire(tokens.password_mode),
+            session_id: params.session_id.as_str().to_owned(),
+            username: params.username,
+            user_id: params.user_id.as_str().to_owned(),
+            access_token: params.access_token,
+            refresh_token: params.refresh_token,
+            scopes: params.scopes,
+            // Proton's numbers are 1 and 2.
+            password_mode: params.password_mode.to_wire() as u8,
             key_passphrases,
         }
     }
@@ -88,16 +89,16 @@ impl StoredSession {
     }
 
     fn resume_parameters(&self) -> ResumeParameters {
-        SessionTokens {
-            session_id: self.session_id.clone(),
+        ResumeParameters {
+            session_id: self.session_id.clone().into(),
             username: self.username.clone(),
-            user_id: self.user_id.clone(),
+            user_id: self.user_id.clone().into(),
             access_token: self.access_token.clone(),
             refresh_token: self.refresh_token.clone(),
             scopes: self.scopes.clone(),
-            password_mode: session::password_mode_from_wire(self.password_mode),
+            is_waiting_for_second_factor_code: false,
+            password_mode: PasswordMode::from_wire(self.password_mode.into()),
         }
-        .resume_parameters()
     }
 }
 
@@ -264,7 +265,7 @@ pub enum SignIn {
 /// A sign-in waiting on the viewer.
 pub struct PendingSignIn {
     secrets: Arc<dyn SecretStore>,
-    pending: session::Pending,
+    pending: login::Pending,
 }
 
 impl PendingSignIn {
@@ -324,7 +325,7 @@ impl AccountStore {
         password: &str,
         verification: Option<HumanVerificationCredential>,
     ) -> Result<SignIn> {
-        let step = session::begin(
+        let step = login::begin(
             client_configuration(),
             username,
             password,
@@ -393,7 +394,7 @@ async fn advance(secrets: Arc<dyn SecretStore>, step: Step) -> Result<SignIn> {
 /// Store a finished sign-in and hand back the account.
 ///
 /// Only the key passphrases are stored; the passwords go no further.
-async fn finish(secrets: Arc<dyn SecretStore>, unlocked: session::Unlocked) -> Result<Account> {
+async fn finish(secrets: Arc<dyn SecretStore>, unlocked: login::Unlocked) -> Result<Account> {
     let key_passphrases = unlocked
         .key_passphrases
         .iter()
@@ -404,7 +405,8 @@ async fn finish(secrets: Arc<dyn SecretStore>, unlocked: session::Unlocked) -> R
         })
         .collect::<Result<HashMap<_, _>>>()?;
 
-    let stored = StoredSession::capture(unlocked.tokens().await, key_passphrases.clone());
+    let stored =
+        StoredSession::capture(unlocked.resume_parameters().await, key_passphrases.clone());
     let encoded = serde_json::to_string(&stored)
         .map_err(|e| Error::Config(format!("serialize the Proton session: {e}")))?;
     secrets.set(SESSION_KEY, &encoded)?;
@@ -436,7 +438,7 @@ fn persist_refreshed_tokens(
     let template = session.clone();
     session.http().set_on_tokens_refreshed(move |tokens| {
         let stored = StoredSession::capture(
-            SessionTokens::capture(&template, tokens),
+            template.resume_parameters_with(tokens),
             key_passphrases.clone(),
         );
         let written = serde_json::to_string(&stored)
@@ -451,17 +453,19 @@ fn persist_refreshed_tokens(
 /// A failed sign-in step as this app's error. Only a CAPTCHA gate keeps its
 /// own variant, because the front ends open the verification page for it;
 /// every other refusal is a message to show.
-fn sign_in_error(error: SignInError) -> Error {
+fn sign_in_error(error: LoginError) -> Error {
     match error {
-        SignInError::HumanVerification(challenge) => Error::HumanVerification(challenge),
-        SignInError::Proton(error) => error.into(),
+        LoginError::HumanVerification(challenge) => Error::HumanVerification(challenge),
+        LoginError::Proton(error) => error.into(),
         refused => Error::SignIn(refused.to_string()),
     }
 }
 
 /// The token out of a message posted by Proton's verification page, or `None`
 /// for anything that is not a completion.
-pub use proton_auth_rs::session::verification_token;
+pub fn verification_token(raw: &str) -> Option<String> {
+    HumanVerification::token_from_message(raw)
+}
 
 #[cfg(test)]
 mod tests {
@@ -566,7 +570,7 @@ mod tests {
 
     #[test]
     fn a_blocked_sign_in_does_not_claim_the_app_is_outdated() {
-        let error = sign_in_error(SignInError::Blocked(proton_sdk::error::ProtonApiError {
+        let error = sign_in_error(LoginError::Blocked(proton_sdk::error::ProtonApiError {
             code: proton_sdk::api::ResponseCode::Blocked,
             http_status: 422,
             message: "This version of the app is no longer supported".to_owned(),
@@ -584,7 +588,7 @@ mod tests {
             token: "t".to_owned(),
             methods: vec!["captcha".to_owned()],
         };
-        let error = sign_in_error(SignInError::HumanVerification(Box::new(challenge)));
+        let error = sign_in_error(LoginError::HumanVerification(Box::new(challenge)));
         assert!(matches!(error, Error::HumanVerification(_)), "{error}");
     }
 
