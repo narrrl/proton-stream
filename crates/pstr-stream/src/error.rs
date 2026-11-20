@@ -30,3 +30,18 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<proton_media_rs::Shared> for Error {
+    fn from(shared: proton_media_rs::Shared) -> Self {
+        Self::Shared(shared.0)
+    }
+}
+
+impl From<proton_media_rs::Error> for Error {
+    fn from(error: proton_media_rs::Error) -> Self {
+        match error {
+            proton_media_rs::Error::Io(e) => Self::Io(e),
+            other => Self::NotFound(other.to_string()),
+        }
+    }
+}

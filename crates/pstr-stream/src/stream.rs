@@ -36,7 +36,7 @@ use crate::block::{BlockMap, SharedBlocks, splice};
 use crate::disk::{DiskCache, DiskStats};
 use crate::error::Result;
 use crate::ring::{BlockKey, BlockRing, CachedBlock, RingStats};
-use crate::single_flight::SingleFlight;
+use proton_media_rs::SingleFlight;
 
 /// Blocks fetched concurrently to satisfy one read.
 ///

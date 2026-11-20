@@ -5263,6 +5263,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "proton-media-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "427d383f649e090e23e872796f0385914f511a36fee751f52c29b907ada9bd13"
+dependencies = [
+ "lru",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "proton-sdk"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5426,9 +5439,9 @@ dependencies = [
  "futures",
  "lru",
  "proton-drive-rs",
+ "proton-media-rs",
  "proton-sdk",
  "pstr-core",
- "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -6896,6 +6909,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

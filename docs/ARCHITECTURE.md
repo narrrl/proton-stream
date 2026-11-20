@@ -33,7 +33,9 @@ pstr-app (bin: proton-stream)     pstr-cli (bin: pstr)
   in-memory block ring, forward read-ahead, optional on-disk block cache. Only
   its `reader` module touches the SDK; everything else runs against a
   `BlockSource` trait, which is what makes the caching and read-ahead testable
-  with no account and no network.
+  with no account and no network. The block range math, the single-flight
+  fetch and the disk cache come from `proton-media-rs` (shared with the other
+  Proton apps); the cache keeps the layout earlier versions wrote.
 - **`pstr-player`** — libmpv. Fed through a custom `pstr://` protocol registered
   with `mpv_stream_cb_add_ro`; rendered through `mpv_render_context_create` with
   `MPV_RENDER_API_TYPE_OPENGL` into eframe's glow context. The URL is an opaque

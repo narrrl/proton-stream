@@ -20,8 +20,8 @@ use crate::block::SharedBlocks;
 use crate::disk::{DiskCache, DiskCacheConfig};
 use crate::error::Result;
 use crate::ring::{BlockRing, DEFAULT_RING_BYTES, non_zero};
-use crate::single_flight::SingleFlight;
 use crate::stream::{DEFAULT_READAHEAD_BLOCKS, VideoStream};
+use proton_media_rs::SingleFlight;
 
 /// How the source turns a node into blocks.
 ///

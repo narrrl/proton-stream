@@ -67,6 +67,7 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 # `keyring` 3 wrote, so nobody is signed out by the move.
 proton-auth-rs = "0.1"
 proton-base-rs = "0.1"
+proton-media-rs = "0.1"
 clap = { version = "4", features = ["derive"] }
 # The UI. `glow` rather than `wgpu` because step two of the player hands mpv an
 # `MPV_RENDER_API_TYPE_OPENGL` context, and that has to be the same context
