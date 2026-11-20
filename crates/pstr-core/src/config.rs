@@ -123,13 +123,13 @@ impl AppDirs {
         self.offline_content().join(format!("{name}.media"))
     }
 
-    /// Where decrypted poster thumbnails are kept.
+    /// Where decrypted Proton thumbnails are kept (see [`crate::pictures`]).
     ///
     /// Separate from the block cache because it is cheap, tiny and wanted on
     /// every render, where a block is expensive, large and wanted once. Clearing
     /// either must leave the app correct.
     pub fn thumbnail_cache(&self) -> PathBuf {
-        self.cache.join("thumbs")
+        self.cache.join("thumbnails")
     }
 
     /// Where artwork downloaded from a metadata provider is kept.
@@ -138,7 +138,19 @@ impl AppDirs {
     /// invalidated by different things — a recrawl for one, a provider switch
     /// for the other — and because deleting all of one must not touch the other.
     pub fn poster_cache(&self) -> PathBuf {
-        self.cache.join("posters")
+        self.cache.join("artwork")
+    }
+
+    /// The Proton thumbnails, opened on first use. Removes the flat `thumbs`
+    /// directory of earlier versions.
+    pub fn thumbnail_store(&self) -> crate::pictures::PictureStore {
+        crate::pictures::PictureStore::new(self.thumbnail_cache(), Some(self.cache.join("thumbs")))
+    }
+
+    /// The provider artwork, opened on first use. Removes the flat `posters`
+    /// directory of earlier versions.
+    pub fn poster_store(&self) -> crate::pictures::PictureStore {
+        crate::pictures::PictureStore::new(self.poster_cache(), Some(self.cache.join("posters")))
     }
 }
 

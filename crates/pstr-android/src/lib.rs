@@ -1230,6 +1230,8 @@ pub struct AndroidEngine {
     share_generation: AtomicU64,
     /// How many Proton thumbnails may be in flight at once.
     thumbnails: tokio::sync::Semaphore,
+    /// Proton thumbnails kept between launches.
+    thumbnail_store: pstr_core::pictures::PictureStore,
     /// The streaming cache's budget in bytes, for the next connection and,
     /// through [`AndroidEngine::set_stream_cache_budget`], the open one.
     cache_budget: AtomicU64,
@@ -1288,6 +1290,7 @@ impl AndroidEngine {
             .build()
             .map(Arc::new)
             .map_err(BridgeError::from_display)?;
+        let thumbnail_store = dirs.thumbnail_store();
 
         Ok(Arc::new(Self {
             runtime,
@@ -1303,6 +1306,7 @@ impl AndroidEngine {
             share_publication: Mutex::new(()),
             share_generation: AtomicU64::new(0),
             thumbnails: tokio::sync::Semaphore::new(THUMBNAIL_CONCURRENCY),
+            thumbnail_store,
             cache_budget: AtomicU64::new(DiskCacheConfig::DEFAULT_BUDGET_BYTES),
             download_permits: Arc::new(tokio::sync::Semaphore::new(OFFLINE_DOWNLOAD_CONCURRENCY)),
             accounts,
@@ -2956,18 +2960,13 @@ impl AndroidEngine {
         volume_id: &str,
         link_id: &str,
     ) -> Result<Option<Vec<u8>>, BridgeError> {
-        // Keyed by share and link rather than revision: a re-encoded file keeps
-        // its link, and one stale frame of the right episode is a better answer
-        // than a round trip on every render. Clearing the cache directory is
-        // what invalidates it, which is also what a recrawl does not need.
-        let path = self
-            .dirs
-            .thumbnail_cache()
-            .join(format!("{share_id}-{link_id}.bin"));
-        match tokio::fs::read(&path).await {
-            Ok(bytes) if !bytes.is_empty() => return Ok(Some(bytes)),
-            // A truncated entry is not worth reporting — fetch it again.
-            Ok(_) | Err(_) => {}
+        // Keyed by share and link rather than revision; see
+        // `pstr_core::pictures`. The same key and variant as the desktop app.
+        let key = format!("{share_id}-{link_id}");
+        if let Some(bytes) = self.thumbnail_store.get(&key, "card").await
+            && !bytes.is_empty()
+        {
+            return Ok(Some(bytes));
         }
 
         // Past the cache, so this one costs the network. Take a permit before
@@ -3000,15 +2999,7 @@ impl AndroidEngine {
             return Ok(None);
         };
 
-        if let Some(parent) = path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-        // Renamed into place, so a kill mid-write leaves no half-poster that
-        // every later launch reads and fails to decode.
-        let temporary = path.with_extension("part");
-        if tokio::fs::write(&temporary, &bytes).await.is_ok() {
-            let _ = tokio::fs::rename(&temporary, &path).await;
-        }
+        self.thumbnail_store.put(&key, "card", &bytes).await;
         Ok(Some(bytes))
     }
 

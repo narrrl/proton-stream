@@ -157,8 +157,8 @@ an edge case.
 | Sync state | config dir, `sync-state.json` | Yes — a missing one is a first sync, which takes everything other devices have |
 | Watch history and profile in Drive | device `proton-stream`, `watch-history/<id>.json` | One file per installation; merged per episode and per register, newer wins. Holds share links and passwords, end-to-end encrypted by Drive. A file unwritten for 90 days is retired by the next installation to sync, after merging it; a live installation whose file was retired writes it again |
 | Block cache | cache dir, `blocks/` | Yes — must work correctly after deletion |
-| Poster thumbnails | cache dir, `thumbs/` | Yes — refetched per file, one small decrypt each; stored scaled to 640 px |
-| Provider artwork | cache dir, `posters/` | Yes — refetched by URL; stored scaled to 640 px |
+| Poster thumbnails | cache dir, `thumbnails/` (`proton-media-rs` `ImageCache`, 256 MiB) | Yes — refetched per file, one small decrypt each; stored scaled to 640 px |
+| Provider artwork | cache dir, `artwork/` (`proton-media-rs` `ImageCache`, 256 MiB) | Yes — refetched by URL; stored scaled per use (tile, hero, logo, ambient) |
 | Desktop-only settings | config dir, `desktop.json` | Defaults if missing — hardware decoding, cache budget; never overwritten when unparseable |
 | Window size | config dir, `window.json` | Defaults if missing or implausible |
 | Single-instance pipe key (Windows) | config dir, `instance.key` | Yes — regenerated if missing |

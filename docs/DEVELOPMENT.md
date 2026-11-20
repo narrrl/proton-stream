@@ -247,7 +247,7 @@ goes without them, and they are not downloaded with it.
   a thumbnail at upload time and the SDK does not generate one, so every
   `download_thumbnail` on this library answers `Ok(None)` and every tile falls
   back to initials. Nothing is broken — it is why metadata providers matter more
-  than they looked like they did, and why an empty `thumbs/` cache directory is
+  than they looked like they did, and why an empty `thumbnails/` cache directory is
   not evidence the thumbnail path is wrong.
 - **Negative caching matters.** Without it, every grid render pays a round-trip
   per unmatched title. `proton-drive-linux`'s photo grid learned this the hard
