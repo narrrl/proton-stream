@@ -408,7 +408,7 @@ impl AccountStore {
         if let Some(account) = account {
             account.end().await;
         }
-        self.secrets.delete(SESSION_KEY)
+        Ok(self.secrets.delete(SESSION_KEY)?)
     }
 
     /// The stored session, or `None` for none — or for one this build cannot
@@ -500,7 +500,7 @@ fn persist_refreshed_tokens(
         let stored = StoredSession::capture(&template, tokens, key_passphrases.clone());
         let written = serde_json::to_string(&stored)
             .map_err(|e| Error::Config(e.to_string()))
-            .and_then(|encoded| secrets.set(SESSION_KEY, &encoded));
+            .and_then(|encoded| Ok(secrets.set(SESSION_KEY, &encoded)?));
         if let Err(error) = written {
             tracing::warn!(%error, "the refreshed Proton session could not be stored");
         }
@@ -571,14 +571,14 @@ mod tests {
     struct MemorySecrets(Mutex<HashMap<String, String>>);
 
     impl SecretStore for MemorySecrets {
-        fn set(&self, key: &str, value: &str) -> Result<()> {
+        fn set(&self, key: &str, value: &str) -> proton_auth_rs::Result<()> {
             self.0.lock().insert(key.to_owned(), value.to_owned());
             Ok(())
         }
-        fn get(&self, key: &str) -> Result<Option<String>> {
+        fn get(&self, key: &str) -> proton_auth_rs::Result<Option<String>> {
             Ok(self.0.lock().get(key).cloned())
         }
-        fn delete(&self, key: &str) -> Result<()> {
+        fn delete(&self, key: &str) -> proton_auth_rs::Result<()> {
             self.0.lock().remove(key);
             Ok(())
         }

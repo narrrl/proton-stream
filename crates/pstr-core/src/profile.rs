@@ -579,14 +579,14 @@ pub(crate) mod tests {
     struct MemorySecrets(Mutex<HashMap<String, String>>);
 
     impl SecretStore for MemorySecrets {
-        fn set(&self, key: &str, value: &str) -> Result<()> {
+        fn set(&self, key: &str, value: &str) -> proton_auth_rs::Result<()> {
             self.0.lock().insert(key.to_owned(), value.to_owned());
             Ok(())
         }
-        fn get(&self, key: &str) -> Result<Option<String>> {
+        fn get(&self, key: &str) -> proton_auth_rs::Result<Option<String>> {
             Ok(self.0.lock().get(key).cloned())
         }
-        fn delete(&self, key: &str) -> Result<()> {
+        fn delete(&self, key: &str) -> proton_auth_rs::Result<()> {
             self.0.lock().remove(key);
             Ok(())
         }

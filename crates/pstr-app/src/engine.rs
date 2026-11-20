@@ -41,7 +41,7 @@ use pstr_core::proton_sdk::api::HumanVerificationCredential;
 use pstr_core::proton_sdk::ids::{LinkId, NodeUid, VolumeId};
 use pstr_core::shares::AccountFolder;
 use pstr_core::sync::{SyncReport, WatchSync};
-use pstr_core::{Account, AccountStore, KeyringSecretStore, Share, ShareStore, SharedLibrary};
+use pstr_core::{Account, AccountStore, Share, ShareStore, SharedLibrary};
 use pstr_meta::MetadataService;
 
 use crate::desktop_prefs::{DesktopPrefs, DesktopPrefsFile};
@@ -593,7 +593,7 @@ impl Engine {
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
             picture_shown: Arc::new(AtomicBool::new(false)),
             crawl_cancel: Arc::new(tokio::sync::watch::channel(0).0),
-            accounts: AccountStore::new(Arc::new(KeyringSecretStore)),
+            accounts: AccountStore::new(pstr_core::keyring_secrets()),
             account: Arc::new(Mutex::new(None)),
             account_settled: Arc::new(tokio::sync::watch::channel(false).0),
             pending_sign_in: Arc::new(Mutex::new(None)),

@@ -146,22 +146,22 @@ pub trait AndroidSecretStore: Send + Sync {
 struct SecretAdapter(Box<dyn AndroidSecretStore>);
 
 impl SecretStore for SecretAdapter {
-    fn set(&self, key: &str, value: &str) -> pstr_core::Result<()> {
+    fn set(&self, key: &str, value: &str) -> pstr_core::proton_auth_rs::Result<()> {
         self.0
             .set(key.to_owned(), value.to_owned())
-            .map_err(|error| pstr_core::Error::Config(error.to_string()))
+            .map_err(|error| pstr_core::proton_auth_rs::Error::Store(error.to_string()))
     }
 
-    fn get(&self, key: &str) -> pstr_core::Result<Option<String>> {
+    fn get(&self, key: &str) -> pstr_core::proton_auth_rs::Result<Option<String>> {
         self.0
             .get(key.to_owned())
-            .map_err(|error| pstr_core::Error::Config(error.to_string()))
+            .map_err(|error| pstr_core::proton_auth_rs::Error::Store(error.to_string()))
     }
 
-    fn delete(&self, key: &str) -> pstr_core::Result<()> {
+    fn delete(&self, key: &str) -> pstr_core::proton_auth_rs::Result<()> {
         self.0
             .delete(key.to_owned())
-            .map_err(|error| pstr_core::Error::Config(error.to_string()))
+            .map_err(|error| pstr_core::proton_auth_rs::Error::Store(error.to_string()))
     }
 }
 

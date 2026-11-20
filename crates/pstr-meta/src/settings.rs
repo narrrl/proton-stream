@@ -37,9 +37,9 @@ pub fn save(dirs: &AppDirs, config: &MetadataConfig) -> Result<()> {
 /// than as an error: the caller's next move is the same either way — tell the
 /// viewer the provider needs a key — and a keyring failure phrased as one is a
 /// worse message than that.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn api_key(provider: ProviderId) -> Option<String> {
-    api_key_in(&pstr_core::KeyringSecretStore, provider)
+    api_key_in(&*pstr_core::keyring_secrets(), provider)
 }
 
 /// The API key through a platform-provided secret store.
@@ -57,17 +57,21 @@ pub fn api_key_in(secrets: &dyn SecretStore, provider: ProviderId) -> Option<Str
 }
 
 /// Store an API key, or forget it when `key` is empty.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn set_api_key(provider: ProviderId, key: &str) -> Result<()> {
-    set_api_key_in(&pstr_core::KeyringSecretStore, provider, key)
+    set_api_key_in(&*pstr_core::keyring_secrets(), provider, key)
 }
 
 /// Store an API key through a platform-provided secret store.
 pub fn set_api_key_in(secrets: &dyn SecretStore, provider: ProviderId, key: &str) -> Result<()> {
     if key.trim().is_empty() {
-        secrets.delete(&secret_key(provider))?;
+        secrets
+            .delete(&secret_key(provider))
+            .map_err(pstr_core::Error::from)?;
     } else {
-        secrets.set(&secret_key(provider), key)?;
+        secrets
+            .set(&secret_key(provider), key)
+            .map_err(pstr_core::Error::from)?;
     }
     Ok(())
 }
