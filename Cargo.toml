@@ -65,7 +65,7 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 # Windows, the Keychain on macOS), never in the config file next to them.
 # Shared with proton-drive-linux and Proton Gallery, and it reads the entries
 # `keyring` 3 wrote, so nobody is signed out by the move.
-proton-auth-rs = "0.1"
+proton-auth-rs = "0.1.1"
 proton-base-rs = "0.1"
 proton-media-rs = "0.1.1"
 clap = { version = "4", features = ["derive"] }

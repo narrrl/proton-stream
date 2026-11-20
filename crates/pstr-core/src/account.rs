@@ -32,12 +32,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use proton_auth_rs::session::{self, SessionTokens, SignInError, Step};
 use proton_drive_rs::{NodeKind, ProtonDriveClient};
 use proton_sdk::account::KeyPassphrases;
-use proton_sdk::api::{HumanVerificationCredential, ResponseCode};
-use proton_sdk::error::ProtonError;
+use proton_sdk::api::HumanVerificationCredential;
 use proton_sdk::ids::NodeUid;
-use proton_sdk::session::{PasswordMode, ProtonApiSession, ResumeParameters};
+use proton_sdk::session::{ProtonApiSession, ResumeParameters};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -46,17 +46,6 @@ use crate::shares::{SecretStore, client_configuration};
 /// The secret-store key the session is kept under. Share secrets are keyed
 /// `share-…`, so the two cannot collide.
 const SESSION_KEY: &str = "proton-account";
-
-/// Why an account whose only second factor is a security key cannot sign in.
-const SECURITY_KEY_ONLY: &str = "This account's only second factor is a security key, which this \
-     app cannot use yet. Add an authenticator app in your Proton account settings, then sign in \
-     with its code.";
-
-/// Why a sign-in Proton answered with [`ResponseCode::Blocked`] failed. The
-/// server's own text says the app version is no longer supported, which is
-/// not true and sends the viewer looking for an update that does not exist.
-const SIGN_IN_BLOCKED: &str = "Proton has blocked sign-ins from this app for now. Wait a while \
-     and try again, or sign in once on proton.me first.";
 
 /// Blocks in flight for streaming from the account, as for a public link —
 /// see `ShareStore::open`.
@@ -78,22 +67,15 @@ struct StoredSession {
 }
 
 impl StoredSession {
-    fn capture(
-        session: &ProtonApiSession,
-        tokens: proton_sdk::http::Tokens,
-        key_passphrases: HashMap<String, String>,
-    ) -> Self {
+    fn capture(tokens: SessionTokens, key_passphrases: HashMap<String, String>) -> Self {
         Self {
-            session_id: session.session_id().as_str().to_owned(),
-            username: session.username().to_owned(),
-            user_id: session.user_id().as_str().to_owned(),
+            session_id: tokens.session_id,
+            username: tokens.username,
+            user_id: tokens.user_id,
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
-            scopes: session.scopes().to_vec(),
-            password_mode: match session.password_mode() {
-                PasswordMode::Single => 1,
-                PasswordMode::Dual => 2,
-            },
+            scopes: tokens.scopes,
+            password_mode: session::password_mode_to_wire(tokens.password_mode),
             key_passphrases,
         }
     }
@@ -106,19 +88,16 @@ impl StoredSession {
     }
 
     fn resume_parameters(&self) -> ResumeParameters {
-        ResumeParameters {
-            session_id: self.session_id.clone().into(),
+        SessionTokens {
+            session_id: self.session_id.clone(),
             username: self.username.clone(),
-            user_id: self.user_id.clone().into(),
+            user_id: self.user_id.clone(),
             access_token: self.access_token.clone(),
             refresh_token: self.refresh_token.clone(),
             scopes: self.scopes.clone(),
-            is_waiting_for_second_factor_code: false,
-            password_mode: match self.password_mode {
-                1 => PasswordMode::Single,
-                _ => PasswordMode::Dual,
-            },
+            password_mode: session::password_mode_from_wire(self.password_mode),
         }
+        .resume_parameters()
     }
 }
 
@@ -285,8 +264,7 @@ pub enum SignIn {
 /// A sign-in waiting on the viewer.
 pub struct PendingSignIn {
     secrets: Arc<dyn SecretStore>,
-    session: ProtonApiSession,
-    password: String,
+    pending: session::Pending,
 }
 
 impl PendingSignIn {
@@ -295,17 +273,13 @@ impl PendingSignIn {
     /// A wrong code fails here and leaves nothing behind; the front end starts
     /// the sign-in over, because Proton does not accept a second try on the
     /// same half-made session.
-    pub async fn second_factor(mut self, code: &str) -> Result<SignIn> {
-        self.session
-            .apply_second_factor_code(code.trim())
+    pub async fn second_factor(self, code: &str) -> Result<SignIn> {
+        let step = self
+            .pending
+            .second_factor(code)
             .await
-            .map_err(|error| match error {
-                ProtonError::Api(api) if (400..500).contains(&api.http_status) => {
-                    Error::SignIn("that code was not accepted".to_owned())
-                }
-                other => other.into(),
-            })?;
-        self.after_second_factor().await
+            .map_err(sign_in_error)?;
+        advance(self.secrets, step).await
     }
 
     /// Submit the mailbox password, on an account that has one.
@@ -314,22 +288,12 @@ impl PendingSignIn {
     /// on this side, the session survives it, and the viewer can try again
     /// without starting over.
     pub async fn mailbox_password(&self, mailbox_password: &str) -> Result<Account> {
-        finish(
-            Arc::clone(&self.secrets),
-            self.session.clone(),
-            mailbox_password,
-        )
-        .await
-    }
-
-    async fn after_second_factor(self) -> Result<SignIn> {
-        if self.session.password_mode() == PasswordMode::Dual {
-            return Ok(SignIn::MailboxPassword(self));
-        }
-        let password = self.password.clone();
-        finish(self.secrets, self.session, &password)
+        let unlocked = self
+            .pending
+            .mailbox_password(mailbox_password)
             .await
-            .map(SignIn::Done)
+            .map_err(sign_in_error)?;
+        finish(Arc::clone(&self.secrets), unlocked).await
     }
 }
 
@@ -360,30 +324,15 @@ impl AccountStore {
         password: &str,
         verification: Option<HumanVerificationCredential>,
     ) -> Result<SignIn> {
-        let session = ProtonApiSession::begin_verified(
+        let step = session::begin(
             client_configuration(),
-            username.trim(),
-            password.as_bytes(),
+            username,
+            password,
             verification.as_ref(),
         )
         .await
-        .map_err(classify_sign_in_failure)?;
-        let pending = PendingSignIn {
-            secrets: Arc::clone(&self.secrets),
-            session,
-            password: password.to_owned(),
-        };
-        if pending.session.is_waiting_for_second_factor() {
-            let methods = pending.session.second_factor_methods();
-            if methods.fido2 && !methods.totp {
-                // A security key needs WebAuthn, which this sign-in does not
-                // speak; asking for a code would only fail as a wrong one.
-                pending.session.end().await.ok();
-                return Err(Error::SignIn(SECURITY_KEY_ONLY.to_owned()));
-            }
-            return Ok(SignIn::SecondFactor(pending));
-        }
-        pending.after_second_factor().await
+        .map_err(sign_in_error)?;
+        advance(Arc::clone(&self.secrets), step).await
     }
 
     /// The stored account, resumed, or `None` when nobody is signed in.
@@ -427,33 +376,26 @@ impl AccountStore {
     }
 }
 
-/// Unlock the key chain with `mailbox_password`, store the session, and hand
-/// back the account.
+/// Where the shared sign-in stands, in this app's terms.
+async fn advance(secrets: Arc<dyn SecretStore>, step: Step) -> Result<SignIn> {
+    Ok(match step {
+        Step::SecondFactor(pending) => SignIn::SecondFactor(PendingSignIn { secrets, pending }),
+        Step::MailboxPassword(pending) => {
+            SignIn::MailboxPassword(PendingSignIn { secrets, pending })
+        }
+        Step::Unlock(pending) => {
+            let unlocked = pending.unlock().await.map_err(sign_in_error)?;
+            SignIn::Done(finish(secrets, unlocked).await?)
+        }
+    })
+}
+
+/// Store a finished sign-in and hand back the account.
 ///
-/// The key passphrases are derived here, while the token still has the scope
-/// the key salts need. Unlocking the user keys is what proves the mailbox
-/// password: a wrong one unlocks none of them. Only the passphrases are
-/// stored; the password goes no further.
-async fn finish(
-    secrets: Arc<dyn SecretStore>,
-    session: ProtonApiSession,
-    mailbox_password: &str,
-) -> Result<Account> {
-    let probe = ProtonDriveClient::new(&session, mailbox_password.as_bytes().to_vec());
-    probe
-        .account()
-        .unlock()
-        .await
-        .map_err(|error| match error {
-            ProtonError::KeysLocked => {
-                Error::SignIn("that mailbox password did not unlock the account".to_owned())
-            }
-            other => other.into(),
-        })?;
-    let key_passphrases = probe
-        .account()
-        .key_passphrases()
-        .await?
+/// Only the key passphrases are stored; the passwords go no further.
+async fn finish(secrets: Arc<dyn SecretStore>, unlocked: session::Unlocked) -> Result<Account> {
+    let key_passphrases = unlocked
+        .key_passphrases
         .iter()
         .map(|(id, passphrase)| {
             std::str::from_utf8(passphrase)
@@ -462,18 +404,14 @@ async fn finish(
         })
         .collect::<Result<HashMap<_, _>>>()?;
 
-    let stored = StoredSession::capture(
-        &session,
-        session.current_tokens().await,
-        key_passphrases.clone(),
-    );
+    let stored = StoredSession::capture(unlocked.tokens().await, key_passphrases.clone());
     let encoded = serde_json::to_string(&stored)
         .map_err(|e| Error::Config(format!("serialize the Proton session: {e}")))?;
     secrets.set(SESSION_KEY, &encoded)?;
-    persist_refreshed_tokens(&secrets, &session, key_passphrases);
+    persist_refreshed_tokens(&secrets, &unlocked.session, key_passphrases);
 
-    let drive = ProtonDriveClient::with_key_passphrases(&session, stored.unlock());
-    Ok(account(session, drive))
+    let drive = ProtonDriveClient::with_key_passphrases(&unlocked.session, stored.unlock());
+    Ok(account(unlocked.session, drive))
 }
 
 fn account(session: ProtonApiSession, drive: ProtonDriveClient) -> Account {
@@ -497,7 +435,10 @@ fn persist_refreshed_tokens(
     let secrets = Arc::clone(secrets);
     let template = session.clone();
     session.http().set_on_tokens_refreshed(move |tokens| {
-        let stored = StoredSession::capture(&template, tokens, key_passphrases.clone());
+        let stored = StoredSession::capture(
+            SessionTokens::capture(&template, tokens),
+            key_passphrases.clone(),
+        );
         let written = serde_json::to_string(&stored)
             .map_err(|e| Error::Config(e.to_string()))
             .and_then(|encoded| Ok(secrets.set(SESSION_KEY, &encoded)?));
@@ -507,57 +448,20 @@ fn persist_refreshed_tokens(
     });
 }
 
-/// Lift a CAPTCHA gate, a blocked sign-in and a wrong password out of the
-/// generic API error.
-///
-/// Only a gate that can be solved in an app becomes
-/// [`Error::HumanVerification`]; one that wants an e-mail or SMS code is a plain
-/// failure, which reads better than an empty verification page.
-fn classify_sign_in_failure(error: ProtonError) -> Error {
-    if let ProtonError::Api(api) = &error {
-        if let Some(challenge) = api.human_verification()
-            && challenge.supports_captcha()
-        {
-            return Error::HumanVerification(Box::new(challenge));
-        }
-        if api.code == ResponseCode::Blocked {
-            return Error::SignIn(SIGN_IN_BLOCKED.to_owned());
-        }
-        if api.http_status == 422 && !api.is_human_verification_required() {
-            return Error::SignIn(if api.message.is_empty() {
-                "Proton did not accept that address and password".to_owned()
-            } else {
-                api.message.clone()
-            });
-        }
+/// A failed sign-in step as this app's error. Only a CAPTCHA gate keeps its
+/// own variant, because the front ends open the verification page for it;
+/// every other refusal is a message to show.
+fn sign_in_error(error: SignInError) -> Error {
+    match error {
+        SignInError::HumanVerification(challenge) => Error::HumanVerification(challenge),
+        SignInError::Proton(error) => error.into(),
+        refused => Error::SignIn(refused.to_string()),
     }
-    error.into()
 }
 
 /// The token out of a message posted by Proton's verification page, or `None`
 /// for anything that is not a completion.
-///
-/// The page posts plenty besides — resize requests, readiness pings — and
-/// taking an unrecognised message for success would retry the sign-in with a
-/// garbage token. Both spellings of the success type have shipped, and some
-/// hosts hand the message over stringified twice.
-pub fn verification_token(raw: &str) -> Option<String> {
-    let mut value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    if let Some(inner) = value.as_str()
-        && let Ok(parsed) = serde_json::from_str(inner)
-    {
-        value = parsed;
-    }
-    let kind = value.get("type")?.as_str()?;
-    if !matches!(
-        kind,
-        "HUMAN_VERIFICATION_SUCCESS" | "human_verification_success"
-    ) {
-        return None;
-    }
-    let token = value.get("payload")?.get("token")?.as_str()?;
-    (!token.is_empty()).then(|| token.to_owned())
-}
+pub use proton_auth_rs::session::verification_token;
 
 #[cfg(test)]
 mod tests {
@@ -662,22 +566,35 @@ mod tests {
 
     #[test]
     fn a_blocked_sign_in_does_not_claim_the_app_is_outdated() {
-        let error = classify_sign_in_failure(ProtonError::Api(proton_sdk::error::ProtonApiError {
-            code: ResponseCode::Blocked,
+        let error = sign_in_error(SignInError::Blocked(proton_sdk::error::ProtonApiError {
+            code: proton_sdk::api::ResponseCode::Blocked,
             http_status: 422,
             message: "This version of the app is no longer supported".to_owned(),
             details: None,
         }));
         assert!(
-            matches!(&error, Error::SignIn(text) if text == SIGN_IN_BLOCKED),
+            matches!(&error, Error::SignIn(text) if text.contains("blocked sign-ins")),
             "{error}"
         );
     }
 
     #[test]
+    fn a_captcha_gate_stays_its_own_error() {
+        let challenge = proton_sdk::api::HumanVerification {
+            token: "t".to_owned(),
+            methods: vec!["captcha".to_owned()],
+        };
+        let error = sign_in_error(SignInError::HumanVerification(Box::new(challenge)));
+        assert!(matches!(error, Error::HumanVerification(_)), "{error}");
+    }
+
+    #[test]
     fn a_stored_session_keeps_its_password_mode() {
         let params = stored().resume_parameters();
-        assert_eq!(params.password_mode, PasswordMode::Dual);
+        assert_eq!(
+            params.password_mode,
+            proton_sdk::session::PasswordMode::Dual
+        );
         assert!(!params.is_waiting_for_second_factor_code);
     }
 

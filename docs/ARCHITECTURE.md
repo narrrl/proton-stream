@@ -107,6 +107,9 @@ an edge case.
 - Nothing this app holds can write to the share: a viewer link grants
   `MemberRole::Viewer`, and the SDK's public-link write side is unported anyway.
 - Signing in to a Proton account is optional (`pstr-core::account`). The
+  sign-in steps (password, CAPTCHA retry, second factor, mailbox password,
+  key unlock) are `proton-auth-rs`'s `session`, shared with Proton Gallery
+  and proton-drive-linux; what is stored and its write-back stay here. The
   session — tokens, and per account key the passphrase that unlocks it,
   derived at sign-in — is one blob in the same credential store, under
   `proton-account`. The mailbox password itself is never stored. Only TOTP
