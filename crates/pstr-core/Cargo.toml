@@ -19,6 +19,7 @@ thiserror.workspace = true
 tracing.workspace = true
 directories.workspace = true
 rusqlite.workspace = true
+proton-base-rs.workspace = true
 proton-auth-rs.workspace = true
 sha2.workspace = true
 parking_lot.workspace = true
