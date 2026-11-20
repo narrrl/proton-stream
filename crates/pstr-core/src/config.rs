@@ -12,7 +12,6 @@
 //!    record of the user's shares.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -159,39 +158,11 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T
         .map_err(|e| Error::Config(format!("{} is not valid config: {e}", path.display())))
 }
 
-/// Serialize and write a JSON config atomically.
+/// Serialize and write a JSON config atomically, readable by the owner only.
 pub fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
-    let text = serde_json::to_string_pretty(value)
+    let text = serde_json::to_vec_pretty(value)
         .map_err(|e| Error::Config(format!("serialize config: {e}")))?;
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::Config(format!("{} has no parent directory", path.display())))?;
-    fs::create_dir_all(parent)?;
-
-    // Named for the target so two concurrent writers of *different* configs
-    // cannot collide on one temp path.
-    let temp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "config".into())
-    ));
-
-    {
-        let mut file = fs::File::create(&temp)?;
-        file.write_all(text.as_bytes())?;
-        // Before the rename, so the rename cannot publish an empty file.
-        file.sync_all()?;
-    }
-
-    fs::rename(&temp, path)?;
-
-    // The rename itself needs durability, or a crash can lose the whole file
-    // even though its contents were synced.
-    if let Ok(dir) = fs::File::open(parent) {
-        let _ = dir.sync_all();
-    }
+    proton_base_rs::atomic::write(path, &text)?;
     Ok(())
 }
 
@@ -276,7 +247,7 @@ mod tests {
             .expect("read dir")
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.ends_with(".tmp"))
+            .filter(|name| name.contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
 

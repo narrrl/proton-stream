@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use proton_base_rs::{Schema, Step};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Result;
@@ -25,6 +26,39 @@ use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
 pub const SCHEMA_VERSION: i64 = 14;
+
+/// The migration steps, in order. Never edit a shipped one; append.
+const SCHEMA: Schema = Schema::new(&[
+    Step::Sql(MIGRATION_V1),
+    Step::Sql(MIGRATION_V2),
+    Step::Sql(MIGRATION_V3),
+    Step::Sql(MIGRATION_V4),
+    Step::Sql(MIGRATION_V5),
+    Step::Sql(MIGRATION_V6),
+    Step::Sql(MIGRATION_V7),
+    Step::Sql(MIGRATION_V8),
+    Step::Sql(MIGRATION_V9),
+    Step::Sql(MIGRATION_V10),
+    Step::Sql(MIGRATION_V11),
+    Step::Sql(MIGRATION_V12),
+    Step::Sql(MIGRATION_V13),
+    Step::Sql(MIGRATION_V14),
+]);
+
+/// Keep the catalog's own wording for a refused database.
+fn schema_error(error: proton_base_rs::Error) -> crate::error::Error {
+    match error {
+        proton_base_rs::Error::Sqlite(e) => e.into(),
+        proton_base_rs::Error::Io(e) => e.into(),
+        proton_base_rs::Error::NewerSchema { found, supported } => {
+            crate::error::Error::Config(format!(
+                "catalog schema is version {found}, newer than this build supports \
+                 ({supported}); upgrade proton-stream or delete the catalog"
+            ))
+        }
+        other => crate::error::Error::Config(format!("catalog: {other}")),
+    }
+}
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE nodes (
@@ -411,6 +445,9 @@ impl Catalog {
     }
 
     fn from_connection(conn: Connection) -> Result<Self> {
+        // Refuse before any pragma writes to the file, so a database from a
+        // newer build is left exactly as it was.
+        SCHEMA.check(&conn).map_err(schema_error)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -431,108 +468,7 @@ impl Catalog {
     }
 
     fn migrate(&mut self) -> Result<()> {
-        let version: i64 = self
-            .conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
-
-        if version > SCHEMA_VERSION {
-            // Refuse rather than guess. A newer build wrote this; reinterpreting
-            // it under older rules would silently mangle watch state.
-            return Err(crate::error::Error::Config(format!(
-                "catalog schema is version {version}, newer than this build supports \
-                 ({SCHEMA_VERSION}); upgrade proton-stream or delete the catalog"
-            )));
-        }
-
-        if version < 1 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V1)?;
-            tx.pragma_update(None, "user_version", 1)?;
-            tx.commit()?;
-        }
-
-        if version < 2 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V2)?;
-            tx.pragma_update(None, "user_version", 2)?;
-            tx.commit()?;
-        }
-
-        if version < 3 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V3)?;
-            tx.pragma_update(None, "user_version", 3)?;
-            tx.commit()?;
-        }
-
-        if version < 4 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V4)?;
-            tx.pragma_update(None, "user_version", 4)?;
-            tx.commit()?;
-        }
-
-        if version < 5 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V5)?;
-            tx.pragma_update(None, "user_version", 5)?;
-            tx.commit()?;
-        }
-        if version < 6 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V6)?;
-            tx.pragma_update(None, "user_version", 6)?;
-            tx.commit()?;
-        }
-        if version < 7 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V7)?;
-            tx.pragma_update(None, "user_version", 7)?;
-            tx.commit()?;
-        }
-        if version < 8 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V8)?;
-            tx.pragma_update(None, "user_version", 8)?;
-            tx.commit()?;
-        }
-        if version < 9 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V9)?;
-            tx.pragma_update(None, "user_version", 9)?;
-            tx.commit()?;
-        }
-        if version < 10 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V10)?;
-            tx.pragma_update(None, "user_version", 10)?;
-            tx.commit()?;
-        }
-        if version < 11 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V11)?;
-            tx.pragma_update(None, "user_version", 11)?;
-            tx.commit()?;
-        }
-        if version < 12 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V12)?;
-            tx.pragma_update(None, "user_version", 12)?;
-            tx.commit()?;
-        }
-        if version < 13 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V13)?;
-            tx.pragma_update(None, "user_version", 13)?;
-            tx.commit()?;
-        }
-        if version < 14 {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V14)?;
-            tx.pragma_update(None, "user_version", 14)?;
-            tx.commit()?;
-        }
-
+        SCHEMA.migrate(&mut self.conn).map_err(schema_error)?;
         Ok(())
     }
 
@@ -2983,6 +2919,11 @@ mod tests {
             .expect("overwrite");
         let all = catalog.all_title_track_prefs().expect("read all");
         assert_eq!(all.get("show"), Some(&changed));
+    }
+
+    #[test]
+    fn schema_steps_match_the_version() {
+        assert_eq!(i64::from(SCHEMA.version()), SCHEMA_VERSION);
     }
 
     /// A newer schema is refused, not downgraded — reinterpreting it would
