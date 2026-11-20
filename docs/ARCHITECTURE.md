@@ -112,7 +112,8 @@ an edge case.
   refused with a reason before the code prompt. Refresh tokens are single-use, so
   every refresh is written back. On the desktop the blob can outgrow one
   credential entry — Windows caps one at 1280 UTF-16 units — so
-  `KeyringSecretStore` splits a long value across `key#0`, `key#1`, … under a
+  `keyring_secrets()` (`proton-auth-rs` `Chunked` over `KeyringStore`) splits a
+  long value across `key#0`, `key#1`, … under a
   header in `key`. The account writes exactly one kind of thing: the
   watch-history files on its own `proton-stream` device (`pstr-core::sync`),
   including trashing the file of an installation quiet for 90 days once its

@@ -30,9 +30,10 @@ pub mod sync;
 
 pub use account::{Account, AccountStore};
 pub use error::{Error, Result};
-#[cfg(not(target_os = "android"))]
-pub use shares::KeyringSecretStore;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use shares::keyring_secrets;
 pub use shares::{SecretStore, Share, ShareClient, ShareStore, SharedLibrary};
 
+pub use proton_auth_rs;
 pub use proton_drive_rs;
 pub use proton_sdk;

@@ -13,7 +13,7 @@ use pstr_core::catalog::{Catalog, build_rows, build_sidecars};
 use pstr_core::config::AppDirs;
 use pstr_core::shares::AccountFolder;
 use pstr_core::sync::WatchSync;
-use pstr_core::{Account, AccountStore, KeyringSecretStore, ShareStore, SharedLibrary};
+use pstr_core::{Account, AccountStore, ShareStore, SharedLibrary};
 use pstr_player::{EndReason, Player, PlayerConfig, PlayerEvent};
 use pstr_stream::{DiskCacheConfig, LibraryOpener, StreamConfig, StreamSource};
 
@@ -243,7 +243,7 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
     let cli = Cli::parse();
     let dirs = AppDirs::ensure().context("resolve app directories")?;
     let store = ShareStore::new(dirs.clone());
-    let accounts = AccountStore::new(std::sync::Arc::new(KeyringSecretStore));
+    let accounts = AccountStore::new(pstr_core::keyring_secrets());
 
     match cli.command {
         Command::Add {
@@ -806,7 +806,7 @@ async fn open_target(
 
     println!("file:   {} ({})", target.name, target.share_id);
 
-    let account = AccountStore::new(std::sync::Arc::new(KeyringSecretStore))
+    let account = AccountStore::new(pstr_core::keyring_secrets())
         .resume()
         .context("resume the account")?;
     let (library, failures) = SharedLibrary::open_all(store, account.as_ref())
