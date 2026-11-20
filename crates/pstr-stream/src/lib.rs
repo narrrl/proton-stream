@@ -28,7 +28,6 @@ pub mod disk;
 pub mod error;
 pub mod reader;
 pub mod ring;
-mod single_flight;
 pub mod source;
 pub mod stream;
 
