@@ -102,6 +102,8 @@ final class AppModel {
             // player closes.
             while !Task.isCancelled {
                 await syncWatchHistory()
+                // Folders of the account's own Drive that Drive reports changed.
+                enteredForeground()
                 try? await Task.sleep(for: Self.syncInterval)
             }
         }
@@ -528,13 +530,24 @@ final class AppModel {
     /// On launch and back on screen: crawl shares due a look — ones the
     /// catalog has nothing of, brought by a sync that ran in the background or
     /// an add whose crawl never finished, and ones not crawled for six hours,
-    /// so new episodes turn up without a pull to refresh.
+    /// so new episodes turn up without a pull to refresh. Folders of the
+    /// account's own Drive are also crawled as soon as Drive reports a change
+    /// in them; the loop in `init` looks every five minutes.
     func enteredForeground() {
         guard !catchingUp else { return }
         catchingUp = true
         Task {
             defer { catchingUp = false }
-            guard let ids = try? await run({ try $0.uncrawledShares() }), !ids.isEmpty else { return }
+            let due = (try? await run({ try $0.uncrawledShares() })) ?? []
+            // Not while a crawl runs: it may be crawling the very share, and
+            // what changed under it is reported on the next look.
+            var changed: [String] = []
+            if crawlsRunning == 0, let engine = try? await NativeRuntime.engine() {
+                changed = await engine.changedShares()
+            }
+            var seen = Set<String>()
+            let ids = (due + changed).filter { seen.insert($0).inserted }
+            guard !ids.isEmpty else { return }
             await crawlAdded(ids, announce: false)
         }
     }

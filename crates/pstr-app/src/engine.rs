@@ -462,6 +462,9 @@ pub struct Engine {
     desktop_file: Arc<DesktopPrefsFile>,
     /// Bumped to stop the crawls in flight; each watches it from its start.
     crawl_cancel: Arc<tokio::sync::watch::Sender<u64>>,
+    /// Crawls in progress. The change watch waits for zero rather than start a
+    /// second crawl of a share one is already listing.
+    crawls_running: Arc<std::sync::atomic::AtomicUsize>,
     accounts: AccountStore,
     /// The signed-in Proton account, if any.
     account: Arc<Mutex<Option<Account>>>,
@@ -487,6 +490,11 @@ const DOWNLOAD_CONCURRENCY: usize = 3;
 /// How often watch history is synced while the app is open, on top of at
 /// launch and whenever a player stops.
 const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How often [`Engine::watch_changes`] reads the account's Drive event feed.
+/// One small request per volume; a crawl only follows when a watched folder
+/// changed.
+const CHANGE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(2 * 60);
 
 /// Unix seconds, now.
 pub fn unix_now() -> i64 {
@@ -612,6 +620,7 @@ impl Engine {
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
             picture_shown: Arc::new(AtomicBool::new(false)),
             crawl_cancel: Arc::new(tokio::sync::watch::channel(0).0),
+            crawls_running: Arc::default(),
             accounts: AccountStore::new(pstr_core::keyring_secrets()),
             account: Arc::new(Mutex::new(None)),
             account_settled: Arc::new(tokio::sync::watch::channel(false).0),
@@ -1551,7 +1560,43 @@ impl Engine {
             });
     }
 
+    /// Every [`CHANGE_CHECK_EVERY`], crawl the account folders whose Drive
+    /// event feed says they changed. Runs for the life of the app.
+    ///
+    /// A public link has no feed and stays on [`Self::crawl_stale`]'s
+    /// schedule. An account folder is watched once a crawl has listed it,
+    /// so the first check after launch finds nothing to compare against
+    /// until `crawl_stale` or a refresh has run.
+    pub fn watch_changes(&self) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let mut every = tokio::time::interval(CHANGE_CHECK_EVERY);
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            every.tick().await;
+            loop {
+                every.tick().await;
+                if engine.crawls_running.load(Ordering::SeqCst) > 0 {
+                    continue;
+                }
+                let Some((library, _)) = engine.opened() else {
+                    continue;
+                };
+                let changed = library.changed_shares().await;
+                if !changed.is_empty() {
+                    tracing::info!(shares = changed.len(), "Drive reports changes; crawling");
+                    engine.connect_and_crawl(Some(changed), true).await;
+                }
+            }
+        });
+    }
+
     async fn connect_and_crawl(&self, shares: Option<Vec<String>>, quiet: bool) {
+        self.crawls_running.fetch_add(1, Ordering::SeqCst);
+        self.connect_and_crawl_counted(shares, quiet).await;
+        self.crawls_running.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    async fn connect_and_crawl_counted(&self, shares: Option<Vec<String>>, quiet: bool) {
         let Some((library, _)) = self.ensure_connected().await else {
             self.emit(Event::CrawlFinished);
             return;

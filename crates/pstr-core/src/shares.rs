@@ -25,16 +25,15 @@
 //! behind one surface so the crawl, the stream layer and the thumbnail path
 //! do not care which one they hold.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::Duration;
 
-use proton_drive_rs::{
-    Node, ProtonDriveClient, ProtonDrivePublicLinkClient, RevisionReader, ThumbnailType,
-};
+use proton_drive_rs::{Node, ProtonDrivePublicLinkClient};
+use proton_drive_tree_rs::changes::{self, TreeIndex};
+use proton_drive_tree_rs::{WalkError, WalkOptions, retry, walk};
 use proton_sdk::config::ProtonClientConfiguration;
 use proton_sdk::error::ProtonError;
-use proton_sdk::ids::{LinkId, NodeUid, VolumeId};
+use proton_sdk::ids::{DriveEventId, LinkId, NodeUid, VolumeId};
 use serde::{Deserialize, Serialize};
 
 use crate::account::Account;
@@ -426,6 +425,17 @@ async fn open_link(url: &str, custom_password: Option<&str>) -> Result<ShareClie
 pub struct SharedLibrary {
     clients: BTreeMap<String, ShareClient>,
     sessions: SessionAges,
+    /// What the account's event feed has been read up to, and the trees it
+    /// is read for. See [`SharedLibrary::changed_shares`].
+    watch: tokio::sync::Mutex<Watch>,
+}
+
+/// The account folders whose changes [`SharedLibrary::changed_shares`] looks
+/// for: the event cursor of each volume, and each crawled folder's node ids.
+#[derive(Default)]
+struct Watch {
+    cursors: HashMap<VolumeId, DriveEventId>,
+    trees: HashMap<String, TreeIndex>,
 }
 
 /// How long a visitor session is assumed good for without a refresh.
@@ -496,94 +506,9 @@ impl SessionAges {
     }
 }
 
-/// One opened share, whichever kind it is.
-///
-/// Cheap to clone: both clients share their caches and sessions between
-/// clones.
-#[derive(Clone)]
-pub enum ShareClient {
-    /// A public link, opened as a visitor. Boxed: the visitor client is
-    /// several times the size of the account variant, and libraries are
-    /// mostly links, so every map entry would otherwise pay for it.
-    PublicLink(Box<ProtonDrivePublicLinkClient>),
-    /// A folder of the signed-in account.
-    Account {
-        client: ProtonDriveClient,
-        root: NodeUid,
-    },
-}
-
-impl ShareClient {
-    /// The share's top folder.
-    pub async fn root_node(&self) -> proton_sdk::error::Result<Node> {
-        match self {
-            Self::PublicLink(client) => client.get_root_node().await,
-            Self::Account { client, root } => client.get_node(root).await?.ok_or_else(|| {
-                proton_sdk::error::ProtonError::invalid_operation(
-                    "the folder is no longer in your Drive",
-                )
-            }),
-        }
-    }
-
-    pub async fn enumerate_folder_children_node_uids(
-        &self,
-        folder: &NodeUid,
-    ) -> proton_sdk::error::Result<Vec<NodeUid>> {
-        match self {
-            Self::PublicLink(client) => client.enumerate_folder_children_node_uids(folder).await,
-            Self::Account { client, .. } => {
-                client.enumerate_folder_children_node_uids(folder).await
-            }
-        }
-    }
-
-    pub async fn enumerate_nodes(&self, uids: &[NodeUid]) -> proton_sdk::error::Result<Vec<Node>> {
-        match self {
-            Self::PublicLink(client) => client.enumerate_nodes(uids).await,
-            Self::Account { client, .. } => client.enumerate_nodes(uids).await,
-        }
-    }
-
-    pub async fn open_revision(&self, uid: &NodeUid) -> proton_sdk::error::Result<RevisionReader> {
-        match self {
-            Self::PublicLink(client) => client.open_revision(uid).await,
-            Self::Account { client, .. } => client.open_revision(uid).await,
-        }
-    }
-
-    pub async fn download_range(
-        &self,
-        uid: &NodeUid,
-        offset: u64,
-        length: u64,
-    ) -> proton_sdk::error::Result<Vec<u8>> {
-        match self {
-            Self::PublicLink(client) => client.download_range(uid, offset, length).await,
-            Self::Account { client, .. } => client.download_range(uid, offset, length).await,
-        }
-    }
-
-    pub async fn download_thumbnail(
-        &self,
-        uid: &NodeUid,
-        kind: ThumbnailType,
-    ) -> proton_sdk::error::Result<Option<Vec<u8>>> {
-        match self {
-            Self::PublicLink(client) => client.download_thumbnail(uid, kind).await,
-            Self::Account { client, .. } => client.download_thumbnail(uid, kind).await,
-        }
-    }
-
-    /// Replay a visitor handshake. An account session refreshes its own
-    /// tokens when one expires, so there is nothing to do for a folder.
-    pub async fn refresh_session(&self) -> proton_sdk::error::Result<()> {
-        match self {
-            Self::PublicLink(client) => client.refresh_session().await,
-            Self::Account { .. } => Ok(()),
-        }
-    }
-}
+/// One opened share, whichever kind it is: a public link, or a folder of the
+/// signed-in account.
+pub use proton_drive_tree_rs::DriveTree as ShareClient;
 
 impl SharedLibrary {
     /// Open every configured share.
@@ -633,7 +558,14 @@ impl SharedLibrary {
             }
         }
 
-        Ok((Self { clients, sessions }, failures))
+        Ok((
+            Self {
+                clients,
+                sessions,
+                watch: Default::default(),
+            },
+            failures,
+        ))
     }
 
     /// The opened clients, minus `dropping`, ready to hand to
@@ -707,24 +639,14 @@ impl SharedLibrary {
 
     /// Walk one share's whole subtree, level by level, yielding every node.
     ///
-    /// There is no recursion helper on the visitor path — the authenticated
-    /// client's `get_node_hierarchy` / `get_node_by_path` have no counterpart
-    /// there — so the walk is here.
+    /// The walk is [`proton_drive_tree_rs::walk`]: breadth first, six folders
+    /// of a level at a time, each listing retried after a dropped connection.
+    /// A media share is a root holding a folder per series and a folder per
+    /// season, hundreds of siblings, so overlapping their round trips is what
+    /// keeps a crawl to seconds of latency instead of minutes.
     ///
-    /// **Breadth first and fanned out, because a media share is wide.** The
-    /// shape of one is a root holding a folder per series, each holding a folder
-    /// per season: a couple of hundred folders that are each one listing request
-    /// plus a detail fetch, and almost all of them siblings. Walking that one
-    /// folder at a time spends the whole crawl waiting on a round trip it could
-    /// have overlapped — the crawl was minutes of latency and seconds of work.
-    /// Taking a whole level at once is what collapses it.
-    ///
-    /// The client is cheap to clone and its clones share one node-key cache and
-    /// one single-flight map, so siblings that need the same ancestor key wait
-    /// on one derivation rather than each starting their own. `buffered` rather
-    /// than `buffer_unordered`: the crawl's output order is otherwise a race,
-    /// and a catalog that reorders itself between two identical crawls is
-    /// needlessly hard to diff.
+    /// An account folder is also put under watch here: see
+    /// [`Self::changed_shares`].
     pub async fn crawl(&self, share_id: &str) -> Result<Vec<Node>> {
         self.crawl_reporting(share_id, |_| {}).await
     }
@@ -739,108 +661,110 @@ impl SharedLibrary {
         share_id: &str,
         progress: impl Fn(usize),
     ) -> Result<Vec<Node>> {
-        use futures::stream::{StreamExt as _, TryStreamExt as _};
-
         let client = self
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
 
-        let root = retrying(&CRAWL_RETRY_DELAYS, ProtonError::is_retriable, || {
+        // Before the walk, so a change made while it runs is still reported.
+        self.seed_cursor(client).await;
+
+        let options = WalkOptions::default();
+        let root = retry(&options.retry_delays, ProtonError::is_retriable, || {
             client.root_node()
         })
         .await?;
-        let mut level = vec![root.uid.clone()];
-        let mut found = vec![root];
+        let nodes = walk(client, root, &options, progress)
+            .await
+            .map_err(|error| match error {
+                WalkError::Source(error) => Error::from(error),
+                too_many => Error::Config(too_many.to_string()),
+            })?;
 
-        while !level.is_empty() {
-            let listings = level.into_iter().map(|folder| {
-                let client = client.clone();
-                async move {
-                    retrying(&CRAWL_RETRY_DELAYS, ProtonError::is_retriable, || {
-                        list_folder(&client, &folder)
-                    })
-                    .await
-                }
-            });
+        if client.event_scope().is_some() {
+            self.watch
+                .lock()
+                .await
+                .trees
+                .insert(share_id.to_owned(), TreeIndex::from_nodes(&nodes));
+        }
+        Ok(nodes)
+    }
 
-            let mut listings = futures::stream::iter(listings).buffered(CRAWL_CONCURRENCY);
-            let mut next = Vec::new();
-            while let Some(children) = listings.try_next().await? {
-                for child in children {
-                    if child.is_folder() {
-                        next.push(child.uid.clone());
-                    }
-                    found.push(child);
-                }
-                progress(found.len());
+    /// Start following the event feed of `client`'s volume, if it has one and
+    /// nothing follows it yet. Best-effort: without a cursor the share is
+    /// simply left to the scheduled recrawl.
+    async fn seed_cursor(&self, client: &ShareClient) {
+        let Some((drive, scope)) = client.event_scope() else {
+            return;
+        };
+        let mut watch = self.watch.lock().await;
+        if watch.cursors.contains_key(scope.volume_id()) {
+            return;
+        }
+        match changes::poll(drive, &scope, None).await {
+            Ok(poll) => {
+                watch.cursors.insert(scope.volume_id().clone(), poll.cursor);
             }
-            level = next;
-        }
-
-        Ok(found)
-    }
-}
-
-/// One folder's children, with their details.
-async fn list_folder(
-    client: &ShareClient,
-    folder: &NodeUid,
-) -> proton_sdk::error::Result<Vec<Node>> {
-    let child_uids: Vec<NodeUid> = client.enumerate_folder_children_node_uids(folder).await?;
-    if child_uids.is_empty() {
-        return Ok(Vec::new());
-    }
-    // Chunked and fanned out inside the SDK too, so this is a multiplier on
-    // that concurrency rather than the only one.
-    client.enumerate_nodes(&child_uids).await
-}
-
-/// Run `operation`, and again after each delay while it fails in a way
-/// `retriable` says another attempt could fix.
-///
-/// A crawl is hundreds of listings, and one that fails ends the crawl. The SDK
-/// replays a timeout or a refused connection itself, but not a connection that
-/// dropped mid-request — the request may have been applied, which matters for
-/// a write and not at all for a listing. A phone sees exactly that: a pooled
-/// connection the OS tore down while the app was off screen, or a hand-over
-/// from Wi-Fi to mobile data.
-async fn retrying<T, E, O, OF>(
-    delays: &[Duration],
-    retriable: impl Fn(&E) -> bool,
-    operation: O,
-) -> std::result::Result<T, E>
-where
-    O: Fn() -> OF,
-    OF: std::future::Future<Output = std::result::Result<T, E>>,
-{
-    let mut delays = delays.iter();
-    loop {
-        match operation().await {
-            Err(error) if retriable(&error) => match delays.next() {
-                Some(delay) => tokio::time::sleep(*delay).await,
-                None => return Err(error),
-            },
-            done => return done,
+            Err(error) => tracing::debug!(%error, "cannot follow the Drive event feed"),
         }
     }
+
+    /// The account folders that changed since they were last crawled.
+    ///
+    /// A folder of the viewer's own Drive has an event feed; a public link
+    /// does not. Reading the feed is one request per volume, against a full
+    /// crawl's hundreds, so this can run every few minutes where a recrawl
+    /// runs every few hours: a file added to the folder shows up minutes
+    /// later. Only folders crawled since the library opened are watched, and
+    /// a feed that fails to read reports nothing; both fall back to the
+    /// scheduled recrawl.
+    ///
+    /// The cursor moves past what this reports, so the caller is expected to
+    /// crawl what it returns.
+    pub async fn changed_shares(&self) -> Vec<String> {
+        let mut watch = self.watch.lock().await;
+        let mut changed = Vec::new();
+        let volumes: Vec<(VolumeId, DriveEventId)> = watch
+            .cursors
+            .iter()
+            .map(|(volume, cursor)| (volume.clone(), cursor.clone()))
+            .collect();
+        for (volume, cursor) in volumes {
+            let watched: Vec<&str> = watch
+                .trees
+                .keys()
+                .map(String::as_str)
+                .filter(|id| {
+                    self.client(id)
+                        .and_then(ShareClient::event_scope)
+                        .is_some_and(|(_, scope)| *scope.volume_id() == volume)
+                })
+                .collect();
+            let Some((drive, scope)) = watched
+                .first()
+                .and_then(|id| self.client(id))
+                .and_then(ShareClient::event_scope)
+            else {
+                continue;
+            };
+            let poll = match changes::poll(drive, &scope, Some(&cursor)).await {
+                Ok(poll) => poll,
+                Err(error) => {
+                    tracing::debug!(%error, "read the Drive event feed");
+                    continue;
+                }
+            };
+            changed.extend(
+                watched
+                    .iter()
+                    .filter(|id| watch.trees[**id].is_affected_by(&poll))
+                    .map(|id| (*id).to_owned()),
+            );
+            watch.cursors.insert(volume, poll.cursor);
+        }
+        changed
+    }
 }
-
-/// How long a crawl waits before listing a folder again. About a quarter of a
-/// minute in all: long enough for a network to come back, short enough that a
-/// share that is really gone still says so.
-const CRAWL_RETRY_DELAYS: [Duration; 3] = [
-    Duration::from_secs(1),
-    Duration::from_secs(3),
-    Duration::from_secs(9),
-];
-
-/// How many folders of one level to list at once.
-///
-/// Each of these fans out again inside the SDK — up to four detail batches per
-/// folder — so this is not the number of requests in flight but a multiplier on
-/// it. Six keeps the ceiling in the low tens: enough to hide the round trip on
-/// a wide level, well short of a burst a share server would read as abuse.
-const CRAWL_CONCURRENCY: usize = 6;
 
 /// The app-version string Proton identifies this client by.
 ///
@@ -901,30 +825,6 @@ mod tests {
             let call = calls.fetch_add(1, Ordering::SeqCst);
             std::future::ready(if call < failures { Err(()) } else { Ok(()) })
         }
-    }
-
-    #[tokio::test]
-    async fn a_listing_that_drops_is_tried_again_until_it_comes_back() {
-        let calls = AtomicUsize::new(0);
-        let result = retrying(&[Duration::ZERO; 3], |_| true, flaky(2, &calls)).await;
-        assert_eq!(result, Ok(()));
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
-    async fn a_listing_that_keeps_failing_reports_its_failure_once_the_delays_run_out() {
-        let calls = AtomicUsize::new(0);
-        let result = retrying(&[Duration::ZERO; 3], |_| true, flaky(9, &calls)).await;
-        assert_eq!(result, Err(()));
-        assert_eq!(calls.load(Ordering::SeqCst), 4);
-    }
-
-    #[tokio::test]
-    async fn a_failure_another_attempt_cannot_fix_is_reported_at_once() {
-        let calls = AtomicUsize::new(0);
-        let result = retrying(&[Duration::ZERO; 3], |_| false, flaky(1, &calls)).await;
-        assert_eq!(result, Err(()));
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

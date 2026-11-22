@@ -425,16 +425,25 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
      * Crawl shares due a look: ones the catalog has nothing of — brought by a
      * sync that ran in [io.narl.protonstream.sync.WatchSyncWorker], or an add
      * whose crawl never finished — and ones not crawled for six hours, so new
-     * episodes turn up without a pull to refresh.
+     * episodes turn up without a pull to refresh. Folders of the account's own
+     * Drive are also crawled as soon as Drive reports a change in them.
      */
     fun catchUp() {
         if (catchingUp) return
         catchingUp = true
         viewModelScope.launch {
             try {
-                val ids = runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().uncrawledShares() } }
+                val engine = NativeRuntime.engine()
+                val due = runCatching { withContext(Dispatchers.IO) { engine.uncrawledShares() } }
                     .getOrDefault(emptyList())
-                crawlAdded(ids, announce = false)
+                // Not while a crawl runs: it may be crawling the very share,
+                // and what changed under it is reported on the next look.
+                val changed = if (crawlsRunning == 0) {
+                    runCatching { engine.changedShares() }.getOrDefault(emptyList())
+                } else {
+                    emptyList()
+                }
+                crawlAdded((due + changed).distinct(), announce = false)
             } finally {
                 catchingUp = false
             }

@@ -5263,6 +5263,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "proton-drive-tree-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e77c16e471464599569211453931dd772c74987ff7f93ebc9242b1d5a06915af"
+dependencies = [
+ "async-trait",
+ "futures",
+ "proton-drive-rs",
+ "proton-sdk",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "proton-media-rs"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5397,6 +5412,7 @@ dependencies = [
  "proton-auth-rs",
  "proton-base-rs",
  "proton-drive-rs",
+ "proton-drive-tree-rs",
  "proton-media-rs",
  "proton-sdk",
  "rusqlite",

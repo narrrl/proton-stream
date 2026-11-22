@@ -68,6 +68,7 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 proton-auth-rs = "0.1.1"
 proton-base-rs = "0.1"
 proton-media-rs = "0.2.0"
+proton-drive-tree-rs = "0.1.0"
 clap = { version = "4", features = ["derive"] }
 # The UI. `glow` rather than `wgpu` because step two of the player hands mpv an
 # `MPV_RENDER_API_TYPE_OPENGL` context, and that has to be the same context
