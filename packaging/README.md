@@ -132,6 +132,7 @@ The `.icns` is rasterized from `io.narl.proton-stream.svg` when `rsvg-convert` o
 | `PKGBUILD` | Arch, in-tree `makepkg` build |
 | `proton-stream.spec` | RPM, installs from `dist/stage` |
 | `io.narl.proton-stream.desktop` / `.svg` | Freedesktop entry and icon |
+| `io.narl.proton-stream.metainfo.xml` | AppStream listing for software centres and Flathub; add a `<release>` with every version tag. CI runs `appstreamcli validate` on it |
 | `macos/Info.plist.in` | `.app` bundle plist; `@VERSION@`/`@BIN@`/`@APP_ID@` substituted at build time |
 | `windows/proton-stream.wxs` | WiX v4+ installer definition |
 | `windows/proton-stream.ico` | Exe and Add/Remove Programs icon, rasterized from the SVG; `crates/pstr-app/build.rs` compiles it into `proton-stream.exe` |
@@ -149,7 +150,10 @@ published together with a `SHA256SUMS` to a GitHub release. So the steps are:
 
 ```bash
 # 1. bump Cargo.toml's workspace version *and* packaging/PKGBUILD's pkgver
-# 2. commit on main, then
+# 2. add a <release> to packaging/io.narl.proton-stream.metainfo.xml and
+#    fastlane/metadata/android/en-US/changelogs/<versionCode>.txt, where the
+#    version code is major*1000000 + minor*1000 + patch (2.1.0 -> 2001000)
+# 3. commit on main, then
 git tag -a v0.1.0 -m 'proton-stream 0.1.0'
 git push origin main --follow-tags
 ```
@@ -159,6 +163,10 @@ or whose version disagrees with `Cargo.toml` or the PKGBUILD — the artifacts a
 named from the manifest, so a drifted tag would ship a file called something
 other than the tag. It also refuses a `Cargo.toml` carrying `[patch.crates-io]`:
 a release builds against the published SDK crates, never a sibling checkout.
+
+Flathub and F-Droid build from the tagged tree and read their release notes from
+it, so the workflow also refuses a tag whose newest metainfo `<release>` or
+fastlane changelog is missing.
 
 `workflow_dispatch` runs everything except the publish step, which is how to
 rehearse without burning a tag.

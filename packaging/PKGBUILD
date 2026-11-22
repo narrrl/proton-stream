@@ -84,6 +84,8 @@ package() {
     "$pkgdir/usr/share/applications/io.narl.proton-stream.desktop"
   install -Dm644 "packaging/io.narl.proton-stream.svg" \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.narl.proton-stream.svg"
+  install -Dm644 "packaging/io.narl.proton-stream.metainfo.xml" \
+    "$pkgdir/usr/share/metainfo/io.narl.proton-stream.metainfo.xml"
 
   install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
 
