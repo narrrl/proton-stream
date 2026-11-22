@@ -5264,11 +5264,15 @@ dependencies = [
 
 [[package]]
 name = "proton-media-rs"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f03aa6c403e4f2f7a8f9a444dff1e268d8bc9bcaf1d0d953cc3a1312d798f1ef"
+checksum = "7fddf61ea720071805ece42a0040899db90c4696cd016fe5227dc9c981733d0a"
 dependencies = [
+ "async-trait",
+ "futures",
  "lru",
+ "proton-drive-rs",
+ "proton-sdk",
  "sha2 0.11.0",
  "thiserror 2.0.19",
  "tokio",
@@ -5437,15 +5441,10 @@ name = "pstr-stream"
 version = "2.1.0"
 dependencies = [
  "async-trait",
- "futures",
- "lru",
  "proton-drive-rs",
  "proton-media-rs",
  "proton-sdk",
  "pstr-core",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
 ]
 
 [[package]]
