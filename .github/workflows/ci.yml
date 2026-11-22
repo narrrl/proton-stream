@@ -27,8 +27,13 @@ jobs:
       - name: Install libmpv and WebKitGTK
         run: |
           sudo apt-get update
-          sudo apt-get install -y libmpv-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libmpv-dev libwebkit2gtk-4.1-dev appstream desktop-file-utils
 
+      # Software centres and Flathub reject a listing that fails these.
+      - name: Validate the desktop entry and AppStream metadata
+        run: |
+          desktop-file-validate packaging/io.narl.proton-stream.desktop
+          appstreamcli validate --pedantic --no-net packaging/io.narl.proton-stream.metainfo.xml
       - run: cargo fmt --all -- --check
 
       - run: cargo clippy --workspace --all-targets -- -D warnings

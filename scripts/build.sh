@@ -134,6 +134,8 @@ stage() {
     "$STAGE/usr/share/applications/$APP_ID.desktop"
   put 644 "$ROOT/packaging/$APP_ID.svg" \
     "$STAGE/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
+  put 644 "$ROOT/packaging/$APP_ID.metainfo.xml" \
+    "$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
   put 644 "$ROOT/README.md" "$STAGE/usr/share/doc/$PKGNAME/README.md"
 
   # Both packagers list these as directories, so they have to exist even when

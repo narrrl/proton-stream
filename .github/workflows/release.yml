@@ -48,6 +48,14 @@ jobs:
             { echo "::error::tag $tag != Cargo.toml $manifest"; exit 1; }
           [ "$tag" = "$pkgbuild" ] ||
             { echo "::error::tag $tag != PKGBUILD $pkgbuild"; exit 1; }
+          # Flathub and F-Droid read their release notes from the tagged tree.
+          metainfo="$(grep -o -m1 '<release version="[^"]*"' packaging/io.narl.proton-stream.metainfo.xml | cut -d'"' -f2)"
+          [ "$tag" = "$metainfo" ] ||
+            { echo "::error::tag $tag != newest metainfo <release> $metainfo"; exit 1; }
+          IFS=. read -r major minor patch <<< "${tag%%[-+]*}"
+          changelog="fastlane/metadata/android/en-US/changelogs/$((major * 1000000 + minor * 1000 + patch)).txt"
+          [ -s "$changelog" ] ||
+            { echo "::error::$changelog is missing"; exit 1; }
 
       # A release must resolve the SDK from crates.io. The build scripts refuse
       # to run with a patch pointing at a missing sibling checkout, but here the

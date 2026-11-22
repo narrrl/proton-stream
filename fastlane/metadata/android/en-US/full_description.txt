@@ -1,0 +1,30 @@
+A library for the videos in your Proton Drive and in the share links people send you. Paste a share link, with its password if it has one, or sign in and pick folders of your Drive. Episodes start in seconds and seeking fetches only what it lands on: nothing is downloaded first.
+
+This is an <b>unofficial</b>, community-built client, not affiliated with or endorsed by Proton AG. It provides no content: it plays what you keep in Proton Drive or what is shared with you.
+
+<b>Library</b>
+<ul>
+<li>Any number of share links and Drive folders merged into one library</li>
+<li>Seasons and episodes from folder and file names; a file without numbers is a film</li>
+<li>Optional posters, synopses and shelves from AniList, TMDB and TVmaze, off by default</li>
+<li>Filters and sorting by name, last watched, last added, air date, rating or popularity</li>
+</ul>
+
+<b>Player</b>
+<ul>
+<li>libmpv: HEVC 10-bit, HDR and ASS subtitles with hardware decoding, no transcoding</li>
+<li>Skip the opening and the ending, an up-next countdown and remembered track choices</li>
+<li>Subtitle files beside the video (.srt, .ass, .ssa, .vtt)</li>
+<li>Background audio, swipe gestures, touch lock and a sleep timer</li>
+</ul>
+
+<b>Everywhere</b>
+<ul>
+<li>Resume on any device: watch history, shares and settings sync end-to-end encrypted through your own Drive</li>
+<li>Downloads of an episode, a season or a show, to play offline</li>
+<li>Android TV, and notifications when a share gains episodes</li>
+</ul>
+
+There is no server and no telemetry. Share keys, link passwords and your Proton session are kept in the Android Keystore. Posters and descriptions, when turned on, send your title names to AniList, TMDB or TVmaze.
+
+Source code and the desktop apps for Linux and Windows: https://github.com/narrrl/proton-stream

@@ -247,6 +247,8 @@ def main():
     if app == "stream":
         outputs["android/app/src/main/res/drawable/ic_notification_stream.xml"] = art.vector(24, 24/256, monochrome=True)
         outputs["crates/pstr-app/assets/icon-256.png"] = render(desktop.decode(), 256)
+        # F-Droid and IzzyOnDroid list the app with this icon.
+        outputs["fastlane/metadata/android/en-US/images/icon.png"] = render(desktop.decode(), 512)
         ios = art.ios()
         outputs["ios/ProtonStream/Resources/AppIcon.svg"] = ios.encode()
         outputs["ios/ProtonStream/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"] = render(ios, 1024, opaque=True)

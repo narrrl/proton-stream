@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: software centres, Flathub and `appstreamcli validate`
+     read this. Add a <release> with every version tag, newest first. -->
+<component type="desktop-application">
+  <id>io.narl.proton-stream</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Proton Stream</name>
+  <summary>Stream the videos in your Proton Drive as a library</summary>
+  <developer id="io.narl">
+    <name>Nils Pukropp</name>
+  </developer>
+
+  <description>
+    <p>
+      A library for the videos in your Proton Drive and in the share links people send you.
+      Paste a share link, with its password if it has one, or sign in and pick folders of your
+      Drive. Episodes start in seconds and seeking fetches only what it lands on: nothing is
+      downloaded first.
+    </p>
+    <p>
+      This is an unofficial, community-built client, not affiliated with or endorsed by
+      Proton AG. It provides no content: it plays what you keep in Proton Drive or what is
+      shared with you.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Any number of share links and Drive folders merged into one library</li>
+      <li>Seasons and episodes from folder and file names; a file without numbers is a film</li>
+      <li>Optional posters, synopses and shelves from AniList, TMDB and TVmaze, off by default</li>
+      <li>Playback through libmpv: HEVC 10-bit, HDR and ASS subtitles with hardware decoding</li>
+      <li>Skip the opening and the ending, an up-next countdown and remembered track choices</li>
+      <li>Resume on any device: watch history, shares and settings sync through your own Drive</li>
+      <li>Downloads of an episode, a season or a show, to play offline</li>
+      <li>Full keyboard control, and the pstr command line</li>
+    </ul>
+    <p>
+      There is no server and no telemetry. Share keys, link passwords and your Proton session
+      are kept in the system keyring, never in a config file.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.narl.proton-stream.desktop</launchable>
+  <icon type="stock">io.narl.proton-stream</icon>
+
+  <url type="homepage">https://proton-stream.narl.io</url>
+  <url type="bugtracker">https://github.com/narrrl/proton-stream/issues</url>
+  <url type="vcs-browser">https://github.com/narrrl/proton-stream</url>
+  <url type="help">https://github.com/narrrl/proton-stream/wiki</url>
+  <url type="donation">https://buymeacoffee.com/narl</url>
+
+  <update_contact>contact@narl.io</update_contact>
+
+  <provides>
+    <binary>proton-stream</binary>
+    <binary>pstr</binary>
+  </provides>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+    <category>Player</category>
+  </categories>
+  <keywords>
+    <keyword>proton</keyword>
+    <keyword>drive</keyword>
+    <keyword>stream</keyword>
+    <keyword>video</keyword>
+    <keyword>media library</keyword>
+  </keywords>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#b9a8f0</color>
+    <color type="primary" scheme_preference="dark">#231946</color>
+  </branding>
+
+  <requires>
+    <internet>always</internet>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Home, with the hero carousel and shelves</caption>
+      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.1.0/images/desktop-home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The whole library, filtered and sorted</caption>
+      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.1.0/images/desktop-library.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A title page with its seasons and episodes</caption>
+      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.1.0/images/desktop-title.png</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="2.1.0" date="2026-11-18">
+      <description>
+        <p>A new logo and app icon.</p>
+      </description>
+    </release>
+    <release version="2.0.1" date="2026-10-31">
+      <description>
+        <p>Bug fixes.</p>
+      </description>
+    </release>
+    <release version="2.0.0" date="2026-10-31">
+      <description>
+        <p>A redesigned library and player.</p>
+        <ul>
+          <li>A full-bleed hero carousel, title logos, quality badges and paged shelves</li>
+          <li>My List, synced, with new-episode rows and badges</li>
+          <li>Search across episodes and people; browse by genre, studio and person</li>
+          <li>Cast, trailers and more-like-this on the title page</li>
+          <li>Opening and ending skips from AniSkip where a file has no chapters</li>
+          <li>A player side panel, a seek overlay and a pause screen</li>
+          <li>TVmaze for shows AniList does not have, and film artwork from TMDB</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>
