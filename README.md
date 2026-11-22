@@ -88,7 +88,7 @@ Every [release](https://github.com/narrrl/proton-stream/releases/latest) has:
 ```bash
 sudo apt install ./proton-stream_*_amd64.deb     # Debian, Ubuntu
 sudo dnf install ./proton-stream-*.x86_64.rpm    # Fedora
-cd packaging && makepkg -si                      # Arch, from a checkout
+paru -S proton-stream-bin                        # Arch, from the AUR
 ```
 
 Then open **Proton Stream**, paste a share link on the **Shares** page (or press **Ctrl+V**), and

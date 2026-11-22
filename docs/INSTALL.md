@@ -9,7 +9,7 @@ against. The version is part of each file name.
 | Debian, Ubuntu | `proton-stream_<version>-1_amd64.deb` | x86_64 |
 | Fedora | `proton-stream-<version>-1.x86_64.rpm` | x86_64 |
 | Other Linux | `proton-stream-<version>-x86_64-unknown-linux-gnu.tar.gz` | x86_64, libmpv 2 |
-| Arch Linux | Built from the repository with `makepkg` | |
+| Arch Linux | AUR: `proton-stream`, `proton-stream-bin` or `proton-stream-git` | x86_64 |
 | Windows | `proton-stream-<version>-x64.msi` or `…-x86_64-windows.zip` | x64 |
 | Android, Android TV | `proton-stream-<version>-android.apk` | Android 12 or newer, arm64 or x86_64 |
 | iOS, iPadOS | `proton-stream-<version>-ios.ipa` | iOS 17 or newer, SideStore or AltStore |
@@ -38,7 +38,17 @@ sudo dnf install ./proton-stream-*.x86_64.rpm
 
 ### Arch Linux
 
-The `PKGBUILD` in `packaging/` builds the checkout it sits in. It needs network access, so cargo
+Three packages on the AUR, installed with an AUR helper such as `paru` or `yay`:
+
+- `proton-stream` builds the latest release from source.
+- `proton-stream-bin` installs the release binaries, with no compiling.
+- `proton-stream-git` builds the newest commit on `main`.
+
+```bash
+paru -S proton-stream-bin
+```
+
+To build a checkout of your own instead, the `PKGBUILD` in `packaging/` builds the checkout it sits in. It needs network access, so cargo
 can fetch crates:
 
 ```bash
