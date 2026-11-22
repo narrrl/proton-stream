@@ -111,12 +111,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.96'
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       # The registry and the installed helpers only. rust-cache reads
       # `target/android/<triple>` as a profile directory and deletes the
       # `release` tree under it before saving, so with its target caching on
-      # every run rebuilt both ABIs from scratch.
+      # every run rebuilt every ABI from scratch.
       - uses: Swatinem/rust-cache@v2.9.1
         with:
           shared-key: android-registry
@@ -124,7 +124,7 @@ jobs:
           cache-on-failure: true
 
       # The target directory as is: the host build the UniFFI bindings come
-      # from and both cargo-ndk ABIs. One entry for both jobs, since the signed
+      # from and every cargo-ndk ABI. One entry for both jobs, since the signed
       # build compiles the same crates for the same targets. A new lockfile
       # starts from the last one's tree, so a version bump rebuilds only the
       # workspace crates.
@@ -234,12 +234,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.96'
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       # The registry and the installed helpers only. rust-cache reads
       # `target/android/<triple>` as a profile directory and deletes the
       # `release` tree under it before saving, so with its target caching on
-      # every run rebuilt both ABIs from scratch.
+      # every run rebuilt every ABI from scratch.
       - uses: Swatinem/rust-cache@v2.9.1
         with:
           shared-key: android-registry
@@ -247,7 +247,7 @@ jobs:
           cache-on-failure: true
 
       # The target directory as is: the host build the UniFFI bindings come
-      # from and both cargo-ndk ABIs. One entry for both jobs, since the signed
+      # from and every cargo-ndk ABI. One entry for both jobs, since the signed
       # build compiles the same crates for the same targets. A new lockfile
       # starts from the last one's tree, so a version bump rebuilds only the
       # workspace crates.

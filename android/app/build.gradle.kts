@@ -58,7 +58,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            // Many Android TVs run a 32-bit userspace on a 64-bit SoC, and the
+            // package installer calls an APK without armeabi-v7a "not
+            // compatible" there.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
         externalNativeBuild {
             cmake {
@@ -183,7 +186,7 @@ val hostRustLibrary = repositoryRoot.resolve(
 
 val buildLibmpvAndroid by tasks.registering(Exec::class) {
     group = "native"
-    description = "Builds the pinned GPL libmpv and stages both Android ABIs."
+    description = "Builds the pinned GPL libmpv and stages every Android ABI."
     workingDir(repositoryRoot)
     commandLine("bash", repositoryRoot.resolve("scripts/build-libmpv-android.sh").absolutePath)
     // No declared outputs: the script's STAMP is the up-to-date check. Gradle
@@ -226,6 +229,7 @@ val buildRustAndroid by tasks.registering(Exec::class) {
     commandLine(
         "cargo", "ndk",
         "--target", "arm64-v8a",
+        "--target", "armeabi-v7a",
         "--target", "x86_64",
         "--platform", "31",
         "--output-dir", rustJniDir.get().asFile.absolutePath,
