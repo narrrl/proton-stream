@@ -810,6 +810,7 @@ impl App {
         engine.load_crawls();
         engine.connect();
         engine.crawl_stale();
+        engine.watch_changes();
         let settings = engine.metadata_config();
         let arranged = engine.desktop_prefs();
 

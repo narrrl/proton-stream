@@ -22,6 +22,7 @@ rusqlite.workspace = true
 proton-base-rs.workspace = true
 proton-auth-rs.workspace = true
 proton-media-rs.workspace = true
+proton-drive-tree-rs.workspace = true
 sha2.workspace = true
 parking_lot.workspace = true
 getrandom.workspace = true

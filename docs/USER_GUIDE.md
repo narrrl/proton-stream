@@ -66,7 +66,10 @@ searches. A search is kept only when you open something it found. **Clear recent
 removes the list. The list stays on this device and does not sync.
 
 **Refresh** (or **F5**) reads every share again. The app also does this by itself when a share
-has not been read for 6 hours.
+has not been read for 6 hours. A folder from your own Drive is read again sooner: while the app
+is open it checks whether anything in the folder changed, every 2 minutes on desktop and every 5
+on Android and iOS, so a new episode shows up a few minutes after it is uploaded. Public links
+have no such check and wait for the 6 hours.
 
 ### How the library reads your folders
 

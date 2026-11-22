@@ -1608,6 +1608,26 @@ impl AndroidEngine {
         .map_err(BridgeError::from_display)?
     }
 
+    /// Shares from the account's own Drive that changed since their last crawl
+    /// here, by Drive's change feed. Crawl each.
+    ///
+    /// Only the open connection knows where its crawls left the feed, so with
+    /// none this is empty: a fresh start crawls what is due through
+    /// [`AndroidEngine::uncrawled_shares`] anyway, and that crawl starts the
+    /// watch. Public links have no feed and are never listed here.
+    pub async fn changed_shares(self: Arc<Self>) -> Vec<String> {
+        let Some(opened) = self.cached_connection() else {
+            return Vec::new();
+        };
+        let runtime = Arc::clone(&self.runtime);
+        spawned(
+            &runtime,
+            async move { opened.library.changed_shares().await },
+        )
+        .await
+        .unwrap_or_default()
+    }
+
     /// Every configured share, with what its last crawl here came to.
     pub fn shares(&self) -> Result<Vec<ShareRecord>, BridgeError> {
         let shares = self.store.list().map_err(BridgeError::from_display)?;
