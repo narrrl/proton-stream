@@ -47,6 +47,14 @@ cd proton-stream/packaging
 makepkg -si
 ```
 
+### Flatpak
+
+`scripts/build-flatpak.sh --install` builds the Flatpak from a checkout and installs it for your
+user; the bundle it leaves in `dist/` installs anywhere with
+`flatpak install --user proton-stream-*.flatpak`. It brings its own libmpv and WebKitGTK and
+uses your desktop's keyring through the sandbox. Its settings and library live under
+`~/.var/app/io.narl.proton-stream/`, not beside a package install's.
+
 ### Other distributions
 
 Unpack the tarball anywhere. It holds `proton-stream` (the app), `pstr` (the

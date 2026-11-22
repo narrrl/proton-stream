@@ -10,6 +10,7 @@ need MSVC and WiX and neither is reachable from a Unix host.
 | `dist/proton-stream_<ver>-1_amd64.deb` | `scripts/build.sh deb` | any Linux |
 | `dist/proton-stream-<ver>-1.x86_64.rpm` | `scripts/build.sh rpm` | any Linux with `rpmbuild` |
 | `packaging/*.pkg.tar.zst` | `cd packaging && makepkg -fi` | Arch |
+| `dist/proton-stream-<ver>-x86_64.flatpak` | `scripts/build-flatpak.sh` | any Linux with `flatpak-builder` |
 | `dist/Proton Stream.app` + `.dmg` | `scripts/build.sh dmg` | macOS |
 | `dist/windows/proton-stream.exe` + `.zip` | `scripts\build.ps1 -Artifacts zip` | Windows |
 | `dist/proton-stream-<ver>-x64.msi` | `scripts\build.ps1 -Artifacts msi` | Windows |
@@ -33,6 +34,19 @@ checkout, by Arch convention and to match `../proton-drive-linux`. It ignores
 `dist/stage` entirely. `scripts/build.sh arch` runs it for you and copies the
 result into `dist/`, but it is not part of `all` — it recompiles, and most hosts
 are not Arch.
+
+## Flatpak
+
+`packaging/flatpak/io.narl.proton-stream.yml` builds this checkout offline, as
+Flathub does: GNOME 51 runtime (WebKitGTK 4.1, FFmpeg), with libass, libplacebo
+and libmpv 0.42 built as modules (recipes from Flathub's own `io.mpv.Mpv`), and
+every crate from `packaging/flatpak/cargo-sources.json`. Regenerate that file
+with `scripts/build-flatpak.sh --sources` whenever `Cargo.lock` changes, or the
+offline build fails on the first new crate. Work files go to `.build/flatpak`,
+not `/tmp`: a release build does not fit a tmpfs.
+
+The Flathub copy of the manifest differs only in the last module's first source:
+a `git` source at the release tag in place of `type: dir`.
 
 ## Runtime dependencies, and why they are what they are
 
