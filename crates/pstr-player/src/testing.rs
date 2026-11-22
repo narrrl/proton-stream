@@ -33,7 +33,7 @@ fn content() -> Vec<Vec<u8>> {
 struct Fixed(SharedBlocks);
 
 #[async_trait]
-impl RevisionOpener for Fixed {
+impl RevisionOpener<NodeUid> for Fixed {
     async fn open(&self, _share: &str, _uid: &NodeUid) -> pstr_stream::Result<SharedBlocks> {
         Ok(Arc::clone(&self.0))
     }

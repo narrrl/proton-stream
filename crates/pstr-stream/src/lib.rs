@@ -1,44 +1,31 @@
 //! Seekable, cached byte streams over Proton Drive revisions.
 //!
-//! Proton stores a file as a list of independently-encrypted 4 MiB blocks, each
-//! a self-contained PGP packet under one session key. Nothing about that is
-//! sequential — which is the fact this whole crate rests on. Seeking is not an
-//! approximation of streaming here; block 400 costs exactly what block 0 costs.
+//! The engine (memory ring, disk cache, read-ahead that yields to seeks, the
+//! LRU of open streams) lives in `proton-media-rs`'s `stream` module, shared
+//! with the other Proton apps. This crate pins it to Proton node UIDs and adds
+//! the one piece that knows about this app's shares: [`LibraryOpener`].
 //!
-//! What sits between the SDK and the player:
-//!
-//! ```text
-//!   mpv demuxer            VideoStream          BlockRing → DiskCache → Proton
-//!   (small, forward,  →   byte range →     →    memory      disk        network
-//!    seeking reads)        blocks              (128 MiB)   (4 GiB)
-//! ```
-//!
-//! * [`StreamSource`] opens files and keeps the open ones in an LRU.
-//! * [`VideoStream`] answers byte ranges, reading ahead of the player.
-//! * The ring and the disk cache are byte-budgeted, shared across streams, and
-//!   keyed by revision id so a resealed file can never serve stale bytes.
-//!
-//! Only [`reader`] touches the SDK. Everything else runs against a
-//! [`BlockSource`], which is what makes the caching and read-ahead testable
-//! without an account, a network or a share.
+//! A Proton file's content blocks each decrypt on their own, so seeking costs
+//! one block fetch, not a re-stream. Never assume a 4 MiB block: the sizes come
+//! from the revision.
 #![forbid(unsafe_code)]
 
-pub mod block;
-pub mod disk;
-pub mod error;
 pub mod reader;
-pub mod ring;
-pub mod source;
-pub mod stream;
 
-pub use block::{BlockMap, BlockSource, MemoryBlocks, SharedBlocks};
-pub use disk::{DiskCacheConfig, DiskStats};
-pub use error::{Error, Result};
-/// Re-exported because every caller of this crate names one — `VideoStream::uid`
-/// returns it and `StreamSource::open` takes it — and taking a dependency on the
-/// whole SDK for a newtype is not a reasonable price for that.
+pub use proton_media_rs::stream::{
+    BlockSource, COPY_BLOCKS_IN_FLIGHT, DEFAULT_READAHEAD_BLOCKS, DEFAULT_RING_BYTES, FileBlocks,
+    MemoryBlocks, RevisionBlocks, RingStats, SharedBlocks, StreamConfig, StreamStats,
+};
+pub use proton_media_rs::{BlockMap, DiskCacheConfig, DiskStats, Error, Result};
+/// Re-exported because every caller of this crate names one, and taking a
+/// dependency on the whole SDK for a newtype is not a reasonable price for that.
 pub use proton_sdk::ids::NodeUid;
-pub use reader::{FileBlocks, LibraryOpener, RevisionBlocks};
-pub use ring::{DEFAULT_RING_BYTES, RingStats};
-pub use source::{RevisionOpener, StreamConfig, StreamSource};
-pub use stream::{COPY_BLOCKS_IN_FLIGHT, DEFAULT_READAHEAD_BLOCKS, StreamStats, VideoStream};
+pub use reader::LibraryOpener;
+
+/// What a share's file is opened as: one revision, readable at any offset.
+pub type VideoStream = proton_media_rs::stream::RangeStream<NodeUid>;
+/// Opens and caches [`VideoStream`]s.
+pub type StreamSource = proton_media_rs::stream::StreamSource<NodeUid>;
+
+/// How a [`StreamSource`] turns a node into blocks.
+pub use proton_media_rs::stream::RevisionOpener;

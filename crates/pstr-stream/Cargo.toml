@@ -12,13 +12,5 @@ authors.workspace = true
 pstr-core.workspace = true
 proton-sdk.workspace = true
 proton-drive-rs.workspace = true
-tokio.workspace = true
-futures.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-lru.workspace = true
-proton-media-rs.workspace = true
+proton-media-rs = { workspace = true, features = ["drive"] }
 async-trait.workspace = true
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
