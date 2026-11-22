@@ -1,0 +1,4 @@
+Folders from your own Proton Drive pick up new episodes within minutes: the app checks Drive for changes while it is open instead of waiting six hours.
+
+- Runs on 32-bit Android TVs and boxes.
+- Signing out while a session refresh is in flight no longer signs you back in.
