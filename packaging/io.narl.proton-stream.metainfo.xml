@@ -101,6 +101,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.2.0" date="2026-11-22">
+      <description>
+        <p>Folders from your own Proton Drive pick up new episodes within minutes: the app checks Drive for changes while it is open instead of waiting six hours.</p>
+        <ul>
+          <li>Android runs on 32-bit Android TVs and boxes.</li>
+          <li>4K playback on Windows uses the discrete GPU and buffers more, so it no longer stutters.</li>
+          <li>Signing out while a session refresh is in flight no longer signs you back in.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-11-18">
       <description>
         <p>A new logo and app icon.</p>
