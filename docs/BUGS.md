@@ -150,6 +150,29 @@ The first hardware run also found four defects in the harness itself and five in
 the release build; they are [B43](#b43--the-acceptance-harness-could-not-run-against-the-shipping-build)
 and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
+### B67 — a token refresh after signing out could sign the viewer back in
+
+**Symptom.** Not seen by a user; found reading the sign-in code against Proton
+Gallery's. Sign out while offline, or while a crawl or sync is running, and the
+next launch may come back signed in.
+
+**Cause.** Proton refresh tokens are single-use, so every refresh writes the new
+pair to the credential store. That callback lived as long as the session, and
+copies of the account held by the crawl and sync tasks keep the session alive
+after a sign-out. Offline, ending the session on Proton's side fails, so the
+session stays valid. Any refresh after the delete wrote the session back. A
+second sign-in had the same race the other way: the replaced session's refresh
+could overwrite the new one.
+
+**Fix.** `account.rs` numbers each sign-in and sign-out (`Generation`). A
+refresh writes only while the generation it was installed under is current,
+checked under the lock a sign-out holds while it deletes. Sign-out now deletes
+before it ends the session, since ending it can itself refresh the token.
+
+**Verified.** Workspace gate, with
+`a_refresh_after_signing_out_does_not_sign_the_viewer_back_in` and
+`a_refresh_of_a_replaced_session_does_not_overwrite_the_new_one`.
+
 ### B66 — 4K HEVC 10-bit stuttered on a Windows laptop with an RTX 3050
 
 **Symptom.** 4K 10-bit episodes were close to unwatchable on a Windows laptop

@@ -20,7 +20,10 @@
 //!
 //! Proton refresh tokens are single-use, so every refresh is written back
 //! (see [`persist_refreshed_tokens`]). A refresh that is not leaves the store
-//! holding a dead token and the next launch signed out.
+//! holding a dead token and the next launch signed out. A refresh that lands
+//! after a sign-out, or after another sign-in replaced the session, must *not*
+//! be written: it would bring back the session the viewer just left, or
+//! overwrite the new one with the old. [`Generation`] keeps those out.
 //!
 //! ## Signing in is several steps
 //!
@@ -32,6 +35,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use proton_drive_rs::{NodeKind, ProtonDriveClient};
 use proton_sdk::account::KeyPassphrases;
 use proton_sdk::api::{HumanVerification, HumanVerificationCredential};
@@ -262,9 +266,51 @@ pub enum SignIn {
     MailboxPassword(PendingSignIn),
 }
 
+/// Which stored session the token write-back may touch.
+///
+/// Every sign-in and sign-out starts a new generation. A session's refresh
+/// callback remembers the generation it was installed under and writes only
+/// while that is still current, checked under the same lock a sign-out holds
+/// while it deletes — so no refresh can slip in between and store again.
+///
+/// A sign-out on a plane cannot end the session on Proton's side, and copies
+/// of the account held by the sync and crawl tasks keep refreshing it; this is
+/// what stops them signing the viewer back in on the next launch.
+#[derive(Clone, Default)]
+struct Generation(Arc<Mutex<u64>>);
+
+impl Generation {
+    fn current(&self) -> u64 {
+        *self.0.lock()
+    }
+
+    /// Start a new generation and run `then` before any write-back of the old
+    /// one can run. Returns the new generation with `then`'s result.
+    fn advance<T>(&self, then: impl FnOnce() -> T) -> (u64, T) {
+        let mut generation = self.0.lock();
+        *generation += 1;
+        (*generation, then())
+    }
+
+    /// Run `write` if `generation` is still current.
+    fn write_if_current(&self, generation: u64, write: impl FnOnce()) {
+        let current = self.0.lock();
+        if *current == generation {
+            write();
+        }
+    }
+}
+
+/// What a finished sign-in writes to.
+#[derive(Clone)]
+struct Sink {
+    secrets: Arc<dyn SecretStore>,
+    generation: Generation,
+}
+
 /// A sign-in waiting on the viewer.
 pub struct PendingSignIn {
-    secrets: Arc<dyn SecretStore>,
+    sink: Sink,
     pending: login::Pending,
 }
 
@@ -280,7 +326,7 @@ impl PendingSignIn {
             .second_factor(code)
             .await
             .map_err(sign_in_error)?;
-        advance(self.secrets, step).await
+        advance(self.sink, step).await
     }
 
     /// Submit the mailbox password, on an account that has one.
@@ -294,7 +340,7 @@ impl PendingSignIn {
             .mailbox_password(mailbox_password)
             .await
             .map_err(sign_in_error)?;
-        finish(Arc::clone(&self.secrets), unlocked).await
+        finish(self.sink.clone(), unlocked).await
     }
 }
 
@@ -302,11 +348,22 @@ impl PendingSignIn {
 #[derive(Clone)]
 pub struct AccountStore {
     secrets: Arc<dyn SecretStore>,
+    generation: Generation,
 }
 
 impl AccountStore {
     pub fn new(secrets: Arc<dyn SecretStore>) -> Self {
-        Self { secrets }
+        Self {
+            secrets,
+            generation: Generation::default(),
+        }
+    }
+
+    fn sink(&self) -> Sink {
+        Sink {
+            secrets: Arc::clone(&self.secrets),
+            generation: self.generation.clone(),
+        }
     }
 
     /// The address of the stored account, without touching the network.
@@ -333,7 +390,7 @@ impl AccountStore {
         )
         .await
         .map_err(sign_in_error)?;
-        advance(Arc::clone(&self.secrets), step).await
+        advance(self.sink(), step).await
     }
 
     /// The stored account, resumed, or `None` when nobody is signed in.
@@ -345,7 +402,12 @@ impl AccountStore {
             return Ok(None);
         };
         let session = ProtonApiSession::resume(client_configuration(), stored.resume_parameters())?;
-        persist_refreshed_tokens(&self.secrets, &session, stored.key_passphrases.clone());
+        persist_refreshed_tokens(
+            &self.sink(),
+            self.generation.current(),
+            &session,
+            stored.key_passphrases.clone(),
+        );
         let drive = ProtonDriveClient::with_key_passphrases(&session, stored.unlock());
         Ok(Some(account(session, drive)))
     }
@@ -353,12 +415,17 @@ impl AccountStore {
     /// Forget the account: end its session and delete what was stored.
     ///
     /// The stored session goes even when ending it fails — signing out on a
-    /// plane must still sign out.
+    /// plane must still sign out — and stays gone: a refresh the session
+    /// still makes afterwards is not written back.
     pub async fn sign_out(&self, account: Option<&Account>) -> Result<()> {
+        // Before ending it: ending the session can itself refresh the token.
+        self.generation
+            .advance(|| self.secrets.delete(SESSION_KEY))
+            .1?;
         if let Some(account) = account {
             account.end().await;
         }
-        Ok(self.secrets.delete(SESSION_KEY)?)
+        Ok(())
     }
 
     /// The stored session, or `None` for none — or for one this build cannot
@@ -378,15 +445,13 @@ impl AccountStore {
 }
 
 /// Where the shared sign-in stands, in this app's terms.
-async fn advance(secrets: Arc<dyn SecretStore>, step: Step) -> Result<SignIn> {
+async fn advance(sink: Sink, step: Step) -> Result<SignIn> {
     Ok(match step {
-        Step::SecondFactor(pending) => SignIn::SecondFactor(PendingSignIn { secrets, pending }),
-        Step::MailboxPassword(pending) => {
-            SignIn::MailboxPassword(PendingSignIn { secrets, pending })
-        }
+        Step::SecondFactor(pending) => SignIn::SecondFactor(PendingSignIn { sink, pending }),
+        Step::MailboxPassword(pending) => SignIn::MailboxPassword(PendingSignIn { sink, pending }),
         Step::Unlock(pending) => {
             let unlocked = pending.unlock().await.map_err(sign_in_error)?;
-            SignIn::Done(finish(secrets, unlocked).await?)
+            SignIn::Done(finish(sink, unlocked).await?)
         }
     })
 }
@@ -394,7 +459,7 @@ async fn advance(secrets: Arc<dyn SecretStore>, step: Step) -> Result<SignIn> {
 /// Store a finished sign-in and hand back the account.
 ///
 /// Only the key passphrases are stored; the passwords go no further.
-async fn finish(secrets: Arc<dyn SecretStore>, unlocked: login::Unlocked) -> Result<Account> {
+async fn finish(sink: Sink, unlocked: login::Unlocked) -> Result<Account> {
     let key_passphrases = unlocked
         .key_passphrases
         .iter()
@@ -409,8 +474,13 @@ async fn finish(secrets: Arc<dyn SecretStore>, unlocked: login::Unlocked) -> Res
         StoredSession::capture(unlocked.resume_parameters().await, key_passphrases.clone());
     let encoded = serde_json::to_string(&stored)
         .map_err(|e| Error::Config(format!("serialize the Proton session: {e}")))?;
-    secrets.set(SESSION_KEY, &encoded)?;
-    persist_refreshed_tokens(&secrets, &unlocked.session, key_passphrases);
+    // A new generation: the session this one replaces, if any, must not
+    // write its refreshes over it.
+    let (generation, stored_it) = sink
+        .generation
+        .advance(|| sink.secrets.set(SESSION_KEY, &encoded));
+    stored_it?;
+    persist_refreshed_tokens(&sink, generation, &unlocked.session, key_passphrases);
 
     let drive = ProtonDriveClient::with_key_passphrases(&unlocked.session, stored.unlock());
     Ok(account(unlocked.session, drive))
@@ -429,21 +499,31 @@ fn account(session: ProtonApiSession, drive: ProtonDriveClient) -> Account {
 ///
 /// Refresh tokens are single-use: once the HTTP client has spent the stored
 /// one, only the pair it got back can resume the session.
+///
+/// Only while `generation` is current: see [`Generation`].
 fn persist_refreshed_tokens(
-    secrets: &Arc<dyn SecretStore>,
+    sink: &Sink,
+    generation: u64,
     session: &ProtonApiSession,
     key_passphrases: HashMap<String, String>,
 ) {
-    let secrets = Arc::clone(secrets);
+    let sink = sink.clone();
     let template = session.clone();
     session.http().set_on_tokens_refreshed(move |tokens| {
         let stored = StoredSession::capture(
             template.resume_parameters_with(tokens),
             key_passphrases.clone(),
         );
-        let written = serde_json::to_string(&stored)
+        store_refreshed(&sink, generation, &stored);
+    });
+}
+
+/// Write one refreshed session, if its generation is still current.
+fn store_refreshed(sink: &Sink, generation: u64, stored: &StoredSession) {
+    sink.generation.write_if_current(generation, || {
+        let written = serde_json::to_string(stored)
             .map_err(|e| Error::Config(e.to_string()))
-            .and_then(|encoded| Ok(secrets.set(SESSION_KEY, &encoded)?));
+            .and_then(|encoded| Ok(sink.secrets.set(SESSION_KEY, &encoded)?));
         if let Err(error) = written {
             tracing::warn!(%error, "the refreshed Proton session could not be stored");
         }
@@ -536,6 +616,34 @@ mod tests {
         let store = AccountStore::new(secrets);
         store.sign_out(None).await.expect("sign out");
         assert_eq!(store.username().expect("read"), None);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_after_signing_out_does_not_sign_the_viewer_back_in() {
+        let store = AccountStore::new(Arc::new(MemorySecrets::default()));
+        let (generation, _) = store.generation.advance(|| ());
+        store_refreshed(&store.sink(), generation, &stored());
+        assert!(store.username().expect("read").is_some());
+
+        store.sign_out(None).await.expect("sign out");
+        store_refreshed(&store.sink(), generation, &stored());
+        assert_eq!(store.username().expect("read"), None);
+    }
+
+    #[test]
+    fn a_refresh_of_a_replaced_session_does_not_overwrite_the_new_one() {
+        let store = AccountStore::new(Arc::new(MemorySecrets::default()));
+        let (old, _) = store.generation.advance(|| ());
+        let (new, _) = store.generation.advance(|| ());
+        let mut newer = stored();
+        newer.username = "other@proton.me".to_owned();
+        store_refreshed(&store.sink(), new, &newer);
+
+        store_refreshed(&store.sink(), old, &stored());
+        assert_eq!(
+            store.username().expect("read").as_deref(),
+            Some("other@proton.me")
+        );
     }
 
     #[test]
