@@ -15,6 +15,22 @@
 use anyhow::Context;
 use pstr_core::config::AppDirs;
 
+// Laptops with an Intel or AMD iGPU beside a discrete GPU (NVIDIA Optimus, AMD
+// PowerXpress) start every program on the iGPU unless the exe exports these.
+// The window's GL context, and so every video frame, then lands on the iGPU,
+// and the discrete GPU's decoder is either idle or copies each frame across:
+// 4K HEVC 10-bit stuttered on an RTX 3050 laptop. The drivers read the
+// exports, not the values' use, so they only have to exist; build.rs passes
+// a .def file that exports them. Windows only, and nothing else reads them.
+#[cfg(windows)]
+#[used]
+#[unsafe(no_mangle)]
+pub static NvOptimusEnablement: u32 = 1;
+#[cfg(windows)]
+#[used]
+#[unsafe(no_mangle)]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
+
 fn main() -> anyhow::Result<()> {
     // Before anything else: a verification window is a child process of the
     // app, and must not claim the single instance or open a library.
