@@ -2,7 +2,8 @@
 
 The Android client lives in `android/`; its Rust boundary is
 `crates/pstr-android`. It targets Android 12 (API 31) and newer on
-`arm64-v8a` phones/tablets and `x86_64` emulators. Compose owns navigation and
+`arm64-v8a` phones and tablets, `armeabi-v7a` for the many Android TVs that run a
+32-bit userspace, and `x86_64` emulators. Compose owns navigation and
 screens, while UniFFI exposes the existing catalog, share, streaming, watch-state,
 and offline logic. Keep reusable behavior in the Rust crates rather than
 reimplementing it in Kotlin.
@@ -30,7 +31,7 @@ Install JDK 17, Android SDK Platform/Build Tools 36, NDK
 `30.0.16248370`, Rust 1.96, Gradle 8.13, and the native helpers:
 
 ```bash
-rustup target add aarch64-linux-android x86_64-linux-android
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 cargo install cargo-ndk --version 4.1.2 --locked
 ```
 

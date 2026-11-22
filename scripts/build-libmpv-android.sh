@@ -14,6 +14,7 @@ destination="$repo_root/android/app/build/generated/mpv"
 stamp="$revision $(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)"
 if [[ "$(cat "$destination/STAMP" 2>/dev/null)" == "$stamp" &&
       -f "$destination/jniLibs/arm64-v8a/libmpv.so" &&
+      -f "$destination/jniLibs/armeabi-v7a/libmpv.so" &&
       -f "$destination/jniLibs/x86_64/libmpv.so" &&
       -f "$destination/mpv-android-source-$revision.tar.gz" ]]; then
   echo "libmpv $revision is already staged in $destination"
@@ -95,7 +96,7 @@ ensure_lua_source
 (cd "$source_dir/buildscripts" && ./include/download-deps.sh)
 ensure_lua_source
 
-for arch in arm64 x86_64; do
+for arch in arm64 armv7l x86_64; do
   (cd "$source_dir/buildscripts" && ./buildall.sh --arch "$arch" mpv)
 done
 
@@ -190,6 +191,7 @@ cp "$source_dir/buildscripts/prefix/arm64/include/mpv/"*.h "$destination/include
 mkdir -p "$destination/include/libavcodec"
 cp "$source_dir/buildscripts/prefix/arm64/include/libavcodec/jni.h" "$destination/include/libavcodec/"
 stage_shared_dependency_closure arm64 arm64-v8a aarch64-linux-android
+stage_shared_dependency_closure armv7l armeabi-v7a arm-linux-androideabi
 stage_shared_dependency_closure x86_64 x86_64 x86_64-linux-android
 
 # `git archive` omits dependency working trees. Archive the pinned checkout and
