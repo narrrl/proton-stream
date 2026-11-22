@@ -150,6 +150,34 @@ The first hardware run also found four defects in the harness itself and five in
 the release build; they are [B43](#b43--the-acceptance-harness-could-not-run-against-the-shipping-build)
 and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
+### B66 — 4K HEVC 10-bit stuttered on a Windows laptop with an RTX 3050
+
+**Symptom.** 4K 10-bit episodes were close to unwatchable on a Windows laptop
+whose discrete GPU decodes them easily. 1080p played fine. Not reproduced
+here: no Windows hybrid-graphics machine to run it on.
+
+**Cause, as far as the code shows.** Two, either enough on its own.
+`proton-stream.exe` exported neither `NvOptimusEnablement` nor
+`AmdPowerXpressRequestHighPerformance`, so on a hybrid laptop the driver starts
+it on the iGPU: the window's GL context, which is where mpv renders every frame,
+lived there, and decoded 4K frames either stayed on the iGPU or crossed back to
+it. And the desktop player took the 48 MiB `demuxer-max-bytes` default, about
+five seconds of a 60-80 Mbit/s remux, so the 30 s read-ahead could never fill
+and any slow block stalled the picture.
+
+**Fix.** The exe exports both symbols (`src/main.rs`, through a `.def` file
+`build.rs` passes to the linker), and the desktop's mpv buffer ceiling is
+256 MiB (`playback.rs`, `DESKTOP_DEMUXER_BYTES`). That is above the 128 MiB
+block ring, which `PlayerConfig::demuxer_max_bytes` warned against for
+[B7](#b7--a-read-ahead-window-deeper-than-the-ring-evicted-its-own-blocks):
+that trap needs block read-ahead, and the app runs it at 0 since
+[B8](#b8--the-block-layers-read-ahead-made-playback-worse-once-mpv-was-in-front-of-it).
+mpv is then the only reader, sequential, and a block it has consumed is not
+read from the ring again, so evicting it costs nothing. Android keeps 48 MiB.
+
+**Verified.** The cross-built exe lists both exports (`objdump -p`). Playback
+on the laptop is still to be confirmed.
+
 ## Fixed
 
 ### B65 — the desktop app quit at start on a variable CJK font

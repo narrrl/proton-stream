@@ -579,6 +579,11 @@ fn is_styled(codec: Option<&str>) -> bool {
     matches!(codec, Some("ass" | "ssa"))
 }
 
+/// How far ahead mpv may buffer on the desktop. The player's 48 MiB default
+/// suits a phone, but a 4K remux runs 60-80 Mbit/s, so 48 MiB is about five
+/// seconds and the 30 s read-ahead never fills: one slow block and it stalls.
+/// 256 MiB covers ~30 s of 4K and ~3 min of 1080p, on top of the block ring.
+const DESKTOP_DEMUXER_BYTES: u64 = 256 * 1024 * 1024;
 /// The player defaults with the viewer's preferences folded in.
 fn from_prefs(
     prefs: &PlaybackPrefs,
@@ -598,6 +603,7 @@ fn from_prefs(
         // Carried from file to file, like the volume: somebody who watches at
         // 1.25 watches the next episode at 1.25 too.
         options: vec![("speed".into(), format!("{:.2}", prefs.speed))],
+        demuxer_max_bytes: Some(DESKTOP_DEMUXER_BYTES),
         ..PlayerConfig::default()
     }
 }

@@ -157,12 +157,14 @@ pub struct PlayerConfig {
     pub readahead_seconds: f64,
     /// Hard ceiling on that buffer.
     ///
-    /// Keep it comfortably under [`pstr_stream::DEFAULT_RING_BYTES`]. mpv's
-    /// buffer and our block read-ahead are stacked — mpv reads this far ahead of
-    /// the picture, and the block layer reads ahead of *that* — so the two
-    /// together are the resident working set. Sized larger than the ring, the
-    /// prefetch evicts its own blocks before the player reaches them, which is
-    /// the same trap `docs/BUGS.md` B7 records one layer down.
+    /// With block read-ahead on, keep it comfortably under
+    /// [`pstr_stream::DEFAULT_RING_BYTES`]. mpv's buffer and the block
+    /// read-ahead are then stacked — mpv reads this far ahead of the picture,
+    /// and the block layer reads ahead of *that* — and sized larger than the
+    /// ring, the prefetch evicts its own blocks before the player reaches them,
+    /// which is the trap `docs/BUGS.md` B7 records one layer down. With
+    /// [`READAHEAD_BLOCKS`] at 0, as the players run, mpv is the only reader and
+    /// this can exceed the ring: the desktop sets 256 MiB for 4K (B66).
     pub demuxer_max_bytes: Option<u64>,
     /// Start paused. Useful when the caller wants to seek to a resume position
     /// before the first frame.
