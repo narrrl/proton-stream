@@ -91,8 +91,18 @@ In the player, with the controls hidden:
 
 When **Skip intro**, **Up next** or the end of an episode appears, **OK** presses its button.
 
-Typing a share link on a remote is slow. Sign in instead, so that shares added on your phone
-arrive through sync, or send the link from a computer with `adb` ([Android](ANDROID.md#android-tv)).
+Typing a share link on a remote is slow, so **Add share** on a TV shows a QR code instead:
+
+1. Point your phone's camera at it. A page opens in the phone's browser.
+2. Paste the share link there, with its custom password if it has one, and send it.
+3. The TV opens the link and adds the share. If the link will not open, the page says why and
+   keeps what you pasted, so you can fix it on the phone.
+
+The phone needs nothing installed, only to be on the same network as the TV. The code works for
+ten minutes, or until a share is added. **Type it instead** opens the ordinary form.
+
+You can also sign in, so that shares added on your phone arrive through sync, or send the link
+from a computer with `adb` ([Android](ANDROID.md#android-tv)).
 
 ## Downloads
 

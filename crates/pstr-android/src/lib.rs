@@ -1255,6 +1255,91 @@ pub struct AndroidEngine {
     download_permits: Arc<tokio::sync::Semaphore>,
 }
 
+/// A QR code: `width` × `width` modules, row by row, `true` for dark. See
+/// `pstr_core::handoff::Qr`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct QrRecord {
+    pub width: u32,
+    pub dark: Vec<bool>,
+}
+
+/// A TV listening for a share link from a phone; see `pstr_core::handoff`.
+/// [`Self::stop`] it when the screen showing its code goes away.
+#[derive(uniffi::Object)]
+pub struct ShareHandoff {
+    handoff: Arc<pstr_core::handoff::Handoff>,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+#[uniffi::export]
+impl ShareHandoff {
+    /// The address the code carries, for showing as text beside it.
+    pub fn url(&self) -> String {
+        self.handoff.url().to_owned()
+    }
+
+    pub fn qr(&self) -> Result<QrRecord, BridgeError> {
+        let qr = self.handoff.qr().map_err(BridgeError::from_display)?;
+        Ok(QrRecord {
+            width: u32::try_from(qr.width).map_err(BridgeError::from_display)?,
+            dark: qr.dark,
+        })
+    }
+
+    /// The next link a phone sends, or `None` once the code has expired or
+    /// been closed. Answer it with [`HandoffOffer::reply`].
+    pub async fn next_offer(self: Arc<Self>) -> Option<Arc<HandoffOffer>> {
+        let handoff = Arc::clone(&self.handoff);
+        let offer = spawned(&self.runtime, async move { handoff.next().await })
+            .await
+            .ok()
+            .flatten()?;
+        Some(Arc::new(HandoffOffer {
+            name: offer.name.clone(),
+            url: offer.url.clone(),
+            custom_password: offer.custom_password.clone(),
+            offer: Mutex::new(Some(offer)),
+        }))
+    }
+
+    /// Stop listening. Not `close`: that is `AutoCloseable`'s in Kotlin.
+    pub fn stop(&self) {
+        self.handoff.close();
+    }
+}
+
+/// A link a phone sent. See `pstr_core::handoff::Offer`.
+#[derive(uniffi::Object)]
+pub struct HandoffOffer {
+    name: String,
+    url: String,
+    custom_password: Option<String>,
+    offer: Mutex<Option<pstr_core::handoff::Offer>>,
+}
+
+#[uniffi::export]
+impl HandoffOffer {
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    pub fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    pub fn custom_password(&self) -> Option<String> {
+        self.custom_password.clone()
+    }
+
+    /// Tell the phone: `None` once the share is added, otherwise why not,
+    /// which its page shows over the form. Only the first reply counts.
+    pub fn reply(&self, refusal: Option<String>) {
+        if let Some(offer) = self.offer.lock().take() {
+            offer.reply(refusal);
+        }
+    }
+}
+
 /// How many offline downloads transfer at once. See
 /// [`AndroidEngine::download_permits`]; the desktop runs three, a phone link
 /// is better served by two.
@@ -1684,6 +1769,19 @@ impl AndroidEngine {
         })
         .await
         .map_err(BridgeError::from_display)?
+    }
+
+    /// Listen on `host`, this device's address on its home network, for a
+    /// share link from a phone. See `pstr_core::handoff`.
+    pub fn start_share_handoff(&self, host: String) -> Result<Arc<ShareHandoff>, BridgeError> {
+        let host: std::net::IpAddr = host.parse().map_err(BridgeError::from_display)?;
+        let _runtime = self.runtime.enter();
+        let handoff =
+            pstr_core::handoff::Handoff::start(host).map_err(BridgeError::from_display)?;
+        Ok(Arc::new(ShareHandoff {
+            handoff: Arc::new(handoff),
+            runtime: Arc::clone(&self.runtime),
+        }))
     }
 
     /// Re-supply the link behind a share whose stored secret is unreadable.

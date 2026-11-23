@@ -56,6 +56,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 sha2 = "0.10"
 # The id a watch-history file is named by. Already in the tree through the SDK.
 getrandom = "0.3"
+# The QR code a TV shows for adding a share from a phone (`pstr-core::handoff`):
+# the module matrix only, which the front end draws.
+qrcode = { version = "0.15", default-features = false }
 # `bundled` so a Windows build needs no system SQLite.
 # The suite links one bundled SQLite (cargo allows one `links = "sqlite3"` per
 # graph), so this follows proton-rs.

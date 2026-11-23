@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import uniffi.pstr_android.QrRecord
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
@@ -120,6 +121,20 @@ class ScreenshotTest {
                 moreLike = MATCHED.titles.filter { it.key != SERIES.key },
             )
         }
+    }
+
+    @Test
+    @Config(qualifiers = RobolectricDeviceQualifiers.Television1080p)
+    fun `a television waiting for a share from a phone`() = capture("tv-phone-handoff") {
+        PhoneHandoffCard(
+            qr = FAKE_QR,
+            url = "http://192.168.1.20:41234/k3m9qx7tbw2a",
+            failure = null,
+            status = HandoffStatus.Refused("This link needs its custom password"),
+            onNewCode = {},
+            onTypeInstead = {},
+            onDismiss = {},
+        )
     }
 
     @Test
@@ -392,4 +407,28 @@ class ScreenshotTest {
             storage = StorageUsageRecord(6_400_000_000uL, 3uL, 0uL, 1_100_000_000uL),
         )
     }
+}
+
+/**
+ * Something with a QR code's corners and texture, without a native encoder:
+ * the three finder squares over a fixed scatter.
+ */
+private val FAKE_QR: QrRecord = run {
+    val width = 29
+    val finder = { x: Int, y: Int ->
+        listOf(0 to 0, width - 7 to 0, 0 to width - 7).any { (left, top) ->
+            val dx = x - left
+            val dy = y - top
+            dx in 0..6 && dy in 0..6 && (dx in listOf(0, 6) || dy in listOf(0, 6) || (dx in 2..4 && dy in 2..4))
+        }
+    }
+    val inFinder = { x: Int, y: Int -> (x < 8 && y < 8) || (x >= width - 8 && y < 8) || (x < 8 && y >= width - 8) }
+    QrRecord(
+        width.toUInt(),
+        List(width * width) { index ->
+            val x = index % width
+            val y = index / width
+            if (inFinder(x, y)) finder(x, y) else (x * 7 + y * 13 + x * y) % 5 < 2
+        },
+    )
 }

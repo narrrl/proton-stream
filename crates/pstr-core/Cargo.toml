@@ -11,7 +11,8 @@ authors.workspace = true
 [dependencies]
 proton-sdk.workspace = true
 proton-drive-rs.workspace = true
-tokio.workspace = true
+# `net` for the share hand-off's listener (`handoff`).
+tokio = { workspace = true, features = ["net"] }
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -26,6 +27,7 @@ proton-drive-tree-rs.workspace = true
 sha2.workspace = true
 parking_lot.workspace = true
 getrandom.workspace = true
+qrcode.workspace = true
 
 # The OS credential store on desktop. Android and iOS bring their own
 # keystore through `SecretStore`, so they do not link a keyring at all.

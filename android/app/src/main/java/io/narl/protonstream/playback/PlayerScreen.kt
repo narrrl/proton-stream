@@ -1,5 +1,6 @@
 package io.narl.protonstream.playback
 
+import io.narl.protonstream.native.reason
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.os.SystemClock
@@ -299,7 +300,7 @@ fun PlayerScreen(
                     .openSubtitles(episode.shareId, episode.linkId, startup.subtitleLanguage)
                 nativeHost.addSubtitles(key, files, startup.subtitles)
             }
-        }.onFailure { playbackError = it.message ?: "Playback failed" }
+        }.onFailure { playbackError = it.reason ?: "Playback failed" }
         opening = false
     }
 
