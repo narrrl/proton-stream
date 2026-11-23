@@ -5,32 +5,37 @@ import androidx.compose.material3.Shapes
 import androidx.compose.ui.unit.dp
 
 /**
- * One corner radius, which is the desktop client's corner radius.
+ * The suite's corner radii (`docs/DESIGN-TOKENS.md`), which are the desktop
+ * client's: `theme::radius` in pstr-app has the same numbers.
  *
- * `pstr-app` rounds every surface it paints to 8 — cards, buttons, the tab
- * pill, the progress bars — and only a badge over artwork is tighter, at 4.
  * Material's default ramp runs 4 / 8 / 12 / 16 / 28, so a stock Compose screen
- * puts a 28dp bottom sheet next to a 12dp card next to a fully-round button,
- * and none of those is the shape the other client draws.
- *
- * Flat rather than a ramp, therefore, with the two ends kept for the two cases
- * where a single radius is wrong: `extraSmall` for something small enough that
- * 8 would eat it, and `extraLarge` for a sheet whose corners meet the edge of
- * the screen and need to read as a lifted sheet rather than a seam.
+ * puts a 28dp bottom sheet next to a 12dp card, and neither is a shape the
+ * other client draws. Flatter than that, therefore: cards and tiles at 12,
+ * badges and chips at 6, and a sheet or a dialog at 16, which floats.
+ * Buttons are pills, [Pill], as on the desktop and the suite's websites.
  */
 internal val ProtonShapes = Shapes(
     extraSmall = RoundedCornerShape(CORNER_TIGHT.dp),
-    small = RoundedCornerShape(CORNER.dp),
+    small = RoundedCornerShape(CORNER_SMALL.dp),
     medium = RoundedCornerShape(CORNER.dp),
-    large = RoundedCornerShape(CORNER.dp),
+    large = RoundedCornerShape(CORNER_SHEET.dp),
     extraLarge = RoundedCornerShape(CORNER_SHEET.dp),
 )
 
-/** The radius `pstr-app` draws everything at. */
-internal const val CORNER = 8f
+/** Cards, tiles, rows: `theme::radius::MD`. */
+internal const val CORNER = 12f
 
-/** A badge over artwork — `theme::radius::BADGE` in pstr-app is the other place this number lives. */
-internal const val CORNER_TIGHT = 4f
+/** A small control inside something else, a text field: `theme::radius::SM`. */
+internal const val CORNER_SMALL = 8f
 
-/** A bottom sheet, which has no desktop counterpart. */
+/** A badge over artwork, a chip: `theme::radius::BADGE`. */
+internal const val CORNER_TIGHT = 6f
+
+/** A sheet, a dialog, the featured banner: `theme::radius::LG`. */
 internal const val CORNER_SHEET = 16f
+
+/** Something that floats over the page: `theme::radius::FLOAT`. */
+internal const val CORNER_FLOAT = 24f
+
+/** Buttons and the navigation pill: half the height, whatever the height. */
+internal val Pill = RoundedCornerShape(percent = 50)

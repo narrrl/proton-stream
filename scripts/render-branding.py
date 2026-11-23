@@ -247,6 +247,9 @@ def main():
         outputs["android/app/src/main/res/drawable/ic_gallery.xml"] = art.vector(256, 1)
     if app == "stream":
         outputs["android/app/src/main/res/drawable/ic_notification_stream.xml"] = art.vector(24, 24/256, monochrome=True)
+        # The mark inside the app: the Library's bar, About, an empty page.
+        # 64dp, its largest use; lint caps a vector at 200.
+        outputs["android/app/src/main/res/drawable/ic_stream_mark.xml"] = art.vector(64, .25)
         outputs["crates/pstr-app/assets/icon-256.png"] = render(desktop.decode(), 256)
         # F-Droid and IzzyOnDroid list the app with this icon.
         outputs["fastlane/metadata/android/en-US/images/icon.png"] = render(desktop.decode(), 512)

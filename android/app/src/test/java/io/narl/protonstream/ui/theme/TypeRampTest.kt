@@ -80,13 +80,21 @@ class TypeRampTest {
     }
 
     @Test
-    fun `every surface is drawn at the desktop's radius`() {
-        listOf(ProtonShapes.small, ProtonShapes.medium, ProtonShapes.large).forEach { shape ->
-            // `CornerSize` resolves against a size and a density, and neither is
-            // available to a unit test; `toString` is the only handle on the
-            // value that does not need a composition.
-            assertTrue("$shape is not radius $CORNER", shape.toString().contains("$CORNER"))
+    fun `every surface is drawn at the suite's radii, which are the desktop's`() {
+        // `CornerSize` resolves against a size and a density, and neither is
+        // available to a unit test; `toString` is the only handle on the
+        // value that does not need a composition.
+        mapOf(
+            ProtonShapes.extraSmall to CORNER_TIGHT,
+            ProtonShapes.small to CORNER_SMALL,
+            ProtonShapes.medium to CORNER,
+            ProtonShapes.large to CORNER_SHEET,
+            ProtonShapes.extraLarge to CORNER_SHEET,
+        ).forEach { (shape, radius) ->
+            assertTrue("$shape is not radius $radius", shape.toString().contains("$radius"))
         }
+        // pstr-app's `theme::radius`, restated: a change there fails here.
+        assertEquals(listOf(6f, 8f, 12f, 16f, 24f), listOf(CORNER_TIGHT, CORNER_SMALL, CORNER, CORNER_SHEET, CORNER_FLOAT))
     }
 
     /**

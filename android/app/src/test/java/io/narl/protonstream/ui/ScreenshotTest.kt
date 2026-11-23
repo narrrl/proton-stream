@@ -72,7 +72,7 @@ class ScreenshotTest {
     }
 
     private fun captureLight(name: String, content: @Composable () -> Unit) {
-        AppearanceState.apply(LATTE)
+        AppearanceState.apply(PROTON_LIGHT)
         capture(name, content)
     }
 
@@ -161,6 +161,15 @@ class ScreenshotTest {
     }
 
     @Test
+    @Config(qualifiers = "w360dp-h640dp-xhdpi")
+    fun `a title at twice the font size on a small phone`() = capture("title-small-phone-huge-font") {
+        val density = LocalDensity.current
+        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
+            TitleScreen(SERIES, true, { _, _ -> }, {}, {}, {}, { _, _ -> }, PaddingValues(), franchise = listOf(SERIES, SEQUEL))
+        }
+    }
+
+    @Test
     fun `an empty library`() = capture("library-empty") {
         LibraryScreen(AppUiState(loading = false), {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
     }
@@ -221,23 +230,24 @@ class ScreenshotTest {
         /** A home page whose every action goes nowhere. */
         val TV_ACTIONS = HomeActions({ _, _ -> }, {}, { _, _ -> }, { _, _ -> }, { _, _ -> }, {}, {})
 
-        /** Catppuccin Latte with the default accent, as `Palette::resolve` gives it. */
-        val LATTE = PaletteRecord(
-            background = 0xFFEFF1F5u,
-            surface = 0xFFE6E9EFu,
-            sunken = 0xFFDCE0E8u,
-            card = 0xFFCCD0DAu,
-            cardHover = 0xFFBCC0CCu,
-            border = 0xFFBCC0CCu,
-            text = 0xFF4C4F69u,
-            muted = 0xFF6C6F85u,
-            accent = 0xFF732FCCu,
-            accentAlt = 0xFF1856D1u,
-            accentDim = 0xFFC4BBE4u,
-            onAccent = 0xFFEFF1F5u,
-            danger = 0xFFD20F39u,
-            elevated = 0xFFAAAEBDu,
-            dangerDim = 0xFFE7D1D5u,
+        /** Proton Light with the default accent, as `Palette::resolve` gives it. */
+        val PROTON_LIGHT = PaletteRecord(
+            background = 0xFFFAF9FCu,
+            surface = 0xFFF4F1FAu,
+            sunken = 0xFFEBE7F3u,
+            card = 0xFFF1EEF8u,
+            cardHover = 0xFFE3DEEDu,
+            border = 0xFFE3DEEDu,
+            text = 0xFF1B1340u,
+            muted = 0xFF615970u,
+            accent = 0xFF6D4AFFu,
+            accentAlt = 0xFFB65BD6u,
+            accentDim = 0xFFCBC4FDu,
+            onAccent = 0xFFFAF9FCu,
+            danger = 0xFFB42339u,
+            elevated = 0xFFD4CCE1u,
+            dangerDim = 0xFFE9D8DCu,
+            highlight = 0xFFB47456u,
             light = true,
         )
 

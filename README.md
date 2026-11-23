@@ -57,7 +57,8 @@ the share links people send you, on Linux, Windows, Android, Android TV and iOS.
 - **Downloads** of an episode, a season or a show, to play offline.
 - **Android 12+ and Android TV** with Material 3, background audio and new-episode
   notifications; **iOS 17+** as a SwiftUI port for SideStore and AltStore.
-- **Themes:** a near-black default, four Catppuccin flavours and Persona 5, each with nine accents.
+- **Themes:** the Proton suite's dark and light palettes, four Catppuccin flavours and Persona 5,
+  each with ten accents.
 - **Full keyboard control** on the desktop, and the `pstr` command line.
 
 <table>

@@ -410,8 +410,8 @@ private struct AppearancePicker: View {
     @State private var choice: AppearanceRecord?
     @State private var swatches: [AccentChoice: Color] = [:]
 
-    private static let accents: [AccentChoice] = [.mauve, .pink, .sky, .pinkSky, .lavender, .blue, .teal, .peach, .red]
-    private static let flavors: [FlavorChoice] = [.proton, .latte, .frappe, .macchiato, .mocha, .persona5]
+    private static let accents: [AccentChoice] = [.mauve, .pink, .sky, .pinkSky, .lavender, .blue, .teal, .peach, .copper, .red]
+    private static let flavors: [FlavorChoice] = [.proton, .protonLight, .mocha, .macchiato, .frappe, .latte, .persona5]
     private static let names: [TitleNamesChoice] = [.library, .english, .romaji]
 
     var body: some View {
@@ -533,6 +533,7 @@ private extension FlavorChoice {
     var label: String {
         switch self {
         case .proton: "Proton"
+        case .protonLight: "Proton Light"
         case .latte: "Catppuccin Latte"
         case .frappe: "Catppuccin Frappé"
         case .macchiato: "Catppuccin Macchiato"
