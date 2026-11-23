@@ -9,15 +9,17 @@
 use crate::config::{AppDirs, read_json, write_json};
 use crate::error::Result;
 
-/// A palette family: Catppuccin's four, the one this app shipped with, and one
-/// borrowed from a menu screen.
+/// A palette family: the suite's two, Catppuccin's four, and one borrowed from
+/// a menu screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Flavor {
-    /// Near-black and Proton purple. The default, and the only one that is not
-    /// somebody else's palette.
+    /// Plum-black and the suite's violet, the colours Proton Drive, Proton
+    /// Gallery and their websites wear. The default.
     #[default]
     Proton,
+    /// The same violet on the suite's pale lavender page.
+    ProtonLight,
     /// Catppuccin Latte — the light one.
     Latte,
     Frappe,
@@ -28,8 +30,9 @@ pub enum Flavor {
 }
 
 impl Flavor {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Proton,
+        Self::ProtonLight,
         Self::Mocha,
         Self::Macchiato,
         Self::Frappe,
@@ -40,6 +43,7 @@ impl Flavor {
     pub fn label(self) -> &'static str {
         match self {
             Self::Proton => "Proton",
+            Self::ProtonLight => "Proton Light",
             Self::Latte => "Catppuccin Latte",
             Self::Frappe => "Catppuccin Frappé",
             Self::Macchiato => "Catppuccin Macchiato",
@@ -50,8 +54,9 @@ impl Flavor {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Proton => "Near-black, so the artwork is the only bright thing on screen",
-            Self::Latte => "Light. The only one that is",
+            Self::Proton => "Plum-black, so the artwork is the only bright thing on screen",
+            Self::ProtonLight => "Light, in the suite's pale lavender",
+            Self::Latte => "Light, Catppuccin's",
             Self::Frappe => "Dark, warm, the lowest contrast of the three",
             Self::Macchiato => "Dark, between Frappé and Mocha",
             Self::Mocha => "Dark, the deepest of Catppuccin's three",
@@ -59,13 +64,13 @@ impl Flavor {
         }
     }
 
-    /// Whether this flavour is a light theme. Latte, and only Latte.
+    /// Whether this flavour is a light theme: Proton Light and Latte.
     ///
     /// It decides more than the colours: egui keeps a style per theme and the
     /// platform draws the title bar from the window's own, so both have to be
     /// told which of the two this is.
     pub fn is_light(self) -> bool {
-        matches!(self, Self::Latte)
+        matches!(self, Self::ProtonLight | Self::Latte)
     }
 }
 
@@ -88,6 +93,9 @@ pub enum Accent {
     Blue,
     Teal,
     Peach,
+    /// The suite's copper, the metal behind every icon in it. On a
+    /// Catppuccin flavour, its peach taken towards its red.
+    Copper,
     /// The flavour's warning colour, used on purpose. Every flavour has one
     /// because everything here needs a colour for a failure, and in
     /// [`Flavor::Persona5`] it is the point of the palette rather than an
@@ -96,7 +104,7 @@ pub enum Accent {
 }
 
 impl Accent {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Mauve,
         Self::Pink,
         Self::Sky,
@@ -105,6 +113,7 @@ impl Accent {
         Self::Blue,
         Self::Teal,
         Self::Peach,
+        Self::Copper,
         Self::Red,
     ];
 
@@ -118,6 +127,7 @@ impl Accent {
             Self::Blue => "Blue",
             Self::Teal => "Teal",
             Self::Peach => "Peach",
+            Self::Copper => "Copper",
             Self::Red => "Red",
         }
     }
@@ -387,6 +397,10 @@ pub struct Palette {
     /// white-on-pastel is not readable at 13 px.
     pub on_accent: Rgb,
     pub danger: Rgb,
+    /// The small warm colour beside the accent: a new-episodes badge, a rating
+    /// star, a focus ring's inner edge. The suite's copper on the Proton
+    /// flavours. Never a fill under text, and never anything large.
+    pub highlight: Rgb,
     /// Whether this is a light theme.
     pub light: bool,
 }
@@ -426,25 +440,28 @@ const fn rgb(hex: u32) -> Rgb {
     )
 }
 
-/// The palette this app shipped with, extended to the hues an accent can be.
+/// The suite's palette (`docs/DESIGN-TOKENS.md`), extended to the hues an
+/// accent can be.
 ///
-/// Only `mauve` — Proton purple — and `red` are from the original; the rest are
-/// chosen to sit on a near-black base at roughly the saturation that one does,
-/// which is a good deal hotter than any Catppuccin flavour.
+/// The neutrals are the plum-tinted blacks the suite's websites use, `mauve`
+/// is its violet and `pink` the orchid its icons' faces run into, dark enough
+/// that white stays readable across the whole gradient. The rest are chosen to
+/// sit on the dark base at roughly the saturation the violet does, which is a
+/// good deal hotter than any Catppuccin flavour.
 const PROTON: Ramp = Ramp {
-    base: rgb(0x0e0e12),
-    mantle: rgb(0x17171d),
-    crust: rgb(0x0a0a0d),
-    surface0: rgb(0x1e1e26),
-    surface1: rgb(0x2a2a35),
-    subtext0: rgb(0x8e8e9c),
-    text: rgb(0xeaeaf0),
-    pink: rgb(0xff5fbe),
-    mauve: rgb(0x7d4dff),
+    base: rgb(0x100e17),
+    mantle: rgb(0x17141f),
+    crust: rgb(0x0b0910),
+    surface0: rgb(0x1e1a29),
+    surface1: rgb(0x2e283d),
+    subtext0: rgb(0xaaa4bd),
+    text: rgb(0xf4f2fa),
+    pink: rgb(0xb65bd6),
+    mauve: rgb(0x6d4aff),
     sky: rgb(0x4dd2ff),
     sapphire: rgb(0x3a8fc4),
     blue: rgb(0x3f6fe0),
-    lavender: rgb(0xa68cff),
+    lavender: rgb(0xa48bff),
     teal: rgb(0x3fd6b8),
     green: rgb(0x56d364),
     peach: rgb(0xff9a4d),
@@ -452,6 +469,35 @@ const PROTON: Ramp = Ramp {
     red: rgb(0xe05561),
     light: false,
 };
+
+/// The suite's light page: Proton Gallery's light scheme, with the same violet
+/// and orchid as [`PROTON`], which stay readable under the pale ink.
+const PROTON_LIGHT: Ramp = Ramp {
+    base: rgb(0xfaf9fc),
+    mantle: rgb(0xf4f1fa),
+    crust: rgb(0xebe7f3),
+    surface0: rgb(0xf1eef8),
+    surface1: rgb(0xe3deed),
+    subtext0: rgb(0x615970),
+    text: rgb(0x1b1340),
+    pink: rgb(0xb65bd6),
+    mauve: rgb(0x6d4aff),
+    sky: rgb(0x0a8fc7),
+    sapphire: rgb(0x1478a8),
+    blue: rgb(0x3b5bdb),
+    lavender: rgb(0x7b5cf0),
+    teal: rgb(0x0f8f7a),
+    green: rgb(0x2f9e44),
+    peach: rgb(0xd9711c),
+    yellow: rgb(0xb7860b),
+    red: rgb(0xb42339),
+    light: true,
+};
+
+/// The suite's copper: the lit band on dark pages, the deeper one on light.
+const COPPER_LIT: Rgb = rgb(0xd69b77);
+const COPPER: Rgb = rgb(0xb47456);
+const COPPER_DEEP: Rgb = rgb(0x8a4d36);
 
 const LATTE: Ramp = Ramp {
     base: rgb(0xeff1f5),
@@ -575,6 +621,7 @@ impl Ramp {
     const fn of(flavor: Flavor) -> Self {
         match flavor {
             Flavor::Proton => PROTON,
+            Flavor::ProtonLight => PROTON_LIGHT,
             Flavor::Latte => LATTE,
             Flavor::Frappe => FRAPPE,
             Flavor::Macchiato => MACCHIATO,
@@ -589,9 +636,10 @@ impl Ramp {
     /// gradient across half the spectrum passes through a colour that belongs
     /// to neither end, and on a seek bar that reads as a bug. The exception is
     /// [`Accent::PinkSky`], which is the whole point of that entry.
-    const fn accents(&self, accent: Accent) -> (Rgb, Rgb) {
+    fn accents(&self, flavor: Flavor, accent: Accent) -> (Rgb, Rgb) {
         match accent {
-            Accent::Mauve => (self.mauve, self.blue),
+            // The suite's violet runs into orchid, as its icons' faces do.
+            Accent::Mauve => (self.mauve, self.pink),
             Accent::Pink => (self.pink, self.mauve),
             Accent::Sky => (self.sky, self.sapphire),
             Accent::PinkSky => (self.pink, self.sky),
@@ -599,6 +647,10 @@ impl Ramp {
             Accent::Blue => (self.blue, self.sapphire),
             Accent::Teal => (self.teal, self.green),
             Accent::Peach => (self.peach, self.yellow),
+            Accent::Copper => match flavor {
+                Flavor::Proton | Flavor::ProtonLight => (COPPER, COPPER_DEEP),
+                _ => (mix(self.peach, self.red, 0.35), self.red),
+            },
             Accent::Red => (self.red, self.pink),
         }
     }
@@ -614,29 +666,31 @@ impl Palette {
         sunken: PROTON.crust,
         card: PROTON.surface0,
         card_hover: PROTON.surface1,
-        border: rgb(0x262630),
+        border: PROTON.surface1,
         text: PROTON.text,
         muted: PROTON.subtext0,
         accent: PROTON.mauve,
-        accent_alt: PROTON.blue,
-        accent_dim: rgb(0x5333ad),
+        accent_alt: PROTON.pink,
+        accent_dim: rgb(0x5338c4),
         on_accent: PROTON.text,
         danger: PROTON.red,
+        highlight: COPPER_LIT,
         light: false,
     };
 
     /// Resolve a choice into colours.
     pub fn resolve(appearance: Appearance) -> Self {
         let ramp = Ramp::of(appearance.flavor);
-        let (accent, partner) = ramp.accents(appearance.accent);
+        let (accent, partner) = ramp.accents(appearance.flavor, appearance.accent);
         // Catppuccin's Latte accents are tuned to be *read*, on a light page,
         // at body-text weight — which makes them mid-luminance, and a
         // mid-luminance fill is one that neither black nor white sits on. They
         // are taken down in value here, and only here: the hue and the
         // saturation are Latte's, so it still looks like Latte, and a label on
         // a button is legible.
+        let latte = appearance.flavor == Flavor::Latte;
         let deepen = |color: Rgb| {
-            if ramp.light {
+            if latte {
                 mix(color, Rgb::BLACK, 0.30)
             } else {
                 color
@@ -685,6 +739,12 @@ impl Palette {
             accent_dim: mix(accent, ramp.base, if ramp.light { 0.55 } else { 0.45 }),
             on_accent,
             danger: ramp.red,
+            highlight: match appearance.flavor {
+                Flavor::Proton => COPPER_LIT,
+                Flavor::ProtonLight => COPPER,
+                Flavor::Persona5 => ramp.yellow,
+                _ => deepen(ramp.peach),
+            },
             light: ramp.light,
         }
     }
@@ -789,9 +849,44 @@ mod tests {
     }
 
     #[test]
-    fn only_latte_is_a_light_theme() {
+    fn only_proton_light_and_latte_are_light_themes() {
         for flavor in Flavor::ALL {
-            assert_eq!(flavor.is_light(), flavor == Flavor::Latte);
+            assert_eq!(
+                flavor.is_light(),
+                matches!(flavor, Flavor::ProtonLight | Flavor::Latte)
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_palette_is_the_one_spelled_out_for_startup() {
+        assert_eq!(Palette::resolve(Appearance::default()), Palette::PROTON);
+    }
+
+    #[test]
+    fn the_suites_violet_wears_white_ink_on_both_proton_pages() {
+        for flavor in [Flavor::Proton, Flavor::ProtonLight] {
+            let palette = Palette::resolve(Appearance {
+                flavor,
+                ..Appearance::default()
+            });
+            assert_eq!(palette.accent, rgb(0x6d4aff), "{flavor:?}");
+            assert!(luminance(palette.on_accent) > 0.8, "{flavor:?}");
+        }
+    }
+
+    #[test]
+    fn copper_stays_a_highlight_the_page_can_see() {
+        for flavor in Flavor::ALL {
+            let palette = Palette::resolve(Appearance {
+                flavor,
+                ..Appearance::default()
+            });
+            assert!(
+                contrast(palette.highlight, palette.background) >= MIN_CONTRAST,
+                "{flavor:?}: {:.2}",
+                contrast(palette.highlight, palette.background),
+            );
         }
     }
 

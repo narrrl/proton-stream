@@ -46,6 +46,7 @@ class SchemeRolesTest {
         danger = 0xFF252627u,
         elevated = 0xFF28292Au,
         dangerDim = 0xFF2B2C2Du,
+        highlight = 0xFF2E2F30u,
         light = light,
     )
 

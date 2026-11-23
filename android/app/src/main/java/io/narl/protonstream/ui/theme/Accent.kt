@@ -59,12 +59,12 @@ internal fun accentBrush(): Brush {
 }
 
 /**
- * The primary button: the accent ramp, at the shared corner radius.
+ * The primary button: the accent ramp, as a pill.
  *
- * Material's filled button has its own shape token (`CornerFull`) that does not
- * read `MaterialTheme.shapes`, so the radius has to be handed to it — which is
- * the whole reason the plain buttons below exist as well. They add nothing but
- * that.
+ * Every button here is a [Pill], as on the desktop and the suite's websites.
+ * Material's own filled button is one too, but its tonal, outlined and text
+ * buttons each take a shape of their own, so the plain buttons below exist to
+ * hand them the same one — and so the next shape change is one line.
  */
 @Composable
 internal fun AccentButton(
@@ -73,7 +73,7 @@ internal fun AccentButton(
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
-    val shape = MaterialTheme.shapes.small
+    val shape = Pill
     // The button pads itself out to the 48dp minimum touch target, and a
     // background on its modifier fills that whole target — 8dp taller than
     // the 40dp container every other button draws. So the padding is taken
@@ -110,7 +110,7 @@ internal fun TonalButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
-    shape = MaterialTheme.shapes.small,
+    shape = Pill,
     content = content,
 )
 
@@ -124,7 +124,7 @@ internal fun EdgedButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
-    shape = MaterialTheme.shapes.small,
+    shape = Pill,
     content = content,
 )
 
@@ -138,7 +138,7 @@ internal fun QuietButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
-    shape = MaterialTheme.shapes.small,
+    shape = Pill,
     content = content,
 )
 
@@ -159,7 +159,7 @@ internal fun DangerButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
-    shape = MaterialTheme.shapes.small,
+    shape = Pill,
     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
     content = content,
 )

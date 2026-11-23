@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui.tv
 
+import io.narl.protonstream.ui.copperStar
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -298,7 +299,7 @@ private fun HeroText(title: TitleRecord, modifier: Modifier = Modifier) {
     ) {
         TitleName(title, Modifier.height(HERO_LOGO))
         Text(
-            heroLine(title),
+            copperStar(heroLine(title)),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

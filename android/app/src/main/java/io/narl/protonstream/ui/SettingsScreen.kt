@@ -49,6 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -127,6 +128,7 @@ internal fun SettingsScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var showMetadata by remember { mutableStateOf(false) }
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
+    val uriHandler = LocalUriHandler.current
     // One row per area on the first page, each opening its own page: grouped
     // on one page, the storage controls sat a long scroll below playback, and
     // every setting added made the rest harder to find.
@@ -304,10 +306,14 @@ internal fun SettingsScreen(
         }
         SettingsPage.About -> SettingsSubPage(SettingsPage.About, padding, back) {
             ListItem(
-                headlineContent = { Text("Proton Stream") },
+                leadingContent = { BrandMark(56.dp) },
+                headlineContent = { Text("Proton Stream", style = MaterialTheme.typography.titleLarge) },
                 supportingContent = { Text("Version $version") },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             )
+            SettingAction("The suite", "Proton Drive for Linux and Proton Gallery wear the same colours") {
+                uriHandler.openUri("https://proton-stream.narl.io")
+            }
             SettingAction("Licence", "GPL-3.0-or-later. Comes with absolutely no warranty.") {
                 legalDocument = LegalDocument("GNU GPL v3", "licenses/GPL-3.0.txt")
             }
@@ -664,6 +670,7 @@ private fun TitleNamesChoice.label() = when (this) {
 /** What each palette family is called. The desktop client says the same. */
 private fun FlavorChoice.label() = when (this) {
     FlavorChoice.PROTON -> "Proton"
+    FlavorChoice.PROTON_LIGHT -> "Proton Light"
     FlavorChoice.LATTE -> "Catppuccin Latte"
     FlavorChoice.FRAPPE -> "Catppuccin Frappé"
     FlavorChoice.MACCHIATO -> "Catppuccin Macchiato"

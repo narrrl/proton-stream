@@ -2,6 +2,35 @@
 
 What the desktop and Android clients agree on, and where each one keeps its copy.
 
+## The suite
+
+Proton Stream, Proton Gallery and Proton Drive for Linux, and their websites,
+share one look. This section is the same in each repository's copy. The icons
+follow `images/BRANDING.md`.
+
+| Token | Value |
+|---|---|
+| Dark page / raised / card / card hover / elevated | `#100E17` / `#17141F` / `#1E1A29` / `#2E283D` / `#3A324B` |
+| Dark text / muted | `#F4F2FA` / `#AAA4BD` |
+| Light page / bar / card / card hover | `#FAF9FC` / `#F4F1FA` / `#F1EEF8` / `#E3DEED` |
+| Light text / muted | `#1B1340` / `#615970` |
+| Violet (the accent) | `#6D4AFF`; 300 `#A48BFF`, 400 `#8A6DFF`, 600 `#5B36F2` |
+| Orchid (the accent's gradient partner) | `#B65BD6` |
+| Copper (the highlight) | `#D69B77` on dark, `#B47456` on light; 200 `#F2C9AA`, 700 `#703E30` |
+| Radii | 6 badge and chip, 8 small control, 12 card, 16 sheet, dialog and hero, 24 floating bar, pill for buttons and tabs |
+| Type | Inter; Inter Display for the largest size |
+
+**Violet** is the one strong colour, and marks what can be pressed. Where it is
+a gradient it runs into orchid, as the icons' faces do; white stays above 3:1
+along the whole run. **Copper** is the metal behind every icon. In the apps it
+is a highlight and nothing more: a new-episodes badge, a rating star, the
+inner edge of a focus ring. It is never a fill under body text and never a
+large area.
+
+In this repository the dark set is the **Proton** palette and the light set
+**Proton Light** (`pstr_core::appearance`). Copper is the palette's
+`highlight`, which every palette has: Catppuccin's peach, Persona 5's yellow.
+
 Colour needs no spec: `pstr_core::appearance` resolves one `Palette` and both
 clients read it, so a flavour is right in both places or wrong in both. The rest
 of the token set has no such bridge — Compose cannot consume a Rust constant, and
@@ -13,6 +42,7 @@ is the contract, and each side's copy is asserted against it by a test.
 | Colour roles | `pstr_core::appearance::Palette` | `ui/theme/Theme.kt` `schemeOf` | `SchemeRolesTest` |
 | Type ramp | `pstr_app::theme::Role` | `ui/theme/Type.kt` | `TypeRampTest` |
 | Corner radius | `pstr_app::theme::radius` | `ui/theme/Shape.kt` | `TypeRampTest` |
+| Highlight | `Palette::highlight` | `ui/theme/Theme.kt` `LocalBrand` | `appearance.rs` tests |
 | Gradient rule | `Palette::resolve` | — (derived, see below) | `appearance.rs` tests |
 | Depth | `pstr_app::theme::{tile_shadow, bar_shadow}` | Material elevation | — |
 | Spacing | `pstr_app::theme::space` | Compose `dp` literals | — |
@@ -29,7 +59,7 @@ screen and not for anything in a library grid).
 | Hero | 34 | the banner's name and a title page's name, where no logo stands in |
 | Display | 26 | the name of the thing you are looking at, once per page |
 | Title | 20 | an empty state, or a page heading with no display line |
-| Heading | 18 | the brand in the nav bar; a dialog's heading |
+| Heading | 18 | the name beside the mark in the nav bar; a dialog's heading |
 | Section | 17 | a run of content under a rule |
 | Subhead | 15 | a row that groups the rows under it — a season header |
 | Body | 14 | everything that is prose |
@@ -59,12 +89,27 @@ this module, and keep Material's sizes. Nothing in the app draws with them.
 
 ## Shape
 
-**Radius 8** (`radius::MD`) for everything either client paints: cards,
-buttons, the tab pill. **4** (`BADGE`) for a badge over artwork. The desktop
-also has **3** (`BAR`) for progress bars and edge strips, **6** (`SM`) for a
-small control inside something else, and **12** (`LG`) for what floats — row
-cards, dialogs, toasts. The library's banner is square: it runs edge to edge. **16** for an Android bottom sheet, which has
-no desktop counterpart.
+The suite's scale. **12** (`radius::MD`, Android `CORNER`) for cards, tiles
+and rows. **6** (`BADGE`, `CORNER_TIGHT`) for a badge over artwork or a chip,
+**8** (`SM`, `CORNER_SMALL`) for a small control inside something else, **16**
+(`LG`, `CORNER_SHEET`) for what floats over the page — dialogs, toasts, sheets
+— and **24** (`FLOAT`, `CORNER_FLOAT`) for the desktop's top bar. Buttons, tabs
+and the search box are **pills** (`radius::PILL`, Android `Pill`, iOS
+`Capsule`). The desktop also has **3** (`BAR`) for progress bars and edge
+strips. The library's banner is square: it runs edge to edge.
+
+## The mark inside the app
+
+The top bar on the desktop, the Library's bar on Android, About on both, and
+every empty page show the app's mark from `images/logo.svg`: the desktop
+through `assets/icon-256.png`, Android through the generated
+`drawable/ic_stream_mark.xml`. On an empty page it is faint, at about 40%.
+
+## Focus
+
+A control that has the keyboard's or the remote's focus wears a ring of the
+accent with the copper highlight just inside it (`theme::focus_ring` on the
+desktop). It is drawn outside the control, so it never covers what it marks.
 
 ## A picture's colour
 

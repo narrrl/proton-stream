@@ -5,6 +5,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -68,6 +71,25 @@ object AppearanceState {
     }
 }
 
+/**
+ * The colours of the suite that Material has no role for.
+ *
+ * [highlight] is the copper behind every icon in the suite: a new-episodes
+ * badge, a rating star, the inner edge of a focus ring. Small things only —
+ * never a fill under text and never anything large, which is why it is not
+ * handed to Material as `tertiary`, where a stock component could paint a
+ * whole container with it.
+ */
+@Immutable
+data class Brand(val highlight: Color, val onHighlight: Color)
+
+val LocalBrand = staticCompositionLocalOf { brandOf(ProtonFallback) }
+
+internal fun brandOf(palette: PaletteRecord) = Brand(
+    highlight = color(palette.highlight),
+    onHighlight = if (palette.light) Color.White else color(palette.background),
+)
+
 @Composable
 fun ProtonStreamTheme(content: @Composable () -> Unit) {
     val palette by AppearanceState.palette.collectAsState()
@@ -75,8 +97,16 @@ fun ProtonStreamTheme(content: @Composable () -> Unit) {
     // with — a theme file that cannot be read must never be a reason the
     // library does not open.
     LaunchedEffect(Unit) { AppearanceState.load() }
+    val resolved = palette ?: ProtonFallback
+    CompositionLocalProvider(LocalBrand provides brandOf(resolved)) {
+        Themed(resolved, content)
+    }
+}
+
+@Composable
+private fun Themed(palette: PaletteRecord, content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = schemeOf(palette ?: ProtonFallback),
+        colorScheme = schemeOf(palette),
         // The other two thirds of what the clients share. Colour was already
         // one resolved answer for both; type and shape were Material's defaults
         // here and named constants there, which is most of why the two read as
@@ -203,20 +233,21 @@ private fun color(argb: UInt) = Color(argb.toInt())
  * place. The values are `pstr_core::appearance::Palette::PROTON`.
  */
 internal val ProtonFallback = PaletteRecord(
-    background = 0xFF0E0E12u,
-    surface = 0xFF17171Du,
-    sunken = 0xFF0A0A0Du,
-    card = 0xFF1E1E26u,
-    cardHover = 0xFF2A2A35u,
-    border = 0xFF262630u,
-    text = 0xFFEAEAF0u,
-    muted = 0xFF8E8E9Cu,
-    accent = 0xFF7D4DFFu,
-    accentAlt = 0xFF3F6FE0u,
-    accentDim = 0xFF5333ADu,
-    onAccent = 0xFFEAEAF0u,
+    background = 0xFF100E17u,
+    surface = 0xFF17141Fu,
+    sunken = 0xFF0B0910u,
+    card = 0xFF1E1A29u,
+    cardHover = 0xFF2E283Du,
+    border = 0xFF2E283Du,
+    text = 0xFFF4F2FAu,
+    muted = 0xFFAAA4BDu,
+    accent = 0xFF6D4AFFu,
+    accentAlt = 0xFFB65BD6u,
+    accentDim = 0xFF5338C4u,
+    onAccent = 0xFFF4F2FAu,
     danger = 0xFFE05561u,
-    elevated = 0xFF333340u,
-    dangerDim = 0xFF7F2F37u,
+    elevated = 0xFF3A324Bu,
+    dangerDim = 0xFF7F2F38u,
+    highlight = 0xFFD69B77u,
     light = false,
 )

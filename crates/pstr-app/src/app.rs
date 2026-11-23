@@ -2307,13 +2307,8 @@ impl App {
     ) {
         ui.horizontal(|ui| {
             ui.add_space(theme::space::XS);
-            ui.label(
-                theme::Role::Heading
-                    .rich("proton-stream")
-                    .strong()
-                    .color(theme::accent()),
-            );
-            ui.add_space(theme::space::L);
+            ui::brand(ui, 26.0);
+            ui.add_space(theme::space::XL);
 
             let on_library = matches!(
                 self.page,
@@ -2631,17 +2626,33 @@ impl eframe::App for App {
                     .flatten(),
             };
 
-            const NAV_MARGIN: egui::Vec2 = egui::vec2(14.0, 10.0);
+            const NAV_MARGIN: egui::Vec2 = egui::vec2(14.0, 8.0);
+            // Around the bar rather than inside it: the bar floats over the
+            // page, a rounded slab with the page showing at its ends.
+            const NAV_FLOAT: egui::Margin = egui::Margin {
+                left: 12,
+                right: 12,
+                top: 10,
+                bottom: 6,
+            };
             egui::Panel::top("nav")
                 .resizable(false)
+                // The bar is its own rounded slab; a rule under the band it
+                // floats in would draw a seam across the top of the banner.
+                .show_separator_line(false)
                 // No fill: the bar is a gradient, and a `Frame` only takes a
                 // colour. It is painted below, into a shape reserved before the
                 // contents are laid out — which is the only point at which the
                 // height they came to is known.
-                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(
-                    NAV_MARGIN.x as i8,
-                    NAV_MARGIN.y as i8,
-                )))
+                .frame(
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin::symmetric(
+                            NAV_MARGIN.x as i8,
+                            NAV_MARGIN.y as i8,
+                        ))
+                        .outer_margin(NAV_FLOAT)
+                        .fill(theme::background()),
+                )
                 .show(ui, |ui| {
                     let shadow = ui.painter().add(egui::Shape::Noop);
                     let background = ui.painter().add(egui::Shape::Noop);
@@ -2661,7 +2672,8 @@ impl eframe::App for App {
                     // — is clipped away.
                     ui.painter().with_clip_rect(ui.ctx().viewport_rect()).set(
                         shadow,
-                        theme::bar_shadow(true).as_shape(bar, egui::CornerRadius::ZERO),
+                        theme::bar_shadow(true)
+                            .as_shape(bar, egui::CornerRadius::same(theme::radius::FLOAT)),
                     );
                 });
             self.search = search;

@@ -1,5 +1,9 @@
 package io.narl.protonstream.ui.tv
 
+import io.narl.protonstream.ui.theme.CORNER_SHEET
+import io.narl.protonstream.ui.theme.CORNER_TIGHT
+import io.narl.protonstream.ui.theme.CORNER
+import io.narl.protonstream.ui.theme.LocalBrand
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -75,8 +79,8 @@ internal val POSTER_WIDTH = 124.dp
 /** Continue watching: a frame of the episode, wide enough to read across a room. */
 internal val WIDE_WIDTH = 248.dp
 
-/** tv-material's own card corners, which the outline has to follow. */
-private val CARD_SHAPE = RoundedCornerShape(8.dp)
+/** The suite's card corners, given to tv-material's cards and to the outline that follows them. */
+private val CARD_SHAPE = RoundedCornerShape(CORNER.dp)
 
 /** How much a focused card grows: noticeable, without hiding its neighbours. */
 private const val FOCUSED_SCALE = 1.08f
@@ -84,7 +88,12 @@ private const val FOCUSED_SCALE = 1.08f
 /** The outline a focused card wears: the accent, as on the phone's D-pad focus. */
 @Composable
 internal fun focusBorder(shape: Shape = CARD_SHAPE) = Border(
-    border = BorderStroke(3.dp, MaterialTheme.colorScheme.border),
+    // The accent running into the suite's copper, the two metals of its
+    // icons: what says "this one" from across the room.
+    border = BorderStroke(
+        3.dp,
+        Brush.linearGradient(listOf(MaterialTheme.colorScheme.border, LocalBrand.current.highlight)),
+    ),
     shape = shape,
 )
 
@@ -113,6 +122,7 @@ internal fun PosterCard(
                 .returnsFocus(title.key)
                 .onMenuKey(onMenu)
                 .onFocusChanged { if (it.isFocused) onFocus(title) },
+            shape = CardDefaults.shape(CARD_SHAPE),
             scale = CardDefaults.scale(focusedScale = FOCUSED_SCALE),
             border = CardDefaults.border(focusedBorder = focusBorder()),
         ) {
@@ -160,6 +170,7 @@ internal fun EpisodeCard(
                 .aspectRatio(16f / 9f)
                 .onMenuKey(onMenu)
                 .onFocusChanged { if (it.isFocused) onFocus(title) },
+            shape = CardDefaults.shape(CARD_SHAPE),
             scale = CardDefaults.scale(focusedScale = FOCUSED_SCALE),
             border = CardDefaults.border(focusedBorder = focusBorder()),
         ) {
@@ -203,10 +214,11 @@ private fun Badge(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onPrimary,
+        // News wears the suite's copper, as on the phone.
+        color = LocalBrand.current.onHighlight,
         maxLines = 1,
         modifier = modifier
-            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+            .background(LocalBrand.current.highlight, RoundedCornerShape(CORNER_TIGHT.dp))
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
@@ -340,7 +352,7 @@ internal class MenuEntry(val icon: ImageVector, val label: String, val onClick: 
 internal fun TvMenu(heading: String, detail: String?, entries: List<MenuEntry>, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(CORNER_SHEET.dp),
             colors = SurfaceDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             modifier = Modifier.width(MENU_WIDTH),
         ) {

@@ -1,5 +1,8 @@
 package io.narl.protonstream.ui
 
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.TextAutoSize
 import android.content.Intent
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -255,14 +258,16 @@ internal fun TitleScreen(
                         Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text(
-                        listOfNotNull(
-                            title.formatLabel,
+                        copperStar(
+                            listOfNotNull(
+                                title.formatLabel,
                             title.seasonLabel ?: (title.metadataYear ?: title.year)?.toString(),
                             // A series' running time is its episodes', which each row says.
                             title.runtime?.takeIf { title.kind == TitleType.FILM }?.let(::formatRuntime),
                             title.rating?.let { "★ %.1f".format(it) },
                             "${title.watchedCount} of ${title.episodeCount} watched".takeIf { title.episodeCount > 1uL },
-                        ).joinToString("  ·  "),
+                            ).joinToString("  ·  "),
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
@@ -781,12 +786,17 @@ private fun TitleAction(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(icon, contentDescription = null)
+        // Four or five of these share a phone's width. At a large font size a
+        // label breaks at its space ("Start / over") or shrinks to fit, rather
+        // than ending as "Start …", which says nothing.
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp),
+            textAlign = TextAlign.Center,
+            // A one-word label shrinks; it never breaks inside the word.
+            maxLines = if (' ' in label) 2 else 1,
+            autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = MaterialTheme.typography.labelMedium.fontSize),
+            modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
         )
     }
 }

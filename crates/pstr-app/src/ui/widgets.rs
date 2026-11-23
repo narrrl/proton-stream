@@ -101,12 +101,7 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
         painter.circle_filled(egui::pos2(knob, track.center().y), TRACK.y / 2.0 - 3.0, ink);
 
         if response.has_focus() {
-            painter.rect_stroke(
-                track.expand(2.0),
-                CornerRadius::same((TRACK.y / 2.0 + 2.0) as u8),
-                Stroke::new(1.5, theme::accent()),
-                egui::StrokeKind::Outside,
-            );
+            theme::focus_ring(painter, track, CornerRadius::same(theme::radius::PILL));
         }
 
         let position = egui::pos2(track.right() + gap, rect.center().y - galley.size().y / 2.0);
@@ -166,6 +161,13 @@ pub fn watched_mark(ui: &mut egui::Ui, watched: bool) -> egui::Response {
             ];
             painter.line(points.to_vec(), Stroke::new(1.8, ink));
         }
+    }
+    if response.has_focus() {
+        theme::focus_ring(
+            ui.painter(),
+            response.rect,
+            CornerRadius::same(theme::radius::PILL),
+        );
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -278,9 +280,13 @@ pub fn segmented<T: Copy + PartialEq>(
                             theme::accent()
                         } else {
                             Color32::TRANSPARENT
-                        })
-                        .stroke(Stroke::NONE);
-                    if ui.add(button).clicked() && !selected {
+                        });
+                    // No stroke override: egui takes each state's stroke
+                    // width out of the padding, so overriding it made a
+                    // focused segment 4px narrower and the row jump. Its
+                    // own stroke is the focus ring (`theme::apply`).
+                    let response = ui.add(button);
+                    if response.clicked() && !selected {
                         picked = Some(*value);
                     }
                 }
@@ -387,6 +393,13 @@ pub fn download_button(ui: &mut egui::Ui, glyph: DownloadGlyph) -> egui::Respons
             );
         }
     }
+    if response.has_focus() {
+        theme::focus_ring(
+            ui.painter(),
+            response.rect,
+            CornerRadius::same(theme::radius::PILL),
+        );
+    }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -467,9 +480,10 @@ pub fn link_chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
     } else {
         theme::card_hover().gamma_multiply(0.8)
     };
-    if response.has_focus() {
-        prepared.frame.stroke = egui::Stroke::new(1.5, theme::accent());
-    }
+    let rect = prepared.frame.fill_rect(prepared.content_ui.min_rect());
     prepared.paint(ui);
+    if response.has_focus() {
+        theme::focus_ring(ui.painter(), rect, CornerRadius::same(theme::radius::LG));
+    }
     response
 }

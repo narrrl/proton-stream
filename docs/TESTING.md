@@ -215,14 +215,15 @@ across fails here rather than being noticed in a screenshot.
 records — Library on a phone, a tablet, at font scale 1.5, while loading and
 empty; a title on a phone and a tablet; History on a phone and a tablet; Shares;
 the Settings index and its Playback and Storage pages; Downloads with a season
-saved and empty; and the library and a title again in Catppuccin Latte — and
+saved and empty; the library and a title again in Proton Light; and a title on
+a 360dp phone at twice the font size — and
 `check` compares them with the images in `app/src/test/screenshots`. A layout
 regression compiles and passes everything else; here it fails, and the review
 shows the changed image. After a deliberate change, `gradlew
 recordRoborazziDebug` rewrites the images and they are committed with it.
 Artwork loading is switched off (`LocalArtworkLoading`), so every tile shows
 its generated placeholder whatever the timing, and the palette is the shipped
-default except in the Latte captures.
+default except in the Proton Light captures.
 
 **Instrumentation tests** (`app/src/androidTest`) are the things with no host
 equivalent:

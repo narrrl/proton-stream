@@ -316,6 +316,7 @@ pub enum MetadataProvider {
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum FlavorChoice {
     Proton,
+    ProtonLight,
     Latte,
     Frappe,
     Macchiato,
@@ -334,6 +335,7 @@ pub enum AccentChoice {
     Blue,
     Teal,
     Peach,
+    Copper,
     Red,
 }
 
@@ -497,6 +499,8 @@ pub struct PaletteRecord {
     /// `danger` taken down towards the page, for an error *container* rather
     /// than error ink.
     pub danger_dim: u32,
+    /// The small warm colour: badges, a rating star, a focus ring's inner edge.
+    pub highlight: u32,
     pub light: bool,
 }
 
@@ -3806,6 +3810,7 @@ fn appearance_record(appearance: Appearance) -> AppearanceRecord {
     AppearanceRecord {
         flavor: match appearance.flavor {
             Flavor::Proton => FlavorChoice::Proton,
+            Flavor::ProtonLight => FlavorChoice::ProtonLight,
             Flavor::Latte => FlavorChoice::Latte,
             Flavor::Frappe => FlavorChoice::Frappe,
             Flavor::Macchiato => FlavorChoice::Macchiato,
@@ -3821,6 +3826,7 @@ fn appearance_record(appearance: Appearance) -> AppearanceRecord {
             Accent::Blue => AccentChoice::Blue,
             Accent::Teal => AccentChoice::Teal,
             Accent::Peach => AccentChoice::Peach,
+            Accent::Copper => AccentChoice::Copper,
             Accent::Red => AccentChoice::Red,
         },
         gradients: appearance.gradients,
@@ -3866,6 +3872,7 @@ fn appearance_choice(record: AppearanceRecord) -> Appearance {
     Appearance {
         flavor: match record.flavor {
             FlavorChoice::Proton => Flavor::Proton,
+            FlavorChoice::ProtonLight => Flavor::ProtonLight,
             FlavorChoice::Latte => Flavor::Latte,
             FlavorChoice::Frappe => Flavor::Frappe,
             FlavorChoice::Macchiato => Flavor::Macchiato,
@@ -3881,6 +3888,7 @@ fn appearance_choice(record: AppearanceRecord) -> Appearance {
             AccentChoice::Blue => Accent::Blue,
             AccentChoice::Teal => Accent::Teal,
             AccentChoice::Peach => Accent::Peach,
+            AccentChoice::Copper => Accent::Copper,
             AccentChoice::Red => Accent::Red,
         },
         gradients: record.gradients,
@@ -3918,6 +3926,7 @@ fn palette_record(record: &AppearanceRecord) -> PaletteRecord {
         danger: palette.danger.argb(),
         elevated: elevated.argb(),
         danger_dim: danger_dim.argb(),
+        highlight: palette.highlight.argb(),
         light: palette.light,
     }
 }

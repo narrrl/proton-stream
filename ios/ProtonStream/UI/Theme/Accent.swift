@@ -27,7 +27,7 @@ struct ProtonButtonStyle: ButtonStyle {
             .background { fill }
             .overlay {
                 if kind == .edged {
-                    RoundedRectangle(cornerRadius: Corner.standard)
+                    Capsule()
                         .strokeBorder(enabled ? scheme.outline : scheme.onSurface.opacity(0.12))
                 }
             }
@@ -46,7 +46,8 @@ struct ProtonButtonStyle: ButtonStyle {
     }
 
     @ViewBuilder private var fill: some View {
-        let shape = RoundedRectangle(cornerRadius: Corner.standard)
+        // A capsule, as on the desktop, Android and the suite's websites.
+        let shape = Capsule()
         switch kind {
         case .accent:
             if enabled { shape.fill(scheme.accentGradient) } else { shape.fill(scheme.onSurface.opacity(0.12)) }

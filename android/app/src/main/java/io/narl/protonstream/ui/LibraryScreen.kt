@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import io.narl.protonstream.ui.theme.LocalBrand
 import androidx.compose.foundation.background
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -267,7 +268,7 @@ internal fun LibraryScreen(
                 SearchBar(state.query, onSearch, closeSearch)
             } else if (!overBanner) {
                 LargeTopAppBar(
-                    title = { Text("Library") },
+                    title = { BrandTitle("Library") },
                     actions = actions,
                     colors = pageBarColors(),
                     scrollBehavior = scroll,
@@ -826,7 +827,17 @@ private fun BarOverBanner(grid: LazyGridState, actions: @Composable RowScope.() 
     val scheme = MaterialTheme.colorScheme
     val ink = lerp(Color.White, scheme.onSurface, solid)
     TopAppBar(
-        title = { Text("Library", modifier = Modifier.graphicsLayer { alpha = solid }) },
+        // The mark stays over the picture, the way a streaming app signs its
+        // home page; the page's name arrives with the bar.
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BrandMark(28.dp)
+                Text(
+                    "Library",
+                    modifier = Modifier.padding(start = 10.dp).graphicsLayer { alpha = solid },
+                )
+            }
+        },
         actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = scheme.surfaceContainer.copy(alpha = solid),
@@ -965,10 +976,12 @@ private fun FeaturedPage(
                 HeroName(title.displayName, ink)
             }
             Text(
-                listOfNotNull(
-                    title.rating?.let { "★ %.1f".format(it) },
-                    title.genres.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
-                ).joinToString("  ·  ").ifEmpty { title.caption() },
+                copperStar(
+                    listOfNotNull(
+                        title.rating?.let { "★ %.1f".format(it) },
+                        title.genres.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
+                    ).joinToString("  ·  ").ifEmpty { title.caption() },
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = ink.copy(alpha = 0.8f),
             )
@@ -1135,12 +1148,14 @@ private fun PosterTile(
                     badge,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    // News wears the suite's copper rather than the accent,
+                    // which already marks what can be pressed.
+                    color = LocalBrand.current.onHighlight,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(6.dp)
-                        .clip(MaterialTheme.shapes.small)
-                        .background(MaterialTheme.colorScheme.primary)
+                        .clip(MaterialTheme.shapes.extraSmall)
+                        .background(LocalBrand.current.highlight)
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }

@@ -5,14 +5,14 @@ Drive, Stream, and Gallery share frontal violet–pink faces, shallow metallic c
 | App | Mark |
 | --- | --- |
 | Proton Drive for Linux | Open folder with lilac documents |
-| Proton Stream | Rounded play prism |
+| Proton Stream | Rounded play prism with lilac and pink currents flowing toward its point |
 | Proton Gallery | Stacked photo plates, mountains, and a copper sun |
 
 ## Master artwork
 
-Edit `images/logo.svg`. It uses a 256-unit grid with transparent margins, a `mark` group, and reusable linear gradients. The copper backing extends six units up and right. SVG paths, rounded rectangles, circles, strokes, translation, and the photo clip are retained when exporting Android VectorDrawables. Unsupported SVG features cause generation to fail rather than silently change the artwork.
+Edit `images/logo.svg`. It uses a 256-unit grid with transparent margins, a `mark` group, and reusable linear gradients. The copper backing extends six units up and right. SVG paths, rounded rectangles, circles, strokes, translation, and clip paths (Gallery's photo, Stream's prism) are retained when exporting Android VectorDrawables. Unsupported SVG features cause generation to fail rather than silently change the artwork.
 
-Earlier artwork is preserved in `images/branding-archive/`. The new assets replace the active branding without removing previous designs.
+Earlier artwork is preserved in `images/branding-archive/`; `logo-before-current.svg` is the plain prism Stream used before its currents. The new assets replace the active branding without removing previous designs.
 
 ## Regeneration
 
@@ -21,13 +21,13 @@ python scripts/render-branding.py
 python scripts/render-branding.py --check
 ```
 
-Requires Python 3, librsvg (`rsvg-convert`), and ImageMagick (`magick`). Stream's TV banner also requires fontconfig and DejaVu Sans. Keep the generator identical across the three repositories; every checkout renders independently and requires no sibling checkout. Edit the canonical master rather than generated platform assets.
+Requires Python 3, librsvg (`rsvg-convert`), and ImageMagick (`magick`). Stream's TV banner sets its name in the Inter files bundled in `crates/pstr-app/assets/fonts`, through a fontconfig that sees only them, so the installed fonts cannot change it. Keep the generator identical across the three repositories; every checkout renders independently and requires no sibling checkout. Edit the canonical master rather than generated platform assets.
 
 ## Platform treatment
 
 - Desktop SVGs and PNGs retain transparent margins and the exact approved geometry. The same colored artwork works on light and dark surfaces.
-- Android adaptive icons use a pale lavender full-bleed background and a separate foreground containing the complete object. The 256-unit canvas maps to the central 64dp of the 108dp adaptive canvas; the painted geometry stays within the central safe circle. Android supplies the outer mask.
-- Themed launcher icons and Stream's status-bar notification icon use a white silhouette without colored bevel highlights.
+- Android adaptive icons use a deep violet full-bleed plate, lit from the top left like the copper rim, and a separate foreground containing the complete object. The 256-unit canvas maps to the central 64dp of the 108dp adaptive canvas; the painted geometry stays within the central safe circle. Android supplies the outer mask.
+- Themed launcher icons and Stream's status-bar notification icon use a white silhouette without colored bevel highlights. Stream's currents sit inside the prism, so its silhouette is the plain play shape.
 - iOS uses the same play prism over an opaque pale lavender square, exported at 1024px. The system supplies the corner mask.
 - The Android TV banner pairs the play prism with the full Proton Stream name.
 

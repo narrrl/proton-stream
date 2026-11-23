@@ -375,6 +375,30 @@ pub fn muted(text: impl Into<String>) -> egui::RichText {
     theme::Role::Caption.rich(text).color(theme::muted())
 }
 
+/// A line of facts — `Series · ★ 8.4 · Drama` — in [`muted`], with the rating
+/// star in the warm highlight: the one bit of copper on a title's page.
+pub fn facts(text: &str) -> egui::text::LayoutJob {
+    let star = egui_phosphor::regular::STAR;
+    let font = theme::Role::Caption.font();
+    let mut job = egui::text::LayoutJob::default();
+    let mut rest = text;
+    while let Some(at) = rest.find(star) {
+        job.append(
+            &rest[..at],
+            0.0,
+            egui::TextFormat::simple(font.clone(), theme::muted()),
+        );
+        job.append(
+            star,
+            0.0,
+            egui::TextFormat::simple(font.clone(), theme::highlight()),
+        );
+        rest = &rest[at + star.len()..];
+    }
+    job.append(rest, 0.0, egui::TextFormat::simple(font, theme::muted()));
+    job
+}
+
 /// The one button style that means "this is the action".
 pub fn accent_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     filled(ui, text, Fill::Accent, Vec2::new(0.0, 0.0))
@@ -584,7 +608,15 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, width: f32) -> egui::Respo
 /// to do about it.
 pub fn empty_state(ui: &mut egui::Ui, heading: &str, body: &str) {
     ui.vertical_centered(|ui| {
-        ui.add_space(96.0);
+        ui.add_space(72.0);
+        // The mark, faint: the page is empty, not broken, and it is still
+        // this app's page.
+        let mark = theme::brand_mark(ui.ctx());
+        ui.add(
+            egui::Image::new((mark.id(), Vec2::splat(64.0)))
+                .tint(Color32::WHITE.gamma_multiply(0.35)),
+        );
+        ui.add_space(theme::space::L);
         ui.label(theme::Role::Title.rich(heading).strong());
         ui.add_space(theme::space::S);
         ui.label(muted(body));
@@ -725,7 +757,7 @@ pub fn tabs(ui: &mut egui::Ui, id: egui::Id, items: &[(&str, bool)]) -> Option<u
         );
         ui.painter().set(
             pill,
-            theme::accent_shape(ui.ctx(), rect, CornerRadius::same(theme::radius::MD)),
+            theme::accent_shape(ui.ctx(), rect, CornerRadius::same(theme::radius::PILL)),
         );
     }
 
@@ -767,7 +799,7 @@ fn filled(ui: &mut egui::Ui, text: &str, fill: Fill, extra: Vec2) -> egui::Respo
         return response;
     }
 
-    let radius = CornerRadius::same(theme::radius::MD);
+    let radius = CornerRadius::same(theme::radius::PILL);
     // Eased rather than switched, so the veil arrives over a few frames instead
     // of appearing whole the moment the pointer crosses the edge. The press is
     // quicker than the hover: a click should feel like it registered, not like
@@ -835,7 +867,27 @@ fn filled(ui: &mut egui::Ui, text: &str, fill: Fill, extra: Vec2) -> egui::Respo
 
     let position = rect.center() - galley.size() / 2.0;
     ui.painter().galley(position, galley, ink);
+    if response.has_focus() {
+        theme::focus_ring(ui.painter(), rect, radius);
+    }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The mark and the name, as the top bar and the About page show them.
+/// `size` is the mark's height; the name is set to sit beside it.
+pub fn brand(ui: &mut egui::Ui, size: f32) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = theme::space::M;
+        let mark = theme::brand_mark(ui.ctx());
+        ui.add(egui::Image::new((mark.id(), Vec2::splat(size))));
+        let role = if size >= 48.0 {
+            theme::Role::Display
+        } else {
+            theme::Role::Heading
+        };
+        ui.label(role.rich("Proton Stream").strong().color(theme::text()));
+    })
+    .response
 }
 
 /// What a tile shows.
@@ -848,6 +900,9 @@ pub struct Card<'a> {
     pub progress: Option<f32>,
     /// A short label in the corner — `S01E04`.
     pub badge: Option<String>,
+    /// Whether the badge is news — `3 new` — and wears the warm highlight
+    /// rather than dark glass.
+    pub badge_warm: bool,
     /// How wide to draw it.
     ///
     /// A grid flexes this so its rows reach the right edge of the window; a
@@ -982,18 +1037,24 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
 
     if let Some(badge) = &card.badge {
         let anchor = image_rect.right_top() + Vec2::new(-8.0, 8.0);
-        let galley =
-            painter.layout_no_wrap(badge.clone(), theme::Role::Micro.font(), Color32::WHITE);
+        let (fill, ink) = if card.badge_warm {
+            let palette = theme::palette();
+            let ink = if palette.light {
+                Color32::WHITE
+            } else {
+                palette.background
+            };
+            (palette.highlight, ink)
+        } else {
+            (Color32::from_black_alpha(180), Color32::WHITE)
+        };
+        let galley = painter.layout_no_wrap(badge.clone(), theme::Role::Micro.font(), ink);
         let background = Rect::from_min_size(
-            anchor - Vec2::new(galley.size().x + 10.0, 0.0),
-            galley.size() + Vec2::new(10.0, 4.0),
+            anchor - Vec2::new(galley.size().x + 12.0, 0.0),
+            galley.size() + Vec2::new(12.0, 4.0),
         );
-        painter.rect_filled(
-            background,
-            CornerRadius::same(theme::radius::BADGE),
-            Color32::from_black_alpha(180),
-        );
-        painter.galley(background.min + Vec2::new(5.0, 2.0), galley, Color32::WHITE);
+        painter.rect_filled(background, CornerRadius::same(theme::radius::BADGE), fill);
+        painter.galley(background.min + Vec2::new(6.0, 2.0), galley, ink);
     }
 
     if let Some(progress) = card.progress {
@@ -1040,12 +1101,9 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
         );
     }
     if focus > 0.0 {
-        painter.rect_stroke(
-            image_rect.expand(3.0),
-            CornerRadius::same(theme::radius::MD + 3),
-            Stroke::new(2.0, theme::text().gamma_multiply(focus)),
-            egui::StrokeKind::Outside,
-        );
+        let mut faded = painter.clone();
+        faded.multiply_opacity(focus);
+        theme::focus_ring(&faded, image_rect.expand(2.0), radius);
     }
 
     let text_rect = Rect::from_min_size(

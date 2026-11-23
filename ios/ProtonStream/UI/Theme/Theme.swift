@@ -91,6 +91,10 @@ struct Scheme: Equatable {
     let surfaceContainer: Color
     let surfaceContainerHigh: Color
     let surfaceContainerHighest: Color
+    /// The suite's copper — a new-episodes badge, a rating star — which no
+    /// Material role carries. Android's `LocalBrand`.
+    let highlight: Color
+    let onHighlight: Color
 
     init(_ palette: PaletteRecord) {
         light = palette.light
@@ -141,6 +145,8 @@ struct Scheme: Equatable {
         surfaceContainer = argb(palette.card)
         surfaceContainerHigh = argb(palette.cardHover)
         surfaceContainerHighest = argb(palette.elevated)
+        highlight = argb(palette.highlight)
+        onHighlight = palette.light ? .white : argb(palette.background)
     }
 
     var colorScheme: ColorScheme { light ? .light : .dark }
@@ -167,21 +173,22 @@ func argb(_ value: UInt32) -> Color {
 /// The shipped default, spelled out for the case where Rust cannot be asked.
 /// The values are `pstr_core::appearance::Palette::PROTON`.
 let protonFallback = PaletteRecord(
-    background: 0xFF0E_0E12,
-    surface: 0xFF17_171D,
-    sunken: 0xFF0A_0A0D,
-    card: 0xFF1E_1E26,
-    cardHover: 0xFF2A_2A35,
-    border: 0xFF26_2630,
-    text: 0xFFEA_EAF0,
-    muted: 0xFF8E_8E9C,
-    accent: 0xFF7D_4DFF,
-    accentAlt: 0xFF3F_6FE0,
-    accentDim: 0xFF53_33AD,
-    onAccent: 0xFFEA_EAF0,
+    background: 0xFF10_0E17,
+    surface: 0xFF17_141F,
+    sunken: 0xFF0B_0910,
+    card: 0xFF1E_1A29,
+    cardHover: 0xFF2E_283D,
+    border: 0xFF2E_283D,
+    text: 0xFFF4_F2FA,
+    muted: 0xFFAA_A4BD,
+    accent: 0xFF6D_4AFF,
+    accentAlt: 0xFFB6_5BD6,
+    accentDim: 0xFF53_38C4,
+    onAccent: 0xFFF4_F2FA,
     danger: 0xFFE0_5561,
-    elevated: 0xFF33_3340,
-    dangerDim: 0xFF7F_2F37,
+    elevated: 0xFF3A_324B,
+    dangerDim: 0xFF7F_2F38,
+    highlight: 0xFFD6_9B77,
     light: false
 )
 
@@ -196,10 +203,13 @@ extension EnvironmentValues {
     }
 }
 
-/// One corner radius, which is the desktop client's corner radius: 8 for
-/// everything, 4 for a badge over artwork, 16 for a sheet.
+/// The suite's corner radii, which are the desktop client's and Android's
+/// `Shape.kt`: 12 for cards and tiles, 8 for a small control, 6 for a badge,
+/// 16 for a sheet, 24 for something floating. Buttons are capsules.
 enum Corner {
-    static let standard: CGFloat = 8
-    static let tight: CGFloat = 4
+    static let standard: CGFloat = 12
+    static let small: CGFloat = 8
+    static let tight: CGFloat = 6
     static let sheet: CGFloat = 16
+    static let float: CGFloat = 24
 }

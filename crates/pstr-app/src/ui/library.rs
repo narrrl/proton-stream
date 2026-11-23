@@ -607,7 +607,7 @@ fn hero_text(
         }
         facts.extend(found.genres.iter().take(3).cloned());
     }
-    ui.label(ui::muted(facts.join("  ·  ")));
+    ui.label(ui::facts(&facts.join("  ·  ")));
     ui.add_space(theme::space::XXS);
     if ui::logo_heading(ui, art, title, 120.0).is_none() {
         // Two lines before it gives up: a long romanised name cut to one at
@@ -779,6 +779,7 @@ fn shelf_row(
                             .get(&title.key)
                             .cloned()
                             .or_else(|| countdown(art, title, now)),
+                        badge_warm: view.badges.contains_key(&title.key),
                         width,
                         aspect,
                     },
@@ -845,6 +846,7 @@ fn continue_row(
                         subtitle: remaining,
                         progress: episode.progress().map(|value| value as f32),
                         badge: episode.numbering(),
+                        badge_warm: false,
                         // A shelf that scrolls sideways has no right edge
                         // to reach, so nothing to flex to. Always a
                         // still: it is a frame from where they stopped.
@@ -928,6 +930,7 @@ fn grid(
                             .get(&title.key)
                             .cloned()
                             .or_else(|| folded.map(|more| format!("+{more}"))),
+                        badge_warm: view.badges.contains_key(&title.key),
                         width: grid.width,
                         aspect,
                     },

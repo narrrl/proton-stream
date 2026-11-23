@@ -1,5 +1,7 @@
 package io.narl.protonstream.ui.tv
 
+import io.narl.protonstream.ui.copperStar
+import io.narl.protonstream.ui.theme.CORNER
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -121,7 +123,7 @@ internal fun TvTitle(
                     Column(Modifier.padding(start = TV_SIDE)) {
                         TitleName(title, Modifier.fillMaxWidth(HEADER_WIDTH).height(TITLE_LOGO))
                         Text(
-                            heroLine(title),
+                            copperStar(heroLine(title)),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 8.dp),
@@ -304,7 +306,7 @@ private fun EpisodeLine(
             .padding(horizontal = TV_SIDE - EPISODE_INSET)
             .fillMaxWidth(EPISODE_WIDTH)
             .onMenuKey(onMenu),
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(CORNER.dp)),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -314,7 +316,7 @@ private fun EpisodeLine(
             focusedContentColor = MaterialTheme.colorScheme.onSurface,
         ),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
-        border = ClickableSurfaceDefaults.border(focusedBorder = focusBorder(RoundedCornerShape(12.dp))),
+        border = ClickableSurfaceDefaults.border(focusedBorder = focusBorder(RoundedCornerShape(CORNER.dp))),
     ) {
         Row(Modifier.padding(EPISODE_INSET), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(STILL_WIDTH).aspectRatio(16f / 9f)) {

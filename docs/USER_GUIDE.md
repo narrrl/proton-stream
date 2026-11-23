@@ -251,10 +251,10 @@ The **Proton account** section on this page is where you sign in. See
 
 **Appearance**
 
-- **Palette:** Proton (the near-black default), Catppuccin Latte, Frappé, Macchiato and Mocha, or
-  Persona 5.
-- **Accent:** Mauve, Pink, Sky, Pink → Sky, Lavender, Blue, Teal, Peach or Red. **Gradient
-  accent** draws it as a gradient.
+- **Palette:** Proton (the default, plum-black like Proton Drive and Proton Gallery), Proton
+  Light, Catppuccin Latte, Frappé, Macchiato and Mocha, or Persona 5.
+- **Accent:** Mauve (the suite's violet), Pink, Sky, Pink → Sky, Lavender, Blue, Teal, Peach,
+  Copper or Red. **Gradient accent** draws it as a gradient; Mauve runs into orchid.
 - **Text size:** 90% to 150%. This one stays on this computer.
 - **Library tiles:** posters or stills. **Title names:** as in the share, English or romaji.
 

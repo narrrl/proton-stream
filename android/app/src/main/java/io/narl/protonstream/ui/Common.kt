@@ -1,5 +1,14 @@
 package io.narl.protonstream.ui
 
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
+import io.narl.protonstream.ui.theme.LocalBrand
+import io.narl.protonstream.R
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.Image
 import android.net.ConnectivityManager
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -123,10 +132,50 @@ internal fun Modifier.sharedArt(key: String): Modifier {
     }
 }
 
+/**
+ * The app's mark, drawn from the same master as the launcher icon
+ * (`images/logo.svg`, through `scripts/render-branding.py`).
+ */
+@Composable
+internal fun BrandMark(size: Dp, modifier: Modifier = Modifier, alpha: Float = 1f) {
+    Image(
+        painterResource(R.drawable.ic_stream_mark),
+        contentDescription = null,
+        modifier = modifier.size(size),
+        alpha = alpha,
+    )
+}
+
+/**
+ * A line of facts with its rating star in the suite's copper: the one warm
+ * mark on a title, as on the desktop.
+ */
+@Composable
+internal fun copperStar(text: String): AnnotatedString {
+    val copper = LocalBrand.current.highlight
+    return buildAnnotatedString {
+        text.split('★').forEachIndexed { index, part ->
+            if (index > 0) withStyle(SpanStyle(color = copper)) { append('★') }
+            append(part)
+        }
+    }
+}
+
+/** A page title with the mark before it: the Library's, which is the home page. */
+@Composable
+internal fun BrandTitle(title: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        BrandMark(32.dp)
+        Text(title, modifier = Modifier.padding(start = 12.dp))
+    }
+}
+
 @Composable
 internal fun EmptyState(title: String, body: String, action: Pair<String, () -> Unit>? = null) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(Modifier.padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            // Faint: the page is empty, not broken, and it is still this app's.
+            BrandMark(56.dp, Modifier.padding(bottom = 16.dp), alpha = 0.4f)
             Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
             Text(
                 body,
