@@ -25,7 +25,9 @@
 //!   [`Player`] it renders is shared with the thread polling events.
 //! * **The render context must outlive nothing and predecease the core.** It is
 //!   freed in `Drop`, and the `Arc<Player>` held here is what guarantees the mpv
-//!   handle is still alive when that happens.
+//!   handle is still alive when that happens. That handle is usually the last
+//!   one, and destroying a core joins its threads and closes its audio, so it is
+//!   let go on a thread of its own rather than on the UI's (B69).
 //! * **`render` must not block.** Left to itself mpv waits inside it until the
 //!   frame's display time, which would peg the UI thread at the video's frame
 //!   rate. [`crate::VideoOutput::Embedded`] sets `video-timing-offset` to 0 to
@@ -55,8 +57,9 @@ type UpdateHook = Box<dyn Fn() + Send + Sync>;
 pub struct VideoRenderer {
     ctx: NonNull<libmpv2_sys::mpv_render_context>,
     /// Keeps the mpv core alive: freeing the render context after the core is
-    /// gone is undefined, and this makes that unrepresentable.
-    _player: Arc<Player>,
+    /// gone is undefined, and this makes that unrepresentable. Only `None` once
+    /// `Drop` has freed the context and handed the core on.
+    player: Option<Arc<Player>>,
     /// Kept alive because mpv may resolve further GL entry points long after
     /// construction, when the video chain reconfigures.
     _loader: Box<GlLoader>,
@@ -120,10 +123,17 @@ impl VideoRenderer {
         let ctx = NonNull::new(ctx).ok_or(Error::RenderContext)?;
         Ok(Self {
             ctx,
-            _player: player,
+            player: Some(player),
             _loader: loader,
             hook: None,
         })
+    }
+
+    /// The player this renders. Holding a clone past this renderer's drop is
+    /// how a caller destroys the core on its own thread after all — at exit,
+    /// where a teardown thread could outlive the process.
+    pub fn player(&self) -> Option<&Arc<Player>> {
+        self.player.as_ref()
     }
 
     /// Ask to be told when there is a new frame to draw.
@@ -237,6 +247,33 @@ impl Drop for VideoRenderer {
             // SAFETY: allocated in `on_update`, and now unreachable from mpv.
             drop(unsafe { Box::from_raw(hook) });
         }
+        if let Some(player) = self.player.take() {
+            release_elsewhere(player);
+        }
+    }
+}
+
+/// Let go of what is usually the last handle to an mpv core, off this thread.
+///
+/// The render context is gone by now, so nothing about the core is tied to the
+/// GL thread any more — but `mpv_destroy` waits for the core to wind down,
+/// demuxer and audio output included, and on the UI thread that was a frozen
+/// window for up to a second at the end of every episode (B69). Spawning a
+/// thread costs microseconds; if even that fails, the drop happens here, as it
+/// always used to.
+fn release_elsewhere(player: Arc<Player>) {
+    let spawned = std::thread::Builder::new()
+        .name("mpv-teardown".into())
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            drop(player);
+            tracing::debug!(
+                "released an mpv core in {} ms",
+                started.elapsed().as_millis()
+            );
+        });
+    if let Err(error) = spawned {
+        tracing::warn!("release mpv on its own thread: {error}; releasing it here");
     }
 }
 
