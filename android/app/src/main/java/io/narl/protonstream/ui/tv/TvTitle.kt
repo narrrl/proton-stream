@@ -110,135 +110,137 @@ internal fun TvTitle(
 
     Box(Modifier.fillMaxSize()) {
         PageBackdrop(title, height = 0.85f)
-        LazyColumn(
-            state = page,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = TV_TOP + 24.dp, bottom = TV_TOP),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item(key = "header") {
-                Column(Modifier.padding(start = TV_SIDE)) {
-                    TitleName(title, Modifier.fillMaxWidth(HEADER_WIDTH).height(TITLE_LOGO))
-                    Text(
-                        heroLine(title),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                    statusText(title)?.let { (text, _) ->
+        ScrollsJustEnough {
+            LazyColumn(
+                state = page,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = TV_TOP + 24.dp, bottom = TV_TOP),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item(key = "header") {
+                    Column(Modifier.padding(start = TV_SIDE)) {
+                        TitleName(title, Modifier.fillMaxWidth(HEADER_WIDTH).height(TITLE_LOGO))
                         Text(
-                            text,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
-                    title.overview?.let {
-                        Text(
-                            it,
+                            heroLine(title),
                             style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 4,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth(HEADER_WIDTH).padding(top = 12.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                        statusText(title)?.let { (text, _) ->
+                            Text(
+                                text,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
+                        title.overview?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 4,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth(HEADER_WIDTH).padding(top = 12.dp),
+                            )
+                        }
+                        Row(
+                            Modifier.padding(top = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Button(
+                                onClick = { actions.onPlay(nextUp) },
+                                enabled = playerReady && playlist.isNotEmpty(),
+                                modifier = Modifier.focusRequester(play),
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    when {
+                                        !playerReady -> "Player loading…"
+                                        upNext == null -> "Play"
+                                        upNext.resumeAt != null -> "Resume ${upNext.label}"
+                                        title.watchedCount > 0uL -> "Continue with ${upNext.label}"
+                                        playlist.size == 1 -> "Play"
+                                        else -> "Play ${upNext.label}"
+                                    },
+                                    maxLines = 1,
+                                )
+                            }
+                            // Only where it would do something different: an unstarted
+                            // show already starts at the beginning.
+                            if (upNext?.resumeAt != null || title.watchedCount > 0uL) {
+                                OutlinedButton(onClick = { actions.onPlay(0) }, enabled = playerReady) {
+                                    Icon(Icons.Default.Replay, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Start over", maxLines = 1)
+                                }
+                            }
+                            OutlinedButton(onClick = { actions.onSetOnList(title, !title.onList) }) {
+                                Icon(if (title.onList) Icons.Default.Check else Icons.Default.Add, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("My List", maxLines = 1)
+                            }
+                            val allWatched = title.episodeCount > 0uL && title.watchedCount == title.episodeCount
+                            OutlinedButton(onClick = { actions.onSetTitleWatched(title, !allWatched) }) {
+                                Icon(
+                                    if (allWatched) Icons.Default.CheckCircle else Icons.Outlined.CheckCircle,
+                                    contentDescription = null,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(if (allWatched) "Watched" else "Mark watched", maxLines = 1)
+                            }
+                        }
+                    }
+                }
+                if (title.seasons.size > 1) {
+                    item(key = "seasons") {
+                        Row(
+                            Modifier.padding(start = TV_SIDE, top = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            title.seasons.forEachIndexed { index, it ->
+                                FilterChip(selected = index == seasonIndex, onClick = { seasonIndex = index }) {
+                                    Text(it.label)
+                                }
+                            }
+                        }
+                    }
+                }
+                season?.let { shown ->
+                    // Counted across seasons, which is how the player and the menu's
+                    // "up to here" count.
+                    val offset = title.seasons.take(seasonIndex).sumOf { it.episodes.size }
+                    itemsIndexed(shown.episodes, key = { _, it -> "${it.shareId}/${it.linkId}" }) { index, episode ->
+                        EpisodeLine(
+                            episode,
+                            episode.heading(index),
+                            enabled = playerReady,
+                            onPlay = { actions.onPlay(offset + index) },
+                            onMenu = { menuFor = episode },
+                            modifier = Modifier.padding(top = if (index == 0) 16.dp else 0.dp),
                         )
                     }
-                    Row(
-                        Modifier.padding(top = 20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Button(
-                            onClick = { actions.onPlay(nextUp) },
-                            enabled = playerReady && playlist.isNotEmpty(),
-                            modifier = Modifier.focusRequester(play),
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                when {
-                                    !playerReady -> "Player loading…"
-                                    upNext == null -> "Play"
-                                    upNext.resumeAt != null -> "Resume ${upNext.label}"
-                                    title.watchedCount > 0uL -> "Continue with ${upNext.label}"
-                                    playlist.size == 1 -> "Play"
-                                    else -> "Play ${upNext.label}"
-                                },
-                                maxLines = 1,
-                            )
-                        }
-                        // Only where it would do something different: an unstarted
-                        // show already starts at the beginning.
-                        if (upNext?.resumeAt != null || title.watchedCount > 0uL) {
-                            OutlinedButton(onClick = { actions.onPlay(0) }, enabled = playerReady) {
-                                Icon(Icons.Default.Replay, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Start over", maxLines = 1)
-                            }
-                        }
-                        OutlinedButton(onClick = { actions.onSetOnList(title, !title.onList) }) {
-                            Icon(if (title.onList) Icons.Default.Check else Icons.Default.Add, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("My List", maxLines = 1)
-                        }
-                        val allWatched = title.episodeCount > 0uL && title.watchedCount == title.episodeCount
-                        OutlinedButton(onClick = { actions.onSetTitleWatched(title, !allWatched) }) {
-                            Icon(
-                                if (allWatched) Icons.Default.CheckCircle else Icons.Outlined.CheckCircle,
-                                contentDescription = null,
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(if (allWatched) "Watched" else "Mark watched", maxLines = 1)
-                        }
-                    }
                 }
-            }
-            if (title.seasons.size > 1) {
-                item(key = "seasons") {
-                    Row(
-                        Modifier.padding(start = TV_SIDE, top = 24.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        title.seasons.forEachIndexed { index, it ->
-                            FilterChip(selected = index == seasonIndex, onClick = { seasonIndex = index }) {
-                                Text(it.label)
+                if (franchise.size > 1) {
+                    item(key = "franchise") {
+                        CardRow("In this franchise", Modifier.padding(top = 24.dp)) {
+                            items(franchise, key = { it.key }) { other ->
+                                PosterCard(
+                                    other,
+                                    { if (other.key != title.key) actions.onOpenTitle(other) },
+                                    { titleMenu = other },
+                                )
                             }
                         }
                     }
                 }
-            }
-            season?.let { shown ->
-                // Counted across seasons, which is how the player and the menu's
-                // "up to here" count.
-                val offset = title.seasons.take(seasonIndex).sumOf { it.episodes.size }
-                itemsIndexed(shown.episodes, key = { _, it -> "${it.shareId}/${it.linkId}" }) { index, episode ->
-                    EpisodeLine(
-                        episode,
-                        episode.heading(index),
-                        enabled = playerReady,
-                        onPlay = { actions.onPlay(offset + index) },
-                        onMenu = { menuFor = episode },
-                        modifier = Modifier.padding(top = if (index == 0) 16.dp else 0.dp),
-                    )
-                }
-            }
-            if (franchise.size > 1) {
-                item(key = "franchise") {
-                    CardRow("In this franchise", Modifier.padding(top = 24.dp)) {
-                        items(franchise, key = { it.key }) { other ->
-                            PosterCard(
-                                other,
-                                { if (other.key != title.key) actions.onOpenTitle(other) },
-                                { titleMenu = other },
-                            )
-                        }
-                    }
-                }
-            }
-            if (moreLike.isNotEmpty()) {
-                item(key = "more-like") {
-                    CardRow("More like this", Modifier.padding(top = 24.dp)) {
-                        items(moreLike, key = { it.key }) { other ->
-                            PosterCard(other, { actions.onOpenTitle(other) }, { titleMenu = other })
+                if (moreLike.isNotEmpty()) {
+                    item(key = "more-like") {
+                        CardRow("More like this", Modifier.padding(top = 24.dp)) {
+                            items(moreLike, key = { it.key }) { other ->
+                                PosterCard(other, { actions.onOpenTitle(other) }, { titleMenu = other })
+                            }
                         }
                     }
                 }
@@ -306,6 +308,10 @@ private fun EpisodeLine(
         colors = ClickableSurfaceDefaults.colors(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            // tv-material's focused text is for its own light focus colour; on
+            // this one it would be dark on dark.
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            focusedContentColor = MaterialTheme.colorScheme.onSurface,
         ),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
         border = ClickableSurfaceDefaults.border(focusedBorder = focusBorder(RoundedCornerShape(12.dp))),

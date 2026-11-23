@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -192,25 +193,34 @@ fun TvApp(
     TvTheme {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             if (playing == null) {
-                // Whatever had the focus may be gone: the app just started, a
-                // page opened with nothing focusable yet, a title closed whose
-                // card has scrolled away. A remote with nothing focused does
-                // nothing at all, so the page's first control takes it.
-                var anyFocus by remember { mutableStateOf(false) }
+                // The page, not the menu, holds the focus when something opens:
+                // the app just started (the window hands its first focus to the
+                // menu, the first thing in it), a page was picked from the menu,
+                // a title closed whose card has scrolled away. A remote with
+                // nothing focused does nothing at all.
+                var pageFocus by remember { mutableStateOf(false) }
                 val content = remember { FocusRequester() }
                 LaunchedEffect(state.loading, place, selectedTitleKey, browseKind) {
                     delay(FOCUS_SETTLE_MS)
-                    if (!anyFocus) content.tryFocus()
+                    if (!pageFocus) content.tryFocus()
                 }
                 NavigationDrawer(
-                    modifier = Modifier.onFocusChanged { anyFocus = it.hasFocus },
                     drawerContent = {
+                        // Into the menu lands on the page that is open, not on
+                        // whichever entry happens to sit level with the card left.
+                        val current = remember { FocusRequester() }
                         Column(
-                            Modifier.fillMaxHeight().padding(vertical = TV_TOP, horizontal = 12.dp).selectableGroup(),
+                            Modifier
+                                .fillMaxHeight()
+                                .padding(vertical = TV_TOP, horizontal = 12.dp)
+                                .focusRestorer(current)
+                                .focusGroup()
+                                .selectableGroup(),
                             verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
                         ) {
                             Place.entries.forEach { item ->
                                 NavigationDrawerItem(
+                                    modifier = if (item == place) Modifier.focusRequester(current) else Modifier,
                                     selected = place == item && selectedTitle == null && browsing == null,
                                     onClick = {
                                         place = item
@@ -224,7 +234,13 @@ fun TvApp(
                     },
                 ) {
                     CompositionLocalProvider(LocalFocusReturn provides FocusReturn(returnFocusTo) { returnFocusTo = null }) {
-                        Box(Modifier.fillMaxSize().focusRequester(content).focusGroup()) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .onFocusChanged { pageFocus = it.hasFocus }
+                                .focusRequester(content)
+                                .focusGroup(),
+                        ) {
                             Page(
                                 selectedTitle = selectedTitle,
                                 browsing = browsing,

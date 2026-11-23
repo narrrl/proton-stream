@@ -69,7 +69,8 @@ internal class HomeActions(
 
 /**
  * The television's library: what is in front at the top, over its backdrop,
- * and rows under it — Continue watching, My List, the shelves, then every title.
+ * and rows under it — Continue watching, the shelves (new episodes, My List,
+ * what was added, and so on, as on the phone), then every title.
  *
  * The top follows the focus, so moving along a row shows each title's picture
  * and synopsis without opening it. It waits a moment first: a row run through
@@ -87,7 +88,6 @@ internal fun TvHome(
 ) {
     val resumable = remember(state.titles) { continueWatching(state.titles) }
     val byKey = remember(state.titles) { state.titles.associateBy { it.key } }
-    val onList = remember(state.titles) { state.titles.filter { it.onList } }
     val shelves = remember(state.titles, state.arrangement) {
         state.arrangement?.shelves.orEmpty()
             .map { shelf -> shelf.label to shelf.keys.mapNotNull(byKey::get) }
@@ -126,92 +126,85 @@ internal fun TvHome(
         PageBackdrop(hero)
         Column(Modifier.fillMaxSize()) {
             HeroText(hero, Modifier.fillMaxHeight(HERO_SHARE))
-            LazyColumn(
-                state = page,
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                contentPadding = PaddingValues(bottom = TV_TOP),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (resumable.isNotEmpty()) {
-                    item(key = "continue") {
-                        CardRow("Continue watching", state = rows("continue")) {
-                            items(resumable, key = { "${it.episode.shareId}/${it.episode.linkId}" }) { entry ->
-                                EpisodeCard(
-                                    entry.title,
-                                    entry.episode,
-                                    caption = if (entry.episode.resumeAt == null) {
-                                        "Next: ${entry.episode.label}"
-                                    } else {
-                                        listOfNotNull(entry.episode.label, entry.episode.timeLeft()).joinToString(" · ")
-                                    },
-                                    onClick = { actions.onPlay(entry.title, entry.index) },
-                                    onMenu = { menuResume = entry },
-                                    onFocus = focus,
-                                )
-                            }
-                        }
-                    }
-                }
-                if (onList.isNotEmpty()) {
-                    item(key = "my-list") {
-                        CardRow("My List", state = rows("my-list")) {
-                            items(onList, key = { it.key }) { title ->
-                                PosterCard(title, { actions.onOpen(title) }, { menuFor = title }, onFocus = focus)
-                            }
-                        }
-                    }
-                }
-                // Only over the whole library: under a filter, a shelf of titles
-                // the rows below are hiding reads as the filter not working.
-                if (state.filter == LibraryFilter.ALL) {
-                    shelves.forEach { (label, titles) ->
-                        item(key = "shelf-$label") {
-                            CardRow(label, state = rows("shelf-$label")) {
-                                items(titles, key = { it.key }) { title ->
-                                    PosterCard(
-                                        title,
-                                        { actions.onOpen(title) },
-                                        { menuFor = title },
+            ScrollsTo(ROW_LEAD) {
+                LazyColumn(
+                    state = page,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding = PaddingValues(bottom = TV_TOP),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (resumable.isNotEmpty()) {
+                        item(key = "continue") {
+                            CardRow("Continue watching", state = rows("continue")) {
+                                items(resumable, key = { "${it.episode.shareId}/${it.episode.linkId}" }) { entry ->
+                                    EpisodeCard(
+                                        entry.title,
+                                        entry.episode,
+                                        caption = if (entry.episode.resumeAt == null) {
+                                            "Next: ${entry.episode.label}"
+                                        } else {
+                                            listOfNotNull(entry.episode.label, entry.episode.timeLeft()).joinToString(" · ")
+                                        },
+                                        onClick = { actions.onPlay(entry.title, entry.index) },
+                                        onMenu = { menuResume = entry },
                                         onFocus = focus,
-                                        badge = title.badge ?: title.countdown(),
                                     )
                                 }
                             }
                         }
                     }
-                }
-                item(key = "all-heading") {
-                    Column(Modifier.padding(horizontal = TV_SIDE).padding(top = 8.dp)) {
-                        Text("All titles", style = MaterialTheme.typography.titleMedium)
-                        Row(
-                            Modifier.padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            LibraryFilter.entries.forEach { filter ->
-                                FilterChip(
-                                    selected = filter == state.filter,
-                                    onClick = { actions.onFilter(filter) },
-                                ) { Text(filter.label()) }
+                    // Only over the whole library: under a filter, a shelf of titles
+                    // the rows below are hiding reads as the filter not working.
+                    if (state.filter == LibraryFilter.ALL) {
+                        shelves.forEach { (label, titles) ->
+                            item(key = "shelf-$label") {
+                                CardRow(label, state = rows("shelf-$label")) {
+                                    items(titles, key = { it.key }) { title ->
+                                        PosterCard(
+                                            title,
+                                            { actions.onOpen(title) },
+                                            { menuFor = title },
+                                            onFocus = focus,
+                                            badge = title.badge ?: title.countdown(),
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                if (tiles.isEmpty()) {
-                    item(key = "filtered-out") {
-                        Text(
-                            "Nothing in the library fits that filter.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = TV_SIDE, vertical = 12.dp),
+                    item(key = "all-heading") {
+                        Column(Modifier.padding(horizontal = TV_SIDE).padding(top = 8.dp)) {
+                            Text("All titles", style = MaterialTheme.typography.titleMedium)
+                            Row(
+                                Modifier.padding(top = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                LibraryFilter.entries.forEach { filter ->
+                                    FilterChip(
+                                        selected = filter == state.filter,
+                                        onClick = { actions.onFilter(filter) },
+                                    ) { Text(filter.label()) }
+                                }
+                            }
+                        }
+                    }
+                    if (tiles.isEmpty()) {
+                        item(key = "filtered-out") {
+                            Text(
+                                "Nothing in the library fits that filter.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = TV_SIDE, vertical = 12.dp),
+                            )
+                        }
+                    }
+                    item(key = "all") {
+                        PosterGrid(
+                            tiles,
+                            onOpen = actions.onOpen,
+                            onMenu = { menuFor = it },
+                            onFocus = focus,
                         )
                     }
-                }
-                item(key = "all") {
-                    PosterGrid(
-                        tiles,
-                        onOpen = actions.onOpen,
-                        onMenu = { menuFor = it },
-                        onFocus = focus,
-                    )
                 }
             }
         }

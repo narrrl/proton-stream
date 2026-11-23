@@ -28,9 +28,11 @@ account and player under a UI built on `androidx.tv:tv-material`.
   a TV has no mini player. Which title was open and how far each row was
   scrolled are kept in `TvApp`, so both come back after the player closes.
 - `TvHome`: the focused title's backdrop, name and synopsis at the top, then
-  rows of Continue watching, My List, the shelves and every title. The top
-  follows the focus after a short pause, so running along a row does not load
-  every backdrop on the way.
+  rows of Continue watching, the core's shelves (My List is one of them) and
+  every title. The top follows the focus after a short pause, so running along
+  a row does not load every backdrop on the way. `ScrollsTo` lines rows up the
+  way a launcher does, in place of Compose's TV default, which stops a third
+  of the way in and leaves the row above cut in half.
 - `TvTitle`: Play focused when the page opens, Start over, My List, Mark
   watched, season chips, episodes with their stills and synopses, the
   franchise, and More like this.

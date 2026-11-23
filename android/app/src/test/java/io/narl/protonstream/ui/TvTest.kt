@@ -13,6 +13,9 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onFirst
@@ -26,6 +29,7 @@ import io.narl.protonstream.ui.theme.AppearanceState
 import io.narl.protonstream.ui.theme.ProtonFallback
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
 import io.narl.protonstream.ui.tv.TvHome
+import io.narl.protonstream.ui.tv.TvSearch
 import io.narl.protonstream.ui.tv.TvTheme
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -104,5 +108,24 @@ class TvTest {
         card.requestFocus()
         card.performKeyInput { pressKey(Key.Menu) }
         compose.onNode(hasText("Open")).assertExists()
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun `down on the television's search field moves to what was found`() {
+        compose.setContent {
+            val modes = LocalInputModeManager.current
+            LaunchedEffect(Unit) { modes.requestInputMode(InputMode.Keyboard) }
+            ProtonStreamTheme {
+                CompositionLocalProvider(LocalArtworkLoading provides false) {
+                    TvTheme { TvSearch(ScreenshotTest.MATCHED.copy(query = "o"), {}, ScreenshotTest.TV_ACTIONS, {}, {}) }
+                }
+            }
+        }
+        val field = compose.onNode(hasSetTextAction())
+        field.requestFocus()
+        field.assertIsFocused()
+        field.performKeyInput { pressKey(Key.DirectionDown) }
+        field.assertIsNotFocused()
     }
 }

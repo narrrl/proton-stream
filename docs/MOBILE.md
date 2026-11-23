@@ -57,12 +57,13 @@ Picture-in-Picture is not available on either platform.
 The app appears in the TV launcher and has a layout of its own for the TV, made for the remote.
 
 - **Home** shows the title you are on at the top, with its picture and synopsis, and rows under
-  it: **Continue watching**, **My List**, the shelves, and every title with the same filters as on
-  the phone.
+  it: **Continue watching**, then the same rows as on the phone (new episodes, **My List**, what
+  was added, and so on), and every title with the same filters as on the phone. The row you are on
+  moves up under the top, and the card you are on stays at the left.
 - A title's page opens with **Play** (or **Resume**) ready, so **OK** starts it. Move down for the
   seasons and episodes, and for titles like it.
 - **Search** has its own place in the menu on the left. **OK** on the field opens the TV's keyboard
-  or voice input.
+  or voice input, and **Down** moves on to what was found.
 - **History**, **Downloads**, **Shares** and **Settings** are the same pages as on the phone.
 - The **Menu** key, or holding **OK**, opens what a long press opens on a phone, such as
   "Remove from Continue watching" on a card or "Mark watched up to here" on an episode.

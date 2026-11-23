@@ -25,6 +25,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,85 +81,94 @@ internal fun TvSearch(
         actions.onOpen(title)
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = TV_TOP, bottom = TV_TOP),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item(key = "field") {
-            OutlinedTextField(
-                value = state.query,
-                onValueChange = onSearch,
-                singleLine = true,
-                placeholder = { androidx.compose.material3.Text("Titles, episodes, people, genres") },
-                leadingIcon = { androidx.compose.material3.Icon(Icons.Default.Search, contentDescription = null) },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focus.moveFocus(FocusDirection.Down) }),
-                modifier = Modifier
-                    .padding(horizontal = TV_SIDE)
-                    .fillMaxWidth(SEARCH_FIELD_WIDTH)
-                    .focusRequester(field),
-            )
-        }
-        if (!searched) {
-            if (state.recentSearches.isNotEmpty()) {
-                item(key = "recent") {
-                    Column(Modifier.padding(horizontal = TV_SIDE)) {
-                        Text("Recent searches", style = MaterialTheme.typography.titleMedium)
-                        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            state.recentSearches.forEach { recent ->
-                                FilterChip(selected = false, onClick = { onSearch(recent) }) { Text(recent) }
+    ScrollsJustEnough {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = TV_TOP, bottom = TV_TOP),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(key = "field") {
+                OutlinedTextField(
+                    value = state.query,
+                    onValueChange = onSearch,
+                    singleLine = true,
+                    placeholder = { androidx.compose.material3.Text("Titles, episodes, people, genres") },
+                    leadingIcon = { androidx.compose.material3.Icon(Icons.Default.Search, contentDescription = null) },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { focus.moveFocus(FocusDirection.Down) }),
+                    modifier = Modifier
+                        .padding(horizontal = TV_SIDE)
+                        .fillMaxWidth(SEARCH_FIELD_WIDTH)
+                        .focusRequester(field)
+                        // A one-line field keeps Down for itself, which on a remote
+                        // leaves what was found out of reach.
+                        .onPreviewKeyEvent { event ->
+                            event.type == KeyEventType.KeyDown &&
+                                event.key == Key.DirectionDown &&
+                                focus.moveFocus(FocusDirection.Down)
+                        },
+                )
+            }
+            if (!searched) {
+                if (state.recentSearches.isNotEmpty()) {
+                    item(key = "recent") {
+                        Column(Modifier.padding(horizontal = TV_SIDE)) {
+                            Text("Recent searches", style = MaterialTheme.typography.titleMedium)
+                            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                state.recentSearches.forEach { recent ->
+                                    FilterChip(selected = false, onClick = { onSearch(recent) }) { Text(recent) }
+                                }
                             }
                         }
                     }
                 }
+                return@LazyColumn
             }
-            return@LazyColumn
-        }
-        val extras = state.searchExtras
-        if (tiles.isEmpty() && extras?.isEmpty() != false) {
-            item(key = "nothing") {
-                Text(
-                    "Nothing in the library is called “${state.query.trim()}”.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = TV_SIDE),
-                )
+            val extras = state.searchExtras
+            if (tiles.isEmpty() && extras?.isEmpty() != false) {
+                item(key = "nothing") {
+                    Text(
+                        "Nothing in the library is called “${state.query.trim()}”.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = TV_SIDE),
+                    )
+                }
+                return@LazyColumn
             }
-            return@LazyColumn
-        }
-        extras?.let {
-            facets("People and studios", it.people, onBrowse)
-            facets("Genres", it.genres, onBrowse)
-        }
-        extras?.episodes?.takeIf { it.isNotEmpty() }?.let { hits ->
-            item(key = "episodes-heading") {
-                Text("Episodes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = TV_SIDE))
+            extras?.let {
+                facets("People and studios", it.people, onBrowse)
+                facets("Genres", it.genres, onBrowse)
             }
-            items(hits, key = { "episode-${it.titleKey}/${it.linkId}" }) { hit ->
-                val title = byKey[hit.titleKey] ?: return@items
-                val index = title.seasons.flatMap(SeasonRecord::episodes).indexOfFirst { it.linkId == hit.linkId }
-                if (index < 0) return@items
-                ListItem(
-                    selected = false,
-                    onClick = {
-                        onRemember()
-                        actions.onPlay(title, index)
-                    },
-                    headlineContent = { Text(hit.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = {
-                        Text("${title.displayName} · ${hit.label}", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    },
-                    leadingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                    modifier = Modifier.padding(horizontal = TV_SIDE).fillMaxWidth(SEARCH_FIELD_WIDTH),
-                )
+            extras?.episodes?.takeIf { it.isNotEmpty() }?.let { hits ->
+                item(key = "episodes-heading") {
+                    Text("Episodes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = TV_SIDE))
+                }
+                items(hits, key = { "episode-${it.titleKey}/${it.linkId}" }) { hit ->
+                    val title = byKey[hit.titleKey] ?: return@items
+                    val index = title.seasons.flatMap(SeasonRecord::episodes).indexOfFirst { it.linkId == hit.linkId }
+                    if (index < 0) return@items
+                    ListItem(
+                        selected = false,
+                        onClick = {
+                            onRemember()
+                            actions.onPlay(title, index)
+                        },
+                        headlineContent = { Text(hit.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingContent = {
+                            Text("${title.displayName} · ${hit.label}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        },
+                        leadingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                        modifier = Modifier.padding(horizontal = TV_SIDE).fillMaxWidth(SEARCH_FIELD_WIDTH),
+                    )
+                }
             }
-        }
-        if (tiles.isNotEmpty()) {
-            item(key = "titles") {
-                Column {
-                    Text("Titles", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = TV_SIDE))
-                    PosterGrid(tiles, onOpen = open, onMenu = { menuFor = it })
+            if (tiles.isNotEmpty()) {
+                item(key = "titles") {
+                    Column {
+                        Text("Titles", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = TV_SIDE))
+                        PosterGrid(tiles, onOpen = open, onMenu = { menuFor = it })
+                    }
                 }
             }
         }
@@ -191,19 +205,21 @@ private fun androidx.compose.foundation.lazy.LazyListScope.facets(
 @Composable
 internal fun TvBrowse(facet: BrowseFacet, titles: List<TitleRecord>, actions: HomeActions) {
     var menuFor by remember { mutableStateOf<TitleRecord?>(null) }
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = TV_TOP, bottom = TV_TOP),
-    ) {
-        item(key = "heading") {
-            Text(
-                facet.label,
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(horizontal = TV_SIDE),
-            )
-        }
-        item(key = "titles") {
-            PosterGrid(titles.map { it to 0 }, onOpen = actions.onOpen, onMenu = { menuFor = it })
+    ScrollsJustEnough {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = TV_TOP, bottom = TV_TOP),
+        ) {
+            item(key = "heading") {
+                Text(
+                    facet.label,
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(horizontal = TV_SIDE),
+                )
+            }
+            item(key = "titles") {
+                PosterGrid(titles.map { it to 0 }, onOpen = actions.onOpen, onMenu = { menuFor = it })
+            }
         }
     }
     menuFor?.let { TitleMenu(it, actions) { menuFor = null } }
