@@ -54,9 +54,19 @@ Picture-in-Picture is not available on either platform.
 
 ## Android TV
 
-The app appears in the TV launcher and works with the remote alone. The focused control is
-outlined. The **Menu** key, or holding **OK**, opens what a long press opens on a phone, such as
-"Remove from Continue watching" on a card or "Mark watched up to here" on an episode.
+The app appears in the TV launcher and has a layout of its own for the TV, made for the remote.
+
+- **Home** shows the title you are on at the top, with its picture and synopsis, and rows under
+  it: **Continue watching**, **My List**, the shelves, and every title with the same filters as on
+  the phone.
+- A title's page opens with **Play** (or **Resume**) ready, so **OK** starts it. Move down for the
+  seasons and episodes, and for titles like it.
+- **Search** has its own place in the menu on the left. **OK** on the field opens the TV's keyboard
+  or voice input.
+- **History**, **Downloads**, **Shares** and **Settings** are the same pages as on the phone.
+- The **Menu** key, or holding **OK**, opens what a long press opens on a phone, such as
+  "Remove from Continue watching" on a card or "Mark watched up to here" on an episode.
+- **Back** closes the title page, then returns to Home.
 
 In the player, with the controls hidden:
 
@@ -64,7 +74,7 @@ In the player, with the controls hidden:
 |---|---|
 | Left / right | Back or forward 10 seconds |
 | Centre, up or down | Show the controls, with Play focused |
-| Back | Hide the controls; again to leave the video |
+| Back | Hide the controls; again to stop and leave the video |
 | Play/pause | Pause and play |
 | Rewind / fast-forward | Back or forward 10 seconds |
 | Previous / next | Previous or next episode |
@@ -74,7 +84,6 @@ When **Skip intro**, **Up next** or the end of an episode appears, **OK** presse
 
 Typing a share link on a remote is slow. Sign in instead, so that shares added on your phone
 arrive through sync, or send the link from a computer with `adb` ([Android](ANDROID.md#android-tv)).
-A layout made for the TV is planned.
 
 ## Downloads
 
