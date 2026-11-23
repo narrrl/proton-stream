@@ -285,6 +285,7 @@ internal fun GenreChip(text: String, onClick: (() -> Unit)? = null) {
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier
+            .then(if (onClick != null) Modifier.focusHighlight(RoundedCornerShape(12.dp)) else Modifier)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .then(if (onClick != null) Modifier.clickable(onClickLabel = "Browse $text", onClick = onClick) else Modifier)

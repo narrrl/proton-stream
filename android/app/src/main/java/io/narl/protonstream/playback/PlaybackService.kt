@@ -134,6 +134,10 @@ class PlaybackService : Service() {
                 override fun onStop() { host?.stop() }
                 override fun onSkipToNext() { host?.onSkipNext?.invoke() }
                 override fun onSkipToPrevious() { host?.onSkipPrevious?.invoke() }
+                // A remote's ⏩ and ⏪, and Assistant's "skip ahead": the same ten
+                // seconds the player's own keys and double taps move.
+                override fun onFastForward() { nudge(SEEK_STEP_SECONDS) }
+                override fun onRewind() { nudge(-SEEK_STEP_SECONDS) }
             })
         }
         // Artwork arrives after the episode does, and the shape of the transport
@@ -327,6 +331,11 @@ class PlaybackService : Service() {
         retire = null
     }
 
+    private fun nudge(seconds: Double) {
+        val core = host ?: return
+        core.seek((core.state.value.position + seconds).coerceAtLeast(0.0))
+    }
+
     private fun refreshSession(state: MpvPlaybackState, playing: NowPlaying?) {
         val status = when {
             state.ended -> PlaybackState.STATE_STOPPED
@@ -334,7 +343,8 @@ class PlaybackService : Service() {
             else -> PlaybackState.STATE_PLAYING
         }
         var actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
-            PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SEEK_TO or PlaybackState.ACTION_STOP
+            PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SEEK_TO or PlaybackState.ACTION_STOP or
+            PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND
         if (playing?.hasNext == true) actions = actions or PlaybackState.ACTION_SKIP_TO_NEXT
         if (playing?.hasPrevious == true) actions = actions or PlaybackState.ACTION_SKIP_TO_PREVIOUS
         mediaSession.setPlaybackState(
@@ -489,6 +499,9 @@ class PlaybackService : Service() {
         /** How far the volume drops for a navigation prompt or a notification. */
         private const val DUCK_FACTOR = 0.3
         private const val SAVE_EVERY_MS = 5_000L
+
+        /** How far fast-forward and rewind move, as the player's own keys do. */
+        private const val SEEK_STEP_SECONDS = 10.0
         /** How long a swipe from Recents may hold the main thread to save. */
         private const val SAVE_ON_EXIT_MS = 2_000L
 

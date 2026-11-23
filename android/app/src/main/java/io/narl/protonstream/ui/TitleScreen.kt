@@ -628,6 +628,7 @@ private fun CastTile(member: CastRecord, onActor: (String) -> Unit) {
     Column(
         Modifier
             .width(88.dp)
+            .focusHighlight(MaterialTheme.shapes.medium, grow = true)
             .clip(MaterialTheme.shapes.medium)
             .then(
                 member.actor?.let { actor ->
@@ -671,6 +672,7 @@ private fun FranchiseTile(title: TitleRecord, here: Boolean, onClick: () -> Unit
     Column(
         Modifier
             .width(96.dp)
+            .focusHighlight(MaterialTheme.shapes.medium, grow = true)
             .clip(MaterialTheme.shapes.medium)
             .clickable(enabled = !here, onClick = onClick),
     ) {
@@ -772,6 +774,7 @@ private fun TitleAction(
 ) {
     Column(
         modifier
+            .focusHighlight(MaterialTheme.shapes.medium)
             .clip(MaterialTheme.shapes.medium)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(vertical = 8.dp),
@@ -838,6 +841,8 @@ private fun EpisodeRow(
     Column(
         Modifier
             .fillMaxWidth()
+            .focusHighlight(MaterialTheme.shapes.small)
+            .onMenuKey { menu = true }
             .combinedClickable(
                 enabled = playerReady,
                 onClick = onPlay,

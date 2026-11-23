@@ -97,6 +97,18 @@ class ScreenshotTest {
     }
 
     @Test
+    @Config(qualifiers = RobolectricDeviceQualifiers.Television1080p)
+    fun `the library on a television`() = capture("library-tv") {
+        LibraryScreen(MATCHED, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
+    @Config(qualifiers = RobolectricDeviceQualifiers.Television1080p)
+    fun `a title on a television`() = capture("title-tv") {
+        TitleScreen(SERIES, true, { _, _ -> }, {}, {}, {}, { _, _ -> }, PaddingValues())
+    }
+
+    @Test
     fun `the library in the light palette`() = captureLight("library-phone-light") {
         LibraryScreen(MATCHED, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
     }
@@ -185,7 +197,7 @@ class ScreenshotTest {
         DownloadsScreen(LIBRARY, {}, {}, {}, {}, PaddingValues())
     }
 
-    private companion object {
+    internal companion object {
         /** Catppuccin Latte with the default accent, as `Palette::resolve` gives it. */
         val LATTE = PaletteRecord(
             background = 0xFFEFF1F5u,

@@ -74,11 +74,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.onClick
@@ -104,7 +106,11 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.native.NativeRuntime
+import io.narl.protonstream.ui.focusHighlight
+import io.narl.protonstream.ui.isTelevision
+import io.narl.protonstream.ui.keyDriven
 import io.narl.protonstream.ui.shownName
+import io.narl.protonstream.ui.tryFocus
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.AccentTrack
 import io.narl.protonstream.ui.theme.EdgedButton
@@ -148,6 +154,15 @@ private const val DOUBLE_TAP_SECONDS = 10
 
 /** How long the double-tap seek mark stays up. */
 private const val NUDGE_MS = 700L
+
+/** The keys a locked player swallows: a remote's, not the system's. */
+private val REMOTE_KEYS = setOf(
+    Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown,
+    Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.Spacebar,
+    Key.MediaPlayPause, Key.MediaPlay, Key.MediaPause,
+    Key.MediaRewind, Key.MediaFastForward, Key.MediaSkipBackward, Key.MediaSkipForward,
+    Key.MediaNext, Key.MediaPrevious, Key.MediaStop,
+)
 
 /** How long the unlock button stays up after a tap on a locked player. */
 private const val UNLOCK_SHOWN_MS = 3_000L
@@ -481,7 +496,11 @@ fun PlayerScreen(
     // choosers live inside the controls, so hiding them closed whatever was
     // being picked from, four seconds after the controls came up.
     var picking by remember { mutableStateOf(false) }
-    LaunchedEffect(showControls, state.paused, exploring, picking) {
+    // A key pressed on a remote is the viewer using the controls, as a touch
+    // is: counted, so the controls stay up while the D-pad moves through them
+    // rather than fading under it four seconds after they came up.
+    var keyPresses by remember { mutableIntStateOf(0) }
+    LaunchedEffect(showControls, state.paused, exploring, picking, keyPresses) {
         if (showControls && !state.paused && !exploring && !picking) {
             delay(CONTROLS_SECONDS * 1_000)
             showControls = false
@@ -515,7 +534,45 @@ fun PlayerScreen(
     // Where a remote's keys land while the controls are down. Once they are
     // up, the D-pad moves between their buttons as it does anywhere else.
     val keys = remember { FocusRequester() }
-    LaunchedEffect(showControls) { if (!showControls) runCatching { keys.requestFocus() } }
+    val television = isTelevision()
+    val byKeys = keyDriven()
+    // What OK should press, in the order it matters: the controls' own play
+    // button once they are up, otherwise whichever card is asking something.
+    // A card that comes up while the controls are down is otherwise one a
+    // remote cannot reach — OK would only bring the controls up over it.
+    val playFocus = remember { FocusRequester() }
+    val promptFocus = remember { FocusRequester() }
+    val unlockFocus = remember { FocusRequester() }
+    val tailLeft = (state.duration - state.position).takeIf {
+        chapters.creditsStart == null && state.duration > UP_NEXT_SECONDS * 6 && it <= UP_NEXT_SECONDS
+    }
+    val upNextVisible = autoplay && !stay && !stopsAfterThis && !state.paused && !state.ended && playingThis &&
+        (tailLeft != null || chapters.creditsStart?.let { state.position >= it } == true)
+    val ended = playingThis && state.endReason == EndReason.Eof &&
+        (next == null || !autoplay || stay || stopsAfterThis)
+    val skipOffer = offer?.takeIf { !autoSkip }
+    // Only one card holds the requester at a time, the first of these.
+    val prompt = when {
+        playbackError != null -> "error"
+        ended -> "end"
+        upNextVisible && next != null -> "up next"
+        skipOffer != null -> "skip"
+        else -> null
+    }
+    fun settleFocus() {
+        if (showControls && byKeys && playFocus.tryFocus()) return
+        if (!showControls && byKeys && prompt != null && promptFocus.tryFocus()) return
+        keys.tryFocus()
+    }
+    LaunchedEffect(showControls, prompt, byKeys) { settleFocus() }
+    LaunchedEffect(unlockShown) { if (unlockShown > 0 && byKeys) unlockFocus.tryFocus() }
+    // Focus that went with a card — dismissed, counted down, skipped — would
+    // otherwise go nowhere, and a remote's keys with it.
+    var holdsFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(holdsFocus) { if (!holdsFocus) settleFocus() }
+    // On a remote, Back first puts the controls away, as it does in every
+    // other player there; the next Back leaves the video.
+    BackHandler(enabled = showControls && byKeys && !locked && !minimized) { showControls = false }
     if (minimized) return
 
     Box(
@@ -525,9 +582,21 @@ fun PlayerScreen(
             // A TV remote, a keyboard: left and right seek as a double tap
             // does, the middle button brings the controls up, and play/pause
             // and space do what they say.
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) keyPresses++
+                false
+            }
             .focusRequester(keys)
+            .onFocusChanged { holdsFocus = it.hasFocus }
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                // Locked, the remote's keys only bring up the way out, as a
+                // touch does. Volume and Back are the system's, locked or not.
+                if (locked) {
+                    if (event.key !in REMOTE_KEYS) return@onKeyEvent false
+                    unlockShown++
+                    return@onKeyEvent true
+                }
                 when (event.key) {
                     Key.DirectionLeft, Key.DirectionRight -> {
                         if (showControls) return@onKeyEvent false
@@ -536,6 +605,18 @@ fun PlayerScreen(
                         nudge = seconds to (nudge?.second ?: 0) + 1
                         true
                     }
+                    // A remote's own transport keys work whether the controls
+                    // are up or not.
+                    Key.MediaRewind, Key.MediaFastForward, Key.MediaSkipBackward, Key.MediaSkipForward -> {
+                        val back = event.key == Key.MediaRewind || event.key == Key.MediaSkipBackward
+                        val seconds = if (back) -DOUBLE_TAP_SECONDS else DOUBLE_TAP_SECONDS
+                        host.seek((current.position + seconds).coerceAtLeast(0.0))
+                        nudge = seconds to (nudge?.second ?: 0) + 1
+                        true
+                    }
+                    Key.MediaNext -> { if (next != null) advance(); true }
+                    Key.MediaPrevious -> { if (index > 0) retreat(); true }
+                    Key.MediaStop -> { onClose(); true }
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.DirectionUp, Key.DirectionDown -> {
                         if (showControls) return@onKeyEvent false
                         showControls = true
@@ -695,18 +776,24 @@ fun PlayerScreen(
                 episodes = episodes,
                 playing = index,
                 onEpisode = { jumpTo(it) },
-                onRotate = {
-                    rotationChosen = true
-                    landscapeLocked = activity?.toggleLandscape() ?: false
+                playFocus = playFocus,
+                // A television does not turn, and nobody pockets one.
+                onRotate = if (television) null else {
+                    {
+                        rotationChosen = true
+                        landscapeLocked = activity?.toggleLandscape() ?: false
+                    }
                 },
                 landscapeLocked = landscapeLocked,
                 media = key,
                 sleep = sleep,
                 onPicking = { picking = it },
-                onLock = {
-                    locked = true
-                    showControls = false
-                    unlockShown++
+                onLock = if (television) null else {
+                    {
+                        locked = true
+                        showControls = false
+                        unlockShown++
+                    }
                 },
             )
         }
@@ -719,11 +806,14 @@ fun PlayerScreen(
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
-            TonalButton(onClick = {
-                locked = false
-                unlockShown = 0
-                showControls = true
-            }) {
+            TonalButton(
+                onClick = {
+                    locked = false
+                    unlockShown = 0
+                    showControls = true
+                },
+                modifier = Modifier.focusRequester(unlockFocus),
+            ) {
                 Icon(Icons.Default.LockOpen, contentDescription = null)
                 Text("Unlock", modifier = Modifier.padding(start = 8.dp))
             }
@@ -732,10 +822,11 @@ fun PlayerScreen(
         // Drawn whether or not the rest of the controls are up: an opening lasts
         // ninety seconds, and a button you have to wake with a tap is one nobody
         // reaches in time.
-        offer?.takeIf { !autoSkip }?.let { skip ->
+        skipOffer?.let { skip ->
             TonalButton(
                 onClick = { nativeHost.seek(skip.target) },
                 modifier = Modifier
+                    .then(if (prompt == "skip") Modifier.focusRequester(promptFocus) else Modifier)
                     .align(Alignment.BottomEnd)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(end = 16.dp, bottom = if (showControls) 160.dp else 24.dp),
@@ -760,13 +851,10 @@ fun PlayerScreen(
         // takes its last seconds instead: without it the next episode cut in
         // with no warning and no way to stay. Counted on the file's own clock,
         // so it reaches zero at the end of file, which is what advances.
-        val tailLeft = (state.duration - state.position).takeIf {
-            chapters.creditsStart == null && state.duration > UP_NEXT_SECONDS * 6 && it <= UP_NEXT_SECONDS
-        }
         UpNextCard(
             next = next,
-            visible = autoplay && !stay && !stopsAfterThis && !state.paused && !state.ended && playingThis &&
-                (tailLeft != null || chapters.creditsStart?.let { state.position >= it } == true),
+            visible = upNextVisible,
+            focus = promptFocus.takeIf { prompt == "up next" },
             secondsLeft = tailLeft?.let { ceil(it).toInt() },
             onPlayNow = { advance() },
             onStay = { stay = true },
@@ -778,7 +866,7 @@ fun PlayerScreen(
 
         // Played to the end with nothing starting after it: the last episode,
         // autoplay off, or the viewer stayed. A black screen said none of that.
-        if (playingThis && state.endReason == EndReason.Eof && (next == null || !autoplay || stay || stopsAfterThis)) {
+        if (ended) {
             EndCard(
                 finished = episode.label,
                 show = title.displayName,
@@ -787,6 +875,7 @@ fun PlayerScreen(
                 // mpv unloads a file at its end, so this opens it again.
                 onReplay = { retryFrom = 0.0; attempt++ },
                 onClose = onClose,
+                focus = promptFocus.takeIf { prompt == "end" },
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -838,6 +927,7 @@ fun PlayerScreen(
                         Text("Dismiss", color = MaterialTheme.colorScheme.onErrorContainer)
                     }
                     QuietButton(
+                        modifier = if (prompt == "error") Modifier.focusRequester(promptFocus) else Modifier,
                         onClick = {
                             retryFrom = state.position.takeIf { state.media == key && it > 0.0 } ?: retryFrom
                             playbackError = null
@@ -950,12 +1040,15 @@ private fun PlayerControls(
     episodes: List<EpisodeRecord>,
     playing: Int,
     onEpisode: (Int) -> Unit,
-    onRotate: () -> Unit,
+    playFocus: FocusRequester,
+    /** Nothing where the screen does not turn: a television. */
+    onRotate: (() -> Unit)?,
     landscapeLocked: Boolean,
     media: String,
     sleep: SleepTimer?,
     onPicking: (Boolean) -> Unit,
-    onLock: () -> Unit,
+    /** Nothing where there is no touch to lock out. */
+    onLock: (() -> Unit)?,
 ) {
     val scope = rememberCoroutineScope()
     var showSleep by remember { mutableStateOf(false) }
@@ -1033,7 +1126,7 @@ private fun PlayerControls(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CompactIcon(Icons.Default.SkipPrevious, "Previous episode", enabled = hasPrevious, onClick = onPrevious)
                 CompactIcon(Icons.Default.Replay10, "Back ten seconds") { host.seek(state.position - 10) }
-                IconButton(onClick = { host.setPaused(!state.paused) }) {
+                IconButton(onClick = { host.setPaused(!state.paused) }, modifier = Modifier.focusRequester(playFocus)) {
                     Icon(
                         if (state.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
                         contentDescription = if (state.paused) "Play" else "Pause",
@@ -1062,15 +1155,17 @@ private fun PlayerControls(
                                         toggleMute,
                                     ),
                                 )
-                                add(
-                                    Triple(
-                                        if (landscapeLocked) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                        if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
-                                        onRotate,
-                                    ),
-                                )
+                                if (onRotate != null) {
+                                    add(
+                                        Triple(
+                                            if (landscapeLocked) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                            if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
+                                            onRotate,
+                                        ),
+                                    )
+                                }
                                 add(Triple(Icons.Default.Bedtime, sleepLabel(sleep)) { showSleep = true })
-                                add(Triple(Icons.Default.Lock, "Lock touch", onLock))
+                                if (onLock != null) add(Triple(Icons.Default.Lock, "Lock touch", onLock))
                             }
                             entries.forEach { (icon, label, action) ->
                                 DropdownMenuItem(
@@ -1114,13 +1209,15 @@ private fun PlayerControls(
                             modifier = Modifier.width(96.dp),
                         )
                     }
-                    CompactIcon(
-                        if (landscapeLocked) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                        if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
-                        onClick = onRotate,
-                    )
+                    if (onRotate != null) {
+                        CompactIcon(
+                            if (landscapeLocked) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                            if (landscapeLocked) "Unlock rotation" else "Lock to landscape",
+                            onClick = onRotate,
+                        )
+                    }
                     CompactIcon(Icons.Default.Bedtime, sleepLabel(sleep)) { showSleep = true }
-                    CompactIcon(Icons.Default.Lock, "Lock touch", onClick = onLock)
+                    if (onLock != null) CompactIcon(Icons.Default.Lock, "Lock touch", onClick = onLock)
                 }
             }
         }
@@ -1463,6 +1560,8 @@ private fun UpNextCard(
     secondsLeft: Int?,
     onPlayNow: () -> Unit,
     onStay: () -> Unit,
+    /** Where OK lands while this is up and the controls are not. */
+    focus: FocusRequester?,
     modifier: Modifier = Modifier,
 ) {
     var held by remember(next?.linkId) { mutableStateOf(false) }
@@ -1503,6 +1602,8 @@ private fun UpNextCard(
                     .width(112.dp)
                     .aspectRatio(16f / 9f)
                     .clip(MaterialTheme.shapes.small)
+                    .then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+                    .focusHighlight(MaterialTheme.shapes.small)
                     .clickable(onClick = onPlayNow),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1559,6 +1660,7 @@ private fun EndCard(
     onPlayNext: () -> Unit,
     onReplay: () -> Unit,
     onClose: () -> Unit,
+    focus: FocusRequester?,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1575,10 +1677,11 @@ private fun EndCard(
             textAlign = TextAlign.Center,
         )
         Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            val first = if (focus != null) Modifier.focusRequester(focus) else Modifier
             if (next != null) {
-                AccentButton(onClick = onPlayNext) { Text("Play next") }
+                AccentButton(onClick = onPlayNext, modifier = first) { Text("Play next") }
             } else {
-                QuietButton(onClick = onReplay) { Text("Watch again") }
+                QuietButton(onClick = onReplay, modifier = first) { Text("Watch again") }
             }
             QuietButton(onClick = onClose, modifier = Modifier.padding(start = 8.dp)) { Text("Close") }
         }

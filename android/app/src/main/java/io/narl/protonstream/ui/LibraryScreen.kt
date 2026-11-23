@@ -33,7 +33,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.clickable
@@ -850,7 +852,10 @@ private fun FeaturedBanner(
 ) {
     val pager = rememberPagerState { titles.size }
     val dragged by pager.interactionSource.collectIsDraggedAsState()
-    if (titles.size > 1 && !dragged) {
+    // Held while a remote is on one of its buttons, as while a finger is on
+    // it: a turn would take the focused button away with its page.
+    var focused by remember { mutableStateOf(false) }
+    if (titles.size > 1 && !dragged && !focused) {
         // Keyed on the settled page, not the current one: the current page
         // flips half way through a turn, and restarting this effect there
         // cancelled the turn and left the banner stuck between two titles.
@@ -862,8 +867,10 @@ private fun FeaturedBanner(
     // Most of a phone's first screen, but never so much of a tablet's that
     // nothing under it shows.
     val screenHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
-    val height = (screenHeight * 0.62f).coerceIn(360.dp, 620.dp)
-    Box(modifier.fillMaxWidth().height(height)) {
+    // A television's screen is 540dp high, and there the first row under the
+    // banner has to show: it is where the D-pad goes next.
+    val height = if (isTelevision()) screenHeight * 0.55f else (screenHeight * 0.62f).coerceIn(360.dp, 620.dp)
+    Box(modifier.fillMaxWidth().height(height).onFocusChanged { focused = it.hasFocus }) {
         HorizontalPager(pager, Modifier.fillMaxSize(), key = { titles[it].key }) { page ->
             val title = titles[page]
             FeaturedPage(
@@ -887,6 +894,7 @@ private fun FeaturedBanner(
                     Box(
                         Modifier
                             .size(width, 6.dp)
+                            .focusHighlight(CircleShape)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.onBackground.copy(alpha = if (shown) 1f else 0.4f))
                             .clickable(onClickLabel = "Show ${title.displayName}") {
@@ -917,7 +925,15 @@ private fun FeaturedPage(
     // A logo is lettering made for dark art, white as often as not; over a
     // light palette's veil it is gone, so the light palette keeps the name.
     val dark = background.luminance() < 0.5f
-    Box(Modifier.fillMaxSize().clickable(onClickLabel = "Open ${title.displayName}", onClick = onOpen)) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            // Touch only: on a remote, "More info" is the same thing, and the
+            // page itself as one more stop before its buttons was a press of
+            // the D-pad that showed nothing.
+            .focusProperties { canFocus = false }
+            .clickable(onClickLabel = "Open ${title.displayName}", onClick = onOpen),
+    ) {
         Backdrop(title, Modifier.fillMaxSize(), onMood = { mood = it })
         Box(
             Modifier.fillMaxSize().background(
@@ -1016,6 +1032,8 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
     Column(
         Modifier
             .width(220.dp)
+            .focusHighlight(MaterialTheme.shapes.medium, grow = true)
+            .onMenuKey(onLongClick)
             .clip(MaterialTheme.shapes.medium)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this episode"),
     ) {
@@ -1076,6 +1094,9 @@ private fun PosterTile(
 ) {
     Column(
         modifier
+            .returnsFocus(title.key)
+            .focusHighlight(MaterialTheme.shapes.medium, grow = true)
+            .onMenuKey(onLongClick)
             .clip(MaterialTheme.shapes.medium)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this title"),
     ) {
