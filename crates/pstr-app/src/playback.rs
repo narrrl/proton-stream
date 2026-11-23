@@ -19,8 +19,9 @@
 //! before the file is loaded, or mpv's video output has nowhere to send its
 //! first frames. So the UI thread creates the player and its
 //! [`crate::video::VideoSurface`], and only then hands the player to the thread
-//! that will poll it. Both hold an `Arc`; mpv is destroyed when the last one
-//! goes, which is always the surface, on the UI thread.
+//! that will poll it. Both hold an `Arc`. The last one to go is always the
+//! surface's, on the UI thread, which frees the render context there and hands
+//! the core to a thread of its own to destroy.
 //!
 //! Without a usable OpenGL context — which should not happen under `eframe`'s
 //! glow backend, but is cheap to survive — the player falls back to letting mpv
@@ -732,9 +733,15 @@ fn run(
         &target.link_id,
         &watch_state(position, duration, watched),
     );
+    // Wind the core down from here. After an end of file it is idle, not
+    // finished, and the UI thread freeing the render context would otherwise
+    // wait there for the video chain to close (B69). A `Stop` already did this,
+    // and a second `quit` is only refused.
+    let _ = player.quit();
     // The stream can go now. The player cannot: the UI thread's surface holds
-    // the other `Arc`, and mpv must be destroyed there, on the thread whose
-    // OpenGL context its render context was built against.
+    // the other `Arc`, and the render context must be freed there, on the
+    // thread whose OpenGL context it was built against. The core itself is
+    // then let go on a thread of its own — see `VideoRenderer`'s `Drop`.
     drop(handle);
     drop(subtitles);
     drop(player);

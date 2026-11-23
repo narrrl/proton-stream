@@ -97,6 +97,11 @@ impl VideoSurface {
         })
     }
 
+    /// The player drawn here — see [`VideoRenderer::player`].
+    pub fn player(&self) -> Option<Arc<Player>> {
+        self.renderer.player().cloned()
+    }
+
     /// Whether a frame has ever reached the screen.
     pub fn has_picture(&self) -> bool {
         self.painted

@@ -33,6 +33,23 @@ use crate::{theme, ui};
 /// that can block say how long they took, and the frame as a whole says so too.
 const STALL: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// A part of a frame slower than this is worth naming on its own.
+///
+/// Lower than [`STALL`], so that a frame which crosses it says which part did:
+/// the frame warning alone only names the page.
+const PART_STALL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Run one of the UI thread's blocking parts, and say so if it ran long.
+pub(crate) fn timed<T>(what: &str, work: impl FnOnce() -> T) -> T {
+    let started = std::time::Instant::now();
+    let done = work();
+    let took = started.elapsed();
+    if took >= PART_STALL {
+        tracing::warn!("{what} held the ui thread for {} ms", took.as_millis());
+    }
+    done
+}
+
 /// Time a frame, and log what it was doing if it ran long.
 ///
 /// A guard rather than a wrapper because [`eframe::App::ui`] returns from two
@@ -1134,7 +1151,8 @@ impl App {
                     // render context has to be freed on this thread anyway.
                     //
                     // Both halves of this are blocking calls into mpv on the UI
-                    // thread — destroying a core waits for its demuxer, and
+                    // thread — freeing a render context waits for its video
+                    // chain (the core itself is destroyed elsewhere, B69), and
                     // creating one compiles shaders — so both are timed. If the
                     // window ever stops answering while episodes change, this is
                     // the line that says which half did it.
@@ -1202,7 +1220,8 @@ impl App {
                         // Dropping this frees the mpv render context, which has
                         // to happen on this thread with the GL context current.
                         // `pump` is called from `ui`, which is exactly that.
-                        let target = self.playback.take().map(|p| p.target.title_key.clone());
+                        let target = timed("dropping the stopped player", || self.playback.take())
+                            .map(|p| p.target.title_key.clone());
                         // Nothing to show on the player page any more. Back to
                         // where the click came from, rather than a black window
                         // — unless the next episode is already opening, which is
@@ -2647,20 +2666,24 @@ impl eframe::App for App {
                 });
             self.search = search;
             self.focus_search = false;
-            self.view.refresh(
-                &self.library,
-                ViewInputs {
-                    query: &self.search,
-                    metadata: &self.metadata,
-                    names: self.engine.appearance().names,
-                    added: &self.added,
-                    offline: &self.offline_files,
-                    list: &self.my_list,
-                    first_seen: &self.first_seen,
-                    guides: &self.episodes,
-                    now: crate::engine::unix_now(),
-                },
-            );
+            // Mostly a no-op; a full rebuild when the library or the way it is
+            // arranged changed, which is the part worth timing.
+            timed("rebuilding the library view", || {
+                self.view.refresh(
+                    &self.library,
+                    ViewInputs {
+                        query: &self.search,
+                        metadata: &self.metadata,
+                        names: self.engine.appearance().names,
+                        added: &self.added,
+                        offline: &self.offline_files,
+                        list: &self.my_list,
+                        first_seen: &self.first_seen,
+                        guides: &self.episodes,
+                        now: crate::engine::unix_now(),
+                    },
+                )
+            });
             // After the refresh, which forgets it when the library changed.
             if let Page::Title(key) = &self.page
                 && self.view.similar.as_ref().is_none_or(|(of, _)| of != key)
@@ -3017,7 +3040,15 @@ impl eframe::App for App {
         if let Some(playback) = &self.playback {
             playback.stop_and_wait(std::time::Duration::from_secs(2));
         }
+        // Held past the surface, so the core is destroyed here, after its render
+        // context, rather than on a teardown thread the process may not wait for.
+        let core = self
+            .playback
+            .as_ref()
+            .and_then(|playback| playback.video.as_ref())
+            .and_then(|video| video.player());
         self.playback = None;
+        drop(core);
         self.engine
             .shutdown_downloads(std::time::Duration::from_secs(3));
         // After the player: its last position is saved on the way out.
@@ -3387,8 +3418,9 @@ fn transport_panel(
             let scale = ui.ctx().pixels_per_point();
             let size = ui::transport::MINI_PICTURE * scale;
             let picture = playback.video.as_mut().and_then(|video| {
-                let texture =
-                    video.texture(frame, [size.x.round() as i32, size.y.round() as i32])?;
+                let texture = timed("rendering the mini picture", || {
+                    video.texture(frame, [size.x.round() as i32, size.y.round() as i32])
+                })?;
                 video.has_picture().then_some(texture)
             });
             ui::transport::mini(ui, playback, picture, neighbours, actions)

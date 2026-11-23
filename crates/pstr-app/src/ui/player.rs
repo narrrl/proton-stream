@@ -458,7 +458,8 @@ fn paint_video(
         (rect.width() * pixels_per_point).round() as i32,
         (rect.height() * pixels_per_point).round() as i32,
     ];
-    let Some(texture) = video.texture(frame, size) else {
+    let Some(texture) = crate::app::timed("rendering the video", || video.texture(frame, size))
+    else {
         return false;
     };
     if !video.has_picture() {

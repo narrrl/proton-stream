@@ -150,6 +150,38 @@ The first hardware run also found four defects in the harness itself and five in
 the release build; they are [B43](#b43--the-acceptance-harness-could-not-run-against-the-shipping-build)
 and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
+### B69 — the window froze for a second when an episode ended or the next one started
+
+**Symptom.** The log said `ui thread blocked for 1092 ms drawing the player page`,
+and once `… 300 ms drawing the library page`. Nothing named the part of the frame
+that took the time: the swap between players is timed, and it had not warned.
+
+**Cause.** The player thread drops its handle to mpv and then reports
+`PlayerStopped`. The UI thread's `VideoSurface` holds the last handle, so dropping
+the `Playback` there freed the render context and then destroyed the core:
+`mpv_destroy` waits for the core to wind down, demuxer and audio output included.
+This happens on every ended episode, and on Next episode too, because the old
+player stops long before the new stream opens, so the timed swap has nothing left
+to drop. After an end of file the thread never sent `quit`, so the UI thread found
+a live, idle core and also waited for its video chain to close.
+
+**Fix.**
+- The player thread sends `quit` on every way out, not only on Stop, so the core
+  winds down on mpv's threads.
+- `VideoRenderer`'s `Drop` frees the render context where it must, on the GL
+  thread, then hands the core to an `mpv-teardown` thread to destroy. `on_exit`
+  keeps a handle across the drop, so that at exit the core is still destroyed
+  before the process ends.
+- `app::timed` names the parts that can still block, and warns at 100 ms:
+  dropping the stopped player, rendering the video and the mini picture, and
+  rebuilding the library view. If a stall like the 300 ms one on the library page
+  remains, the next log says which part caused it.
+
+**Verified.** The workspace gate passes. In use: play to the end of an episode,
+use Next episode, and stop from the bottom bar while on the library. None of
+these may log `ui thread blocked`. `RUST_LOG=pstr_player=debug` shows
+`released an mpv core in … ms` from the teardown thread.
+
 ### B67 — a token refresh after signing out could sign the viewer back in
 
 **Symptom.** Not seen by a user; found reading the sign-in code against Proton
