@@ -11,7 +11,7 @@ against. The version is part of each file name.
 | Other Linux | `proton-stream-<version>-x86_64-unknown-linux-gnu.tar.gz` | x86_64, libmpv 2 |
 | Arch Linux | AUR: `proton-stream`, `proton-stream-bin` or `proton-stream-git` | x86_64 |
 | Windows | `proton-stream-<version>-x64.msi` or `…-x86_64-windows.zip` | x64 |
-| Android, Android TV | `proton-stream-<version>-android.apk` | Android 12 or newer, arm64 or x86_64 |
+| Android, Android TV | `proton-stream-<version>-android.apk` | Android 12 or newer; arm64, 32-bit ARM (armeabi-v7a) or x86_64 |
 | iOS, iPadOS | `proton-stream-<version>-ios.ipa` | iOS 17 or newer, SideStore or AltStore |
 
 ## Linux
