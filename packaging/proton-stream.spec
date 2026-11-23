@@ -64,7 +64,9 @@ cp -a "%{stagedir}"/. %{buildroot}/
 %{_bindir}/pstr
 %{_datadir}/applications/io.narl.proton-stream.desktop
 %{_datadir}/icons/hicolor/scalable/apps/io.narl.proton-stream.svg
-%{_metainfodir}/io.narl.proton-stream.metainfo.xml
+# Spelled out: Fedora's metainfodir macro is undefined in the rpm on the
+# Ubuntu release runner leaves it undefined.
+%{_datadir}/metainfo/io.narl.proton-stream.metainfo.xml
 # Directory entries, so these stay correct whether or not the checkout has a
 # LICENSE yet (a listed directory takes its contents with it).
 %{_datadir}/doc/proton-stream/
