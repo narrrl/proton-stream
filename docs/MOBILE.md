@@ -70,8 +70,9 @@ The app appears in the TV launcher and has a layout of its own for the TV, made 
   moves up under the top, and the card you are on stays at the left.
 - A title's page opens with **Play** (or **Resume**) ready, so **OK** starts it. Move down for the
   seasons and episodes, and for titles like it.
-- **Search** has its own place in the menu on the left. **OK** on the field opens the TV's keyboard
-  or voice input, and **Down** moves on to what was found.
+- **Search** has its own place in the menu on the left. **OK** on the field opens the TV's keyboard,
+  the microphone beside it listens instead, and **Down** moves on to what was found. The remote's
+  **Search** key opens Search listening, from any page.
 - **History**, **Downloads**, **Shares** and **Settings** are the same pages as on the phone.
 - The **Menu** key, or holding **OK**, opens what a long press opens on a phone, such as
   "Remove from Continue watching" on a card or "Mark watched up to here" on an episode.
@@ -90,6 +91,15 @@ In the player, with the controls hidden:
 | Stop | Stop playback |
 
 When **Skip intro**, **Up next** or the end of an episode appears, **OK** presses its button.
+
+**Continue watching** also appears on the TV's home screen, in its **Play Next** (or **Watch
+Next**) row, with how far you got; choosing a card there starts that episode. Removing a card on
+the home screen keeps it off until you watch that episode again. **Settings → Playback →
+Continue watching on the home screen** turns the row off.
+
+The TV's assistant can search the library too: "search for Frieren on Proton Stream" shows what it
+found, and "play Frieren on Proton Stream" plays the title with that name from where you are, or
+shows the search when no single title has that name.
 
 Typing a share link on a remote is slow, so **Add share** on a TV shows a QR code instead:
 

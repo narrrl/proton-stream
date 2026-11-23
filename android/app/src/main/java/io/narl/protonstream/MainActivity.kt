@@ -38,6 +38,9 @@ class MainActivity : ComponentActivity() {
 
     /** A share link handed over by a browser or the share sheet, until the Add form takes it. */
     private val incomingShareLink = mutableStateOf<String?>(null)
+
+    /** A Watch Next card or a voice search, until the television's UI takes it. */
+    private val incomingTvRequest = mutableStateOf<TvRequest?>(null)
     /**
      * Whether a bind is outstanding, which is what has to be unbound.
      *
@@ -69,7 +72,10 @@ class MainActivity : ComponentActivity() {
         runCatching { NativeRuntime.storedPalette() }.onSuccess(AppearanceState::seed)
         // Only on a fresh start: a recreated activity is handed the intent it
         // was launched with again, and would offer to add the same share twice.
-        if (savedInstanceState == null) incomingShareLink.value = intent.shareLink()
+        if (savedInstanceState == null) {
+            incomingShareLink.value = intent.shareLink()
+            incomingTvRequest.value = intent.tvRequest()
+        }
         enableEdgeToEdge()
         // Re-applied on every change, not just at startup: picking Latte from
         // the settings page has to turn the status bar's icons dark in the same
@@ -98,6 +104,8 @@ class MainActivity : ComponentActivity() {
                         playerHost.value,
                         shareLink = incomingShareLink.value,
                         onShareLinkTaken = { incomingShareLink.value = null },
+                        request = incomingTvRequest.value,
+                        onRequestTaken = { incomingTvRequest.value = null },
                     )
                 } else {
                     ProtonStreamApp(
@@ -135,6 +143,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.shareLink()?.let { incomingShareLink.value = it }
+        intent.tvRequest()?.let { incomingTvRequest.value = it }
     }
 
     override fun onDestroy() {

@@ -37,8 +37,12 @@ account and player under a UI built on `androidx.tv:tv-material`.
   watched, season chips, episodes with their stills and synopses, the
   franchise, and More like this.
 - `TvSearch` and `TvBrowse`: the field takes the focus and opens the TV's
-  keyboard or voice input on OK; results are people, genres, episodes and
-  titles.
+  keyboard on OK; results are people, genres, episodes and titles. The mic
+  beside it, and the remote's Search key from any page, start the system's
+  speech input (`RecognizerIntent`, declared in `<queries>`; no mic where
+  none is installed). A search that arrives from outside the field moves the
+  focus to its results, and the field never opens the keyboard for a focus
+  the page hands it, or it would stay up over them.
 - History, Downloads, Shares and Settings are the phone's pages inside the
   overscan margins (48dp × 27dp). They work with a D-pad and are visited
   rarely enough not to need their own yet.
@@ -53,6 +57,33 @@ opened from, and the shared player handles a remote's keys (key presses keep
 the controls up, Skip intro, Up next, the end card and the error panel take
 the focus, Back puts the controls away first, and fast-forward, rewind, next,
 previous and stop work, through the media session too).
+
+From outside the app (`TvRequest`, read by `MainActivity` and acted on by
+`TvApp` once the library has loaded):
+
+- **Watch Next** (`WatchNext.kt`): Continue watching, written to the
+  launcher's `TvContract.WatchNextPrograms` by `WatchNextPublisher` whenever
+  the list changes, two seconds after it settles. It needs
+  `WRITE_EPG_DATA`, which a TV grants at install. A card is the show's name,
+  the episode's own name and numbers, the provider's art and synopsis, the
+  place and the length, never a file name. Its intent is
+  `ACTION_PLAY_EPISODE` with the title and link ids. `planWatchNext` keeps a
+  card the viewer removed (left behind as not browsable) off the home screen
+  until that episode is watched again, which replaces the row, since an app
+  may not make one browsable again. The switch is
+  `SettingsStore.watchNext`, on by default and offered only on a TV.
+  Verify with the launcher: `adb shell content query` sees none of the app's
+  rows, since the provider only answers an app with its own.
+- **Assistant search**: `android.intent.action.SEARCH` and
+  `com.google.android.gms.actions.SEARCH_ACTION` open Search with the query;
+  `MEDIA_PLAY_FROM_SEARCH` plays the one title of that name (`playFromSearch`,
+  compared without case, spaces or punctuation), else shows the search. A
+  blank query plays the top of Continue watching. To try them:
+
+  ```bash
+  adb shell "am start -a android.media.action.MEDIA_PLAY_FROM_SEARCH --es query 'chainsaw man' \
+    -n io.narl.protonstream.debug/io.narl.protonstream.MainActivity"
+  ```
 
 Three ways to get a share onto a TV without typing its link on a remote:
 
