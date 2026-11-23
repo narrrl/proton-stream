@@ -307,6 +307,7 @@ fn cover_row(
                         subtitle: format!("{what}{year}"),
                         progress: member.resume().and_then(|e| e.progress()).map(|v| v as f32),
                         badge: here.then(|| "Here".to_owned()),
+                        badge_warm: false,
                         width: 128.0,
                         aspect: theme::POSTER_ASPECT,
                     },
@@ -466,6 +467,7 @@ fn header(
                         subtitle: String::new(),
                         progress: title.resume().and_then(|e| e.progress()).map(|v| v as f32),
                         badge: None,
+                        badge_warm: false,
                         width: theme::CARD_WIDTH,
                         aspect: theme::CARD_ASPECT,
                     },
@@ -502,7 +504,7 @@ fn header(
                 )));
             }
             ui.add_space(theme::space::XS);
-            ui.label(ui::muted(meta_line(title, found.as_ref())));
+            ui.label(ui::facts(&meta_line(title, found.as_ref())));
             // What the files are, rather than what the title is: set apart
             // from the line above as small outlined marks, the way a box
             // prints them.
@@ -1207,12 +1209,7 @@ pub(crate) fn still(
         );
     }
     if response.has_focus() {
-        painter.rect_stroke(
-            rect,
-            radius,
-            egui::Stroke::new(2.0, theme::accent()),
-            egui::StrokeKind::Inside,
-        );
+        theme::focus_ring(painter, rect, radius);
     }
     // A play mark, always faintly there and full under the pointer.
     let centre = rect.center();

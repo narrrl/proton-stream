@@ -212,8 +212,8 @@ fn palette_card(ui: &mut egui::Ui, appearance: Appearance, flavor: Flavor) -> eg
         painter.rect_filled(
             bar,
             egui::CornerRadius {
-                nw: 8,
-                ne: 8,
+                nw: theme::radius::MD,
+                ne: theme::radius::MD,
                 sw: 0,
                 se: 0,
             },
@@ -257,16 +257,27 @@ fn palette_card(ui: &mut egui::Ui, appearance: Appearance, flavor: Flavor) -> eg
             )
         };
         painter.rect_stroke(preview, radius, ring, egui::StrokeKind::Outside);
-        painter.text(
-            egui::pos2(rect.left() + 2.0, preview.bottom() + 8.0),
-            egui::Align2::LEFT_TOP,
-            flavor.label(),
+        // Cut to the card: "Catppuccin Macchiato" is wider than one, and
+        // drawn whole it ran into the next card's name. The full name is
+        // the hover text and the accessible name.
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            flavor.label().to_owned(),
             theme::Role::Label.font(),
             if selected {
                 theme::text()
             } else {
                 theme::muted()
             },
+        );
+        job.wrap.max_width = size.x - 4.0;
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        job.wrap.overflow_character = Some('…');
+        let galley = painter.layout_job(job);
+        painter.galley(
+            egui::pos2(rect.left() + 2.0, preview.bottom() + 8.0),
+            galley,
+            theme::text(),
         );
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -840,12 +851,21 @@ fn storage_form(ui: &mut egui::Ui, prefs: Prefs<'_>, actions: &mut Vec<Action>) 
 /// What this is, and which version.
 fn about(ui: &mut egui::Ui) {
     ui::widgets::settings_group(ui, "About", None, |ui| {
+        ui.add_space(theme::space::S);
+        ui::brand(ui, 48.0);
+        ui.add_space(theme::space::S);
         ui::widgets::settings_row(
             ui,
-            "proton-stream",
+            concat!("Version ", env!("CARGO_PKG_VERSION")),
             Some("Streams Proton Drive share links without an account or a download step."),
+            |_| {},
+        );
+        ui::widgets::settings_row(
+            ui,
+            "The suite",
+            Some("Proton Drive for Linux and Proton Gallery wear the same colours"),
             |ui| {
-                ui.label(ui::muted(concat!("version ", env!("CARGO_PKG_VERSION"))));
+                ui.hyperlink_to("proton-stream.narl.io", "https://proton-stream.narl.io");
             },
         );
         ui::widgets::settings_row(ui, "Keyboard shortcuts", None, |ui| {

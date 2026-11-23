@@ -142,18 +142,26 @@ pub mod space {
     pub const XXL: f32 = 24.0;
 }
 
-/// Corner radii, as `egui::CornerRadius::same` takes them.
+/// Corner radii, as `egui::CornerRadius::same` takes them. The suite's scale
+/// (`docs/DESIGN-TOKENS.md`): 6, 12, 16, 24 and a pill, the same numbers
+/// Android's `Shape.kt` and the websites use.
 pub mod radius {
     /// A progress bar, or a strip along an edge.
     pub const BAR: u8 = 3;
-    /// A badge over artwork. Android's `Shape.kt` has the same number.
-    pub const BADGE: u8 = 4;
-    /// A small control inside something else: a menu entry, a chip.
-    pub const SM: u8 = 6;
-    /// Everything else either client paints: cards, buttons, the tab pill.
-    pub const MD: u8 = 8;
-    /// Something that floats: a row card, a dialog, a toast, the hero.
-    pub const LG: u8 = 12;
+    /// A badge over artwork, a chip.
+    pub const BADGE: u8 = 6;
+    /// A small control inside something else: a menu entry, a text field.
+    pub const SM: u8 = 8;
+    /// Everything else either client paints: cards, tiles, rows.
+    pub const MD: u8 = 12;
+    /// Something that floats: a dialog, a toast, the hero.
+    pub const LG: u8 = 16;
+    /// The bar across the top, which floats over the page.
+    pub const FLOAT: u8 = 24;
+    /// Half the height, whatever the height: buttons, tabs, the search box.
+    /// epaint clamps a radius to half the shorter side, so the largest one
+    /// there is draws a stadium at any size.
+    pub const PILL: u8 = u8::MAX;
 }
 
 /// How long things take to change, in seconds, for `Context::animate_*`.
@@ -607,6 +615,9 @@ pub struct Palette {
     /// Ink that stays readable on top of the accent.
     pub on_accent: Color32,
     pub danger: Color32,
+    /// The small warm colour: a badge, a rating star, a focus ring's inner
+    /// edge. Copper on the Proton palettes.
+    pub highlight: Color32,
     /// Whether this is a light theme.
     pub light: bool,
 }
@@ -636,6 +647,7 @@ impl Palette {
             accent_dim: color(palette.accent_dim),
             on_accent: color(palette.on_accent),
             danger: color(palette.danger),
+            highlight: color(palette.highlight),
             light: palette.light,
         }
     }
@@ -693,6 +705,55 @@ pub fn on_accent() -> Color32 {
 }
 pub fn danger() -> Color32 {
     palette().danger
+}
+pub fn highlight() -> Color32 {
+    palette().highlight
+}
+
+/// The app's mark, for the top bar and the About page: the same PNG the window
+/// and the notifications use, decoded once.
+pub fn brand_mark(ctx: &egui::Context) -> TextureHandle {
+    let id = egui::Id::new("brand-mark");
+    if let Some(mark) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+        return mark;
+    }
+    let image = match eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")) {
+        Ok(icon) => egui::ColorImage::from_rgba_unmultiplied(
+            [icon.width as usize, icon.height as usize],
+            &icon.rgba,
+        ),
+        Err(error) => {
+            tracing::debug!("brand mark: {error}");
+            egui::ColorImage::filled([1, 1], Color32::TRANSPARENT)
+        }
+    };
+    let mark = ctx.load_texture("brand-mark", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, mark.clone()));
+    mark
+}
+
+/// The ring around a control that has the keyboard's focus: the accent, with
+/// the copper highlight just inside it, the way the suite's icons put copper
+/// behind violet.
+///
+/// egui's own focus cue is a hairline in the selection colour, which on a dark
+/// page next to artwork nobody sees — and someone moving with Tab has to be
+/// able to see where they are.
+pub fn focus_ring(painter: &egui::Painter, rect: Rect, corner_radius: impl Into<CornerRadius>) {
+    let corner_radius = corner_radius.into();
+    let palette = palette();
+    painter.rect_stroke(
+        rect.expand(3.0),
+        corner_radius + 3,
+        Stroke::new(2.0, palette.accent),
+        egui::StrokeKind::Inside,
+    );
+    painter.rect_stroke(
+        rect.expand(1.0),
+        corner_radius + 1,
+        Stroke::new(1.0, palette.highlight),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// Whether ramps are drawn at all.
@@ -869,8 +930,16 @@ pub fn mood_veil(mood: Option<Color32>) -> Color32 {
 /// the caller reserves an index before drawing and fills it in after.
 pub fn bar_shape(ctx: &egui::Context, rect: Rect) -> egui::Shape {
     let palette = palette();
+    let corner_radius = CornerRadius::same(radius::FLOAT);
     if !ACTIVE.read().gradients {
-        return egui::epaint::RectShape::filled(rect, CornerRadius::ZERO, palette.surface).into();
+        return egui::epaint::RectShape::new(
+            rect,
+            corner_radius,
+            palette.surface,
+            Stroke::new(1.0, palette.border),
+            egui::StrokeKind::Inside,
+        )
+        .into();
     }
     let texture = ramp(
         ctx,
@@ -881,7 +950,18 @@ pub fn bar_shape(ctx: &egui::Context, rect: Rect) -> egui::Shape {
         mix(palette.surface, palette.background, 0.7),
         Direction::Vertical,
     );
-    textured(rect, CornerRadius::ZERO, &texture)
+    let mut shape = egui::epaint::RectShape::new(
+        rect,
+        corner_radius,
+        Color32::WHITE,
+        Stroke::new(1.0, palette.border),
+        egui::StrokeKind::Inside,
+    );
+    shape.brush = Some(Arc::new(egui::epaint::Brush {
+        fill_texture_id: texture.id(),
+        uv: Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+    }));
+    shape.into()
 }
 
 /// The shadow under a raised tile, at `strength` of its full depth.
@@ -1042,7 +1122,7 @@ pub fn apply(ctx: &egui::Context, appearance: Appearance) {
     visuals.selection.stroke = Stroke::new(1.0, palette.text);
     visuals.hyperlink_color = palette.accent;
 
-    let radius = CornerRadius::same(radius::MD);
+    let radius = CornerRadius::same(radius::SM);
     visuals.widgets.noninteractive.bg_fill = palette.surface;
     visuals.widgets.noninteractive.corner_radius = radius;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette.border);
@@ -1060,6 +1140,11 @@ pub fn apply(ctx: &egui::Context, appearance: Appearance) {
     visuals.widgets.active.bg_fill = palette.accent_dim;
     visuals.widgets.active.weak_bg_fill = palette.accent_dim;
     visuals.widgets.active.corner_radius = radius;
+    // egui draws a widget that has the keyboard's focus with these `active`
+    // visuals, so this stroke is the focus ring of every stock button, chip
+    // and selectable label — the hand-drawn ones call `focus_ring`. egui's
+    // default is a hairline nobody sees on a dark page.
+    visuals.widgets.active.bg_stroke = Stroke::new(2.0, palette.accent);
 
     // Both, not just the active one: a menu or a tooltip that opens while the
     // platform is mid-way through telling us its theme should not flash the
