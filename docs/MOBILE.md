@@ -56,6 +56,14 @@ Picture-in-Picture is not available on either platform.
 
 The app appears in the TV launcher and has a layout of its own for the TV, made for the remote.
 
+<table>
+  <tr>
+    <td><img src="../images/android-tv-home.png" alt="Home on a TV" width="400"></td>
+    <td><img src="../images/android-tv-title.png" alt="A title page on a TV" width="400"></td>
+    <td><img src="../images/android-tv-browse.png" alt="Every title of a genre on a TV" width="400"></td>
+  </tr>
+</table>
+
 - **Home** shows the title you are on at the top, with its picture and synopsis, and rows under
   it: **Continue watching**, then the same rows as on the phone (new episodes, **My List**, what
   was added, and so on), and every title with the same filters as on the phone. The row you are on
