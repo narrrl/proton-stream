@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" data-app="stream" role="img" aria-labelledby="stream-title stream-desc">
 <title id="stream-title">Proton Stream</title>
-<desc id="stream-desc">Frontal violet and pink vector icon with shallow metallic copper backing.</desc>
+<desc id="stream-desc">Frontal violet and pink play prism with lilac and pink currents flowing toward its point, on a shallow metallic copper backing.</desc>
 <defs>
   <linearGradient id="stream-face" x1="36" y1="212" x2="220" y2="54" gradientUnits="userSpaceOnUse">
     <stop stop-color="#6240DA"/><stop offset=".52" stop-color="#8056EF"/><stop offset="1" stop-color="#D58BDF"/>
@@ -30,11 +30,18 @@
     <stop stop-color="#E8B4EB"/><stop offset="1" stop-color="#BB7BD7"/>
   </linearGradient>
   <clipPath id="stream-photo-clip"><rect x="28" y="54" width="194" height="172" rx="24"/></clipPath>
+  <clipPath id="stream-prism"><path d="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z"/></clipPath>
 </defs>
 <!-- Canonical vector artwork; regenerate platform assets with scripts/render-branding.py. -->
 <g id="mark">
 <path d="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" fill="url(#stream-copper)" transform="translate(6 -6)" stroke="#7D4936" stroke-width=".8" stroke-linejoin="round"/>
-<path d="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" fill="url(#stream-face)" stroke="#5936B7" stroke-width=".9" stroke-linejoin="round"/>
+<path d="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" fill="url(#stream-face)"/>
+<g clip-path="url(#stream-prism)">
+<path d="M20 150C58 128 92 168 132 150C164 136 194 124 236 128V240H20Z" fill="url(#stream-far-mountain)"/>
+<path d="M20 182C62 160 98 198 140 178C170 164 198 152 236 150V240H20Z" fill="url(#stream-mountain)"/>
+<path d="M40 166C70 152 100 186 140 178C170 164 198 152 226 150" fill="none" stroke="#F1E8FF" stroke-opacity=".6" stroke-width="1.5" stroke-linecap="round"/>
+</g>
+<path d="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" fill="none" stroke="#5936B7" stroke-width=".9" stroke-linejoin="round"/>
 <path d="M44 69V52C44 42 54 36 63 41L217 119" fill="none" stroke="#F3DDF9" stroke-opacity=".55" stroke-width="1.5" stroke-linecap="round"/>
 </g>
 </svg>

@@ -5,6 +5,7 @@ Kept identical across the suite; each checkout renders independently.
 """
 
 import argparse
+import os
 from pathlib import Path
 import re
 import shutil
@@ -27,12 +28,12 @@ BACKGROUND = "#F4F0FA"
 PLATE = (("0", "#3A2A6E"), (".55", "#231946"), ("1", "#140E2B"))
 
 
-def run(*args, data=None):
-    return subprocess.run(args, input=data, stdout=subprocess.PIPE, check=True).stdout
+def run(*args, data=None, env=None):
+    return subprocess.run(args, input=data, stdout=subprocess.PIPE, check=True, env=env).stdout
 
 
-def render(svg, size, *, opaque=False):
-    png = run("rsvg-convert", "-w", str(size), data=svg.encode())
+def render(svg, size, *, opaque=False, env=None):
+    png = run("rsvg-convert", "-w", str(size), data=svg.encode(), env=env)
     options = ["-background", BACKGROUND, "-alpha", "remove", "-alpha", "off"] if opaque else []
     return run("magick", "-", *options, "-strip", "PNG:-", data=png)
 
@@ -182,9 +183,9 @@ class Artwork:
 {self.svg_defs}
 <rect width="320" height="180" fill="{BACKGROUND}"/>
 <g transform="translate(8 24) scale(.5)">{self.svg_mark}</g>
-<g fill="#35245D" font-family="DejaVu Sans">
+<g fill="#35245D" font-family="Inter">
   <text x="140" y="82" font-size="22">Proton</text>
-  <text x="138" y="115" font-size="30" font-weight="bold">Stream</text>
+  <text x="138" y="115" font-size="30" font-weight="600">Stream</text>
 </g>
 </svg>
 '''
@@ -259,11 +260,15 @@ def main():
                 path.write_bytes(render(desktop.decode(), size))
                 files.append(str(path))
             outputs["packaging/windows/proton-stream.ico"] = run("magick", *files, "-strip", "ICO:-")
-        if not shutil.which("fc-match"):
-            parser.error("fontconfig is required to render the Android TV banner")
-        if "DejaVu Sans" not in run("fc-match", "-f", "%{family}", "DejaVu Sans").decode():
-            parser.error("DejaVu Sans is required to render the Android TV banner")
-        outputs["android/app/src/main/res/drawable-nodpi/tv_banner.png"] = render(art.banner(), 640, opaque=True)
+        # The banner's name is set in the app's own Inter, and fontconfig sees
+        # only the bundled files, so no installed font can change the pixels.
+        with tempfile.TemporaryDirectory(prefix="proton-fonts-") as temp:
+            conf = Path(temp) / "fonts.conf"
+            conf.write_text(f"""<?xml version="1.0"?>
+<fontconfig><dir>{ROOT / "crates/pstr-app/assets/fonts"}</dir><cachedir>{temp}</cachedir></fontconfig>
+""")
+            env = {**os.environ, "FONTCONFIG_FILE": str(conf)}
+            outputs["android/app/src/main/res/drawable-nodpi/tv_banner.png"] = render(art.banner(), 640, opaque=True, env=env)
     stale = []
     for relative, data in outputs.items():
         target = ROOT / relative

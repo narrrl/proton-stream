@@ -146,7 +146,7 @@ class OfflineDownloadWorker(
      */
     private fun createForegroundInfo(label: String, progress: Int?): ForegroundInfo {
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(io.narl.protonstream.R.drawable.ic_launcher_foreground)
+            .setSmallIcon(io.narl.protonstream.R.drawable.ic_notification_stream)
             .setContentTitle(label)
             .setContentText(if (progress == null) "Waiting to download" else "$progress %")
             .setProgress(100, progress ?: 0, progress == null || progress == 0)
@@ -182,7 +182,7 @@ class OfflineDownloadWorker(
         manager.notify(
             SUMMARY_ID,
             NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-                .setSmallIcon(io.narl.protonstream.R.drawable.ic_launcher_foreground)
+                .setSmallIcon(io.narl.protonstream.R.drawable.ic_notification_stream)
                 .setContentTitle(if (left == 1) "Downloading 1 episode" else "Downloading $left episodes")
                 .setOnlyAlertOnce(true)
                 .setGroup(GROUP)
