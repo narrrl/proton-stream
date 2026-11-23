@@ -71,6 +71,7 @@ modules:
         commit: 275f7dea27924cdd34ab2e6c20e448b6bc4fab65
 
   # libmpv only: the app embeds it, so no mpv binary, no Lua and no JavaScript.
+  # Without Lua there is no `osc` option either; `pstr-player` skips it (B68).
   - name: mpv
     buildsystem: meson
     config-opts:
