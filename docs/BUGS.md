@@ -181,6 +181,29 @@ a live, idle core and also waited for its video chain to close.
 use Next episode, and stop from the bottom bar while on the library. None of
 these may log `ui thread blocked`. `RUST_LOG=pstr_player=debug` shows
 `released an mpv core in … ms` from the teardown thread.
+### B68 — the Flatpak could not play anything: "start mpv: mpv: Raw(-8)"
+
+**Symptom.** Every episode in the Flatpak failed at once with the toast "start
+mpv: mpv: Raw(-8)". The native packages played the same files. A Flatpak and a
+native install side by side share the desktop ID, and a launcher picks the
+user Flatpak's entry, so it looked like "works from the terminal, not from the
+launcher".
+
+**Cause.** The Flatpak builds libmpv with `-Dlua=disabled`, and mpv declares its
+`osc` option only `#if HAVE_LUA` (`options/options.c`). `Player::new` sets `osc`
+for both the embedded player and the window fallback, so mpv answered
+`MPV_ERROR_PROPERTY_NOT_FOUND` (-8) both times. libmpv2 prints its errors with
+`Debug`, which is why the toast showed a number.
+
+**Fix.** `without_lua` in `pstr-player`'s `player.rs` treats a missing `osc` as
+already off: a libmpv without Lua has no controller to turn on. Every other
+option still fails as before. `pstr-player`'s `Error::Mpv` now shows mpv's own
+name for the error ("property not found").
+
+**Verified.** Workspace gate, with
+`a_libmpv_without_lua_still_starts_without_its_on_screen_controller`,
+`any_other_refusal_of_the_on_screen_controller_still_fails` and
+`an_mpv_error_is_shown_by_name_rather_than_by_number`.
 
 ### B67 — a token refresh after signing out could sign the viewer back in
 
