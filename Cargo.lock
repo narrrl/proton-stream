@@ -5330,7 +5330,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-android"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "android_logger",
  "futures",
@@ -5350,7 +5350,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-app"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5384,7 +5384,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-cli"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5403,7 +5403,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-core"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "directories",
  "futures",
@@ -5427,7 +5427,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-meta"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "pstr-core",
  "reqwest",
@@ -5440,7 +5440,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-player"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "async-trait",
  "libloading",
@@ -5455,7 +5455,7 @@ dependencies = [
 
 [[package]]
 name = "pstr-stream"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "async-trait",
  "proton-drive-rs",

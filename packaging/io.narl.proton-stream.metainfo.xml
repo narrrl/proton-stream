@@ -101,6 +101,18 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.3.0" date="2026-11-23">
+      <description>
+        <p>The suite's new look: plum neutrals like Proton Drive and Proton Gallery, a Proton Light palette, a Copper accent and a new Stream icon.</p>
+        <ul>
+          <li>The navigation floats as a rounded bar with the Stream mark, and buttons and tabs are pills.</li>
+          <li>Keyboard focus is clearly visible on every control.</li>
+          <li>The player starts on a libmpv built without Lua, as in the Flatpak, instead of failing with "Raw(-8)".</li>
+          <li>The window no longer freezes for a moment when an episode ends or the next one starts.</li>
+          <li>Android TV gets a UI of its own, and a share can be added by scanning a code on the TV with a phone.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.0" date="2026-11-22">
       <description>
         <p>Folders from your own Proton Drive pick up new episodes within minutes: the app checks Drive for changes while it is open instead of waiting six hours.</p>

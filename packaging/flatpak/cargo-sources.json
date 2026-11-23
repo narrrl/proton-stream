@@ -6463,14 +6463,27 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/proton-media-rs/proton-media-rs-0.1.1.crate",
-        "sha256": "f03aa6c403e4f2f7a8f9a444dff1e268d8bc9bcaf1d0d953cc3a1312d798f1ef",
-        "dest": "cargo/vendor/proton-media-rs-0.1.1"
+        "url": "https://static.crates.io/crates/proton-drive-tree-rs/proton-drive-tree-rs-0.1.0.crate",
+        "sha256": "e77c16e471464599569211453931dd772c74987ff7f93ebc9242b1d5a06915af",
+        "dest": "cargo/vendor/proton-drive-tree-rs-0.1.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"f03aa6c403e4f2f7a8f9a444dff1e268d8bc9bcaf1d0d953cc3a1312d798f1ef\", \"files\": {}}",
-        "dest": "cargo/vendor/proton-media-rs-0.1.1",
+        "contents": "{\"package\": \"e77c16e471464599569211453931dd772c74987ff7f93ebc9242b1d5a06915af\", \"files\": {}}",
+        "dest": "cargo/vendor/proton-drive-tree-rs-0.1.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/proton-media-rs/proton-media-rs-0.2.0.crate",
+        "sha256": "7fddf61ea720071805ece42a0040899db90c4696cd016fe5227dc9c981733d0a",
+        "dest": "cargo/vendor/proton-media-rs-0.2.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"7fddf61ea720071805ece42a0040899db90c4696cd016fe5227dc9c981733d0a\", \"files\": {}}",
+        "dest": "cargo/vendor/proton-media-rs-0.2.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -6497,6 +6510,19 @@
         "type": "inline",
         "contents": "{\"package\": \"d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea\", \"files\": {}}",
         "dest": "cargo/vendor/pxfm-0.1.30",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/qrcode/qrcode-0.15.0.crate",
+        "sha256": "ace1a365f55004297f2cf24acfd96d02966246ca423385273b58a7dc873ee14d",
+        "dest": "cargo/vendor/qrcode-0.15.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"ace1a365f55004297f2cf24acfd96d02966246ca423385273b58a7dc873ee14d\", \"files\": {}}",
+        "dest": "cargo/vendor/qrcode-0.15.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
