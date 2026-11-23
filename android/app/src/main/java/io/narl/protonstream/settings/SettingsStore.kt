@@ -61,6 +61,14 @@ class SettingsStore(context: Context) {
         get() = preferences.getBoolean(KEY_NEW_EPISODE_NOTIFICATIONS, true)
         set(value) { preferences.edit { putBoolean(KEY_NEW_EPISODE_NOTIFICATIONS, value) } }
 
+    /**
+     * Whether a television's home screen shows Continue watching in its Watch
+     * Next row. The launcher sees the shows and episodes that row lists.
+     */
+    var watchNext: Boolean
+        get() = preferences.getBoolean(KEY_WATCH_NEXT, true)
+        set(value) { preferences.edit { putBoolean(KEY_WATCH_NEXT, value) } }
+
     companion object {
         /** The desktop's range, in the steps a phone's storage is bought in. */
         val CACHE_BUDGET_CHOICES = listOf(1, 2, 4, 8, 16)
@@ -78,6 +86,7 @@ class SettingsStore(context: Context) {
         private const val NAME = "proton_stream_settings"
         private const val KEY_WIFI_ONLY = "wifi_only"
         private const val KEY_BACKGROUND_AUDIO = "background_audio"
+        private const val KEY_WATCH_NEXT = "watch_next"
         private const val KEY_HARDWARE_DECODING = "hardware_decoding"
         private const val KEY_CACHE_BUDGET_GIB = "cache_budget_gib"
         private const val KEY_LIBRARY_SORT = "library_sort"

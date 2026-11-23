@@ -42,6 +42,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -51,6 +56,7 @@ import androidx.tv.material3.NavigationDrawer
 import androidx.tv.material3.NavigationDrawerItem
 import androidx.tv.material3.Text
 import androidx.work.WorkManager
+import io.narl.protonstream.TvRequest
 import io.narl.protonstream.playback.LibmpvHost
 import io.narl.protonstream.playback.PlayerScreen
 import io.narl.protonstream.ui.AccountActions
@@ -98,6 +104,8 @@ fun TvApp(
     playerHost: LibmpvHost? = null,
     shareLink: String? = null,
     onShareLinkTaken: () -> Unit = {},
+    request: TvRequest? = null,
+    onRequestTaken: () -> Unit = {},
     model: AppViewModel = viewModel(
         factory = AppViewModel.Factory(
             LocalContext.current,
@@ -113,6 +121,10 @@ fun TvApp(
     var playingIndex by rememberSaveable { mutableIntStateOf(0) }
     var heroKey by rememberSaveable { mutableStateOf<String?>(null) }
     var addingShare by remember { mutableStateOf(false) }
+    // The remote's Search key: the Search page, listening.
+    var listening by remember { mutableStateOf(false) }
+    // A search from the assistant: Search shows what it found, focused.
+    var revealing by remember { mutableStateOf(false) }
     var browseKind by rememberSaveable { mutableStateOf<String?>(null) }
     var browseName by rememberSaveable { mutableStateOf("") }
     val browsing = when (browseKind) {
@@ -145,6 +157,34 @@ fun TvApp(
             selectedTitleKey = null
             browseKind = null
         }
+    }
+    // A Watch Next card or the assistant, once the library is there to answer it.
+    LaunchedEffect(request, state.loading, state.titles) {
+        val asked = request ?: return@LaunchedEffect
+        if (state.loading) return@LaunchedEffect
+        val search = { query: String ->
+            place = Place.Search
+            selectedTitleKey = null
+            browseKind = null
+            model.search(query)
+            revealing = true
+        }
+        when (asked) {
+            is TvRequest.Play -> {
+                val title = state.titles.firstOrNull { it.key == asked.titleKey }
+                val index = title?.seasons?.flatMap(SeasonRecord::episodes)?.indexOfFirst { it.linkId == asked.linkId } ?: -1
+                if (title != null && index >= 0) {
+                    play(title, index)
+                } else {
+                    model.reportError(IllegalStateException("That episode is no longer in the library"))
+                }
+            }
+            is TvRequest.Search -> search(asked.query)
+            is TvRequest.PlayFromSearch ->
+                playFromSearch(state.titles, asked.query)?.let { (title, index) -> play(title, index) }
+                    ?: search(asked.query)
+        }
+        onRequestTaken()
     }
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -191,7 +231,19 @@ fun TvApp(
     BackHandler(enabled = selectedTitle != null) { selectedTitleKey = null }
 
     TvTheme {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || event.key != Key.Search) return@onPreviewKeyEvent false
+                    place = Place.Search
+                    selectedTitleKey = null
+                    browseKind = null
+                    listening = true
+                    true
+                },
+        ) {
             if (playing == null) {
                 // The page, not the menu, holds the focus when something opens:
                 // the app just started (the window hands its first focus to the
@@ -267,6 +319,10 @@ fun TvApp(
                                     onShareLinkTaken()
                                 },
                                 onShareAdded = { place = Place.Home },
+                                listening = listening,
+                                onListened = { listening = false },
+                                revealing = revealing,
+                                onRevealed = { revealing = false },
                             )
                         }
                     }
@@ -316,6 +372,10 @@ private fun Page(
     shareLink: String?,
     onShareLinkTaken: () -> Unit,
     onShareAdded: () -> Unit,
+    listening: Boolean,
+    onListened: () -> Unit,
+    revealing: Boolean,
+    onRevealed: () -> Unit,
 ) {
     val state by model.state.collectAsState()
     // The phone's pages, which draw their own bars, inside the overscan margin.
@@ -349,7 +409,17 @@ private fun Page(
         }
         else -> when (place) {
             Place.Home -> TvHome(state, homeActions, rows, homePage, heroKey, onHero)
-            Place.Search -> TvSearch(state, model::search, homeActions, onBrowse, model::rememberSearch)
+            Place.Search -> TvSearch(
+                state,
+                model::search,
+                homeActions,
+                onBrowse,
+                model::rememberSearch,
+                listen = listening,
+                onListening = onListened,
+                reveal = revealing,
+                onRevealed = onRevealed,
+            )
             Place.History -> Box(phonePage) {
                 HistoryScreen(state, homeActions.onPlay, homeActions.onOpen, model::removeFromHistory, phonePadding)
             }
@@ -407,6 +477,7 @@ private fun Page(
                     model::removeAllOffline,
                     phonePadding,
                     onNamesChanged = model::reloadAfterMetadataChange,
+                    onWatchNextChanged = model::setWatchNext,
                 )
             }
         }

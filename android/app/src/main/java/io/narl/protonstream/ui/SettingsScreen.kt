@@ -102,12 +102,15 @@ internal fun SettingsScreen(
     version: String = appVersion(),
     /** The library's names changed, and it has to be read again to show them. */
     onNamesChanged: () -> Unit = {},
+    /** A television's: Continue watching on its home screen, on or off. Null hides the switch. */
+    onWatchNextChanged: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
     var wifiOnly by remember { mutableStateOf(settings.wifiOnly) }
     var backgroundAudio by remember { mutableStateOf(settings.backgroundAudio) }
     var newEpisodes by remember { mutableStateOf(settings.newEpisodeNotifications) }
+    var watchNext by remember { mutableStateOf(settings.watchNext) }
     var hardwareDecoding by remember { mutableStateOf(settings.hardwareDecoding) }
     var cacheBudgetGib by remember { mutableStateOf(settings.cacheBudgetGib) }
     // Playback preferences are the shared store's, not this app's: they are the
@@ -220,6 +223,16 @@ internal fun SettingsScreen(
                 newEpisodes = it
                 settings.newEpisodeNotifications = it
                 NewEpisodesWorker.schedule(context)
+            }
+            onWatchNextChanged?.let { changed ->
+                SettingSwitch(
+                    "Continue watching on the home screen",
+                    "Shows what you are watching in the TV's Watch Next row",
+                    watchNext,
+                ) {
+                    watchNext = it
+                    changed(it)
+                }
             }
         }
         SettingsPage.Storage -> SettingsSubPage(SettingsPage.Storage, padding, back) {

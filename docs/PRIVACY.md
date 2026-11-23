@@ -20,6 +20,13 @@ the TV over plain HTTP: a TV cannot hold a certificate a phone would trust for a
 anyone who can read the traffic on your home network could read the link. If you do not trust
 that network, choose **Type it instead**.
 
+On a TV, **Continue watching** is also handed to the TV's own home screen, the Android TV or
+Google TV launcher, as its **Play Next** row: the show's name, the episode's name and number,
+how far you got, a synopsis and the provider's artwork. Never a file name or a share. What the
+launcher does with it is up to the launcher. **Settings → Playback → Continue watching on the
+home screen** turns it off and removes the row. Voice search goes through the TV's own speech
+input; the app receives the words and searches the library on the TV.
+
 Nothing else leaves your device. There is no telemetry, no crash reporting and no update check.
 
 **Posters and descriptions** are off by default. When they are on, the provider learns the names

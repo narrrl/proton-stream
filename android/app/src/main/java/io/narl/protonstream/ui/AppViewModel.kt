@@ -23,6 +23,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import io.narl.protonstream.WatchNextPublisher
+import io.narl.protonstream.watchNextEntries
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.withContext
 import io.narl.protonstream.native.NativeRuntime
@@ -141,6 +145,9 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     /** Set by [stopCrawl], so a queue of shares stops rather than going on to the next. */
     private var crawlStopped = false
 
+    /** Whether Continue watching is offered on the television's home screen. */
+    private val watchNextEnabled = MutableStateFlow(SettingsStore(appContext).watchNext)
+
     init {
         if (!NativeRuntime.tlsReady) {
             mutableState.update {
@@ -184,6 +191,20 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         viewModelScope.launch {
             runCatching { withContext(Dispatchers.IO) { NativeRuntime.engine().recentSearches() } }
                 .onSuccess { recent -> mutableState.update { it.copy(recentSearches = recent) } }
+        }
+        // A television's home screen offers what Continue watching does. Not
+        // before the library has loaded: an empty one would clear the row.
+        if (isTelevision(appContext.resources.configuration)) {
+            val watchNext = WatchNextPublisher(appContext)
+            viewModelScope.launch {
+                combine(
+                    state.filter { !it.loading }.map { it.titles }.distinctUntilChanged(),
+                    watchNextEnabled,
+                ) { titles, enabled -> if (enabled) watchNextEntries(titles) else emptyList() }
+                    .distinctUntilChanged()
+                    .debounce(WATCH_NEXT_SETTLE_MS)
+                    .collect { withContext(Dispatchers.IO) { watchNext.publish(it) } }
+            }
         }
         viewModelScope.launch {
             workManager.workInfosByTagFlow(DownloadCoordinator.TAG)
@@ -385,6 +406,12 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         reload()
         viewModelScope.launch { crawlAdded(listOf(share.id), announce = true) }
         return null
+    }
+
+    /** Offer Continue watching on the television's home screen, or take it off. */
+    fun setWatchNext(enabled: Boolean) {
+        SettingsStore(appContext).watchNext = enabled
+        watchNextEnabled.value = enabled
     }
 
     /**
@@ -995,6 +1022,9 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
 
     private companion object {
         const val SYNC_INTERVAL_MS = 5 * 60 * 1000L
+
+        /** A played episode saves its place more than once on the way out; write the row once. */
+        const val WATCH_NEXT_SETTLE_MS = 2_000L
     }
 
     class Factory(private val context: Context, private val workManager: WorkManager) : ViewModelProvider.Factory {
