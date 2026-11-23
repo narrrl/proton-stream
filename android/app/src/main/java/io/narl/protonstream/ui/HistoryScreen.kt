@@ -126,6 +126,7 @@ private fun HistoryRow(entry: Played, onPlay: () -> Unit, onTitle: () -> Unit, o
             Modifier
                 .width(128.dp)
                 .aspectRatio(16f / 9f)
+                .focusHighlight(MaterialTheme.shapes.small, grow = true)
                 .clip(MaterialTheme.shapes.small)
                 .clickable(onClick = onPlay),
         ) {

@@ -54,16 +54,27 @@ Picture-in-Picture is not available on either platform.
 
 ## Android TV
 
-The app appears in the TV launcher. With the controls hidden:
+The app appears in the TV launcher and works with the remote alone. The focused control is
+outlined. The **Menu** key, or holding **OK**, opens what a long press opens on a phone, such as
+"Remove from Continue watching" on a card or "Mark watched up to here" on an episode.
+
+In the player, with the controls hidden:
 
 | Remote | Does |
 |---|---|
 | Left / right | Back or forward 10 seconds |
-| Centre, up or down | Show the controls |
+| Centre, up or down | Show the controls, with Play focused |
+| Back | Hide the controls; again to leave the video |
 | Play/pause | Pause and play |
+| Rewind / fast-forward | Back or forward 10 seconds |
+| Previous / next | Previous or next episode |
+| Stop | Stop playback |
 
-There is no separate TV layout yet, and the app has not been tested on a real TV. Reports are
-welcome.
+When **Skip intro**, **Up next** or the end of an episode appears, **OK** presses its button.
+
+Typing a share link on a remote is slow. Sign in instead, so that shares added on your phone
+arrive through sync, or send the link from a computer with `adb` ([Android](ANDROID.md#android-tv)).
+A layout made for the TV is planned.
 
 ## Downloads
 

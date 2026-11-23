@@ -17,13 +17,36 @@ monochrome icons and TV banner are generated from `images/logo.svg` with
 
 The same build installs on Android TV: it is listed in the TV launcher
 (`LEANBACK_LAUNCHER`, with the banner `scripts/render-tv-banner.sh` renders)
-and requires neither a touch screen nor leanback. Every screen is Compose
-`clickable`s, which the D-pad already moves between. The player takes a
-remote's keys while its controls are down: left and right seek ten seconds,
-the middle button brings the controls up, and play/pause works as on a
-keyboard. There is no TV-specific layout yet, and none of it has been run on a
-TV. Signing in to an account, so that shares arrive through sync, is the way
-to set one up without typing a share link on a remote.
+and requires neither a touch screen nor leanback. This is the foundation for a
+TV app; a layout of its own (`ui/tv/`, on `androidx.tv:tv-material`) comes next.
+What is there now, in `ui/Tv.kt` and the screens that use it:
+
+- `isTelevision()` reads the configuration's UI mode. On a TV the navigation
+  is always the rail, the library and a title never share the screen, the
+  whole app keeps Android TV's overscan margins (48dp × 27dp), and the player
+  has no rotation lock or touch lock.
+- `focusHighlight` outlines the focused control in the accent, and grows
+  artwork a little. Material's own focus tint did not show over a poster.
+- `onMenuKey` opens with the remote's Menu key what a long press opens:
+  a tile's sheet, which has "Remove from Continue watching", and an episode's
+  "Mark watched up to here". Holding OK down works too.
+- `returnsFocus` gives the focus back to the tile a title was opened from.
+- The featured banner stops turning while one of its buttons has focus.
+- The player: key presses keep the controls up. When they come up by key, the
+  play button has focus. Skip intro, Up next, the end card and the error
+  panel take the focus when they appear over hidden controls. Back puts the
+  controls away before it leaves the video. Fast-forward, rewind, next,
+  previous and stop work from the remote, and the media session takes
+  fast-forward and rewind as well.
+
+Two ways to get a share onto a TV without typing its link on a remote:
+
+- Sign in to an account, so that shares added on a phone arrive through sync.
+- Send the link from a computer, which opens the add dialog with it filled in:
+
+  ```bash
+  adb shell "am start -a android.intent.action.VIEW -d 'https://drive.proton.me/urls/…#…'"
+  ```
 
 ## Toolchain
 

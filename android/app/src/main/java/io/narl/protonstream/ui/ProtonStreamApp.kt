@@ -55,7 +55,10 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -89,6 +92,10 @@ import io.narl.protonstream.playback.PlayerScreen
 
 /** From this width the library and an open title share the window. */
 private val TWO_PANE_WIDTH = 840.dp
+
+/** Android TV's overscan-safe margins: five percent of a 960×540dp screen. */
+private val TV_SIDE_MARGIN = 48.dp
+private val TV_TOP_MARGIN = 27.dp
 
 /** How much room the floating mini transport needs at the foot of a page. */
 private val MINI_TRANSPORT_INSET = 88.dp
@@ -191,7 +198,26 @@ fun ProtonStreamApp(
     }
     // Read out here because `navigationSuiteItems` is not a composable scope.
     val navigation = accentNavigationColors()
+    val television = isTelevision()
+    // Closing a title disposes the tile it was opened from, and the focus with
+    // it; on a remote that left the next press of the D-pad starting over from
+    // the corner. The library hands the focus back to that tile instead.
+    var returnFocusTo by remember { mutableStateOf<String?>(null) }
+    var lastTitle by remember { mutableStateOf(selectedTitleKey) }
+    LaunchedEffect(selectedTitleKey) {
+        if (selectedTitleKey == null) returnFocusTo = lastTitle
+        lastTitle = selectedTitleKey
+    }
     NavigationSuiteScaffold(
+        // A television's edge may be cut off by the set (overscan): Android TV's
+        // guidance keeps everything inside a five percent margin. And the rail,
+        // always: a bar along the bottom is a phone's, under a thumb.
+        modifier = if (television) Modifier.padding(horizontal = TV_SIDE_MARGIN, vertical = TV_TOP_MARGIN) else Modifier,
+        layoutType = if (television) {
+            NavigationSuiteType.NavigationRail
+        } else {
+            NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(currentWindowAdaptiveInfo())
+        },
         navigationSuiteItems = {
             Destination.entries.forEach { item ->
                 item(
@@ -229,13 +255,16 @@ fun ProtonStreamApp(
                 bottom = padding.calculateBottomPadding() + MINI_TRANSPORT_INSET,
             )
             Box(Modifier.fillMaxSize()) {
+            CompositionLocalProvider(LocalFocusReturn provides FocusReturn(returnFocusTo) { returnFocusTo = null }) {
             AnimatedContent(destination, label = "primary navigation") { target ->
                 when (target) {
                     // Side by side where there is room for both: on a tablet the
                     // library stays in view while a title is open, so moving
                     // between titles is one tap rather than back and in again.
                     Destination.Library -> BoxWithConstraints(Modifier.fillMaxSize()) {
-                        val twoPane = maxWidth >= TWO_PANE_WIDTH
+                        // Not on a television: two panes there were a tablet's
+                        // layout seen from across a room, too small to read.
+                        val twoPane = maxWidth >= TWO_PANE_WIDTH && !television
                         val browsed by produceState(emptyList<String>(), browsing, state.titles) {
                             value = browsing?.let { model.browse(it) }.orEmpty()
                         }
@@ -411,6 +440,7 @@ fun ProtonStreamApp(
                         onNamesChanged = model::reloadAfterMetadataChange,
                     )
                 }
+            }
             }
             minimizedHost?.let { core ->
                 MiniTransport(

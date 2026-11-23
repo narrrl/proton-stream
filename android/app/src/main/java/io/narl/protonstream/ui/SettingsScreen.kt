@@ -616,6 +616,7 @@ private fun AppearancePicker(onNamesChanged: () -> Unit) {
                         },
                         shape = CircleShape,
                     )
+                    .focusHighlight(CircleShape, grow = true)
                     .clickable {
                         scope.launch { repaint(current.copy(accent = accent), store = true) }
                     },

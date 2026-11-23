@@ -14,9 +14,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -277,7 +278,9 @@ private fun PasswordField(value: String, onChange: (String) -> Unit, label: Stri
 @Composable
 private fun VerificationDialog(url: String, onToken: (String) -> Unit, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Card(Modifier.fillMaxWidth().padding(16.dp).height(560.dp)) {
+        // At most 560dp, and never taller than the window: a television is 540dp
+        // high, and a fixed height pushed the page's own button off its bottom.
+        Card(Modifier.fillMaxWidth().padding(16.dp).heightIn(max = 560.dp).fillMaxHeight()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "Confirm you are human",
