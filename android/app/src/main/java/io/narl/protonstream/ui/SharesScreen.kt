@@ -38,6 +38,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.unit.dp
 import io.narl.protonstream.ui.theme.AccentButton
+import uniffi.pstr_android.ShareHandoff
 import io.narl.protonstream.ui.theme.DangerButton
 import io.narl.protonstream.ui.theme.TonalButton
 import androidx.compose.material.icons.filled.Edit
@@ -72,8 +73,14 @@ internal fun SharesScreen(
     account: AccountUiState = AccountUiState(),
     accountActions: AccountActions? = null,
     onRename: (String, String) -> Unit = { _, _ -> },
+    /**
+     * Where typing a link is a chore — a TV — Add share first offers to take
+     * it from a phone (`PhoneHandoffDialog`). Null on a phone.
+     */
+    startHandoff: (suspend () -> Result<ShareHandoff>)? = null,
 ) {
     var showAdd by remember { mutableStateOf(false) }
+    var typing by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<ShareRecord?>(null) }
     var signingIn by remember { mutableStateOf(false) }
     var browsing by remember { mutableStateOf(false) }
@@ -128,10 +135,20 @@ internal fun SharesScreen(
             )
         }
     }
-    if (showAdd || incomingLink != null) {
+    // An empty incoming link is a request for the form, not a link.
+    val adding = showAdd || incomingLink != null
+    val closeAdding = { showAdd = false; typing = false; onIncomingLinkTaken() }
+    if (adding && startHandoff != null && incomingLink.isNullOrEmpty() && !typing) {
+        PhoneHandoffDialog(
+            start = startHandoff,
+            onAdd = onAdd,
+            onTypeInstead = { typing = true },
+            onDismiss = closeAdding,
+        )
+    } else if (adding) {
         AddShareDialog(
             initialUrl = incomingLink.orEmpty(),
-            onDismiss = { showAdd = false; onIncomingLinkTaken() },
+            onDismiss = closeAdding,
             onAdd = onAdd,
         )
     }

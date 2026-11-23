@@ -13,6 +13,13 @@ and to nothing else unless you turn on posters and descriptions. This page lists
 | TMDB, with AniList chosen | The TMDB ids of matched titles that have no wide picture or logo yet. Never a title's name | Only with **Posters and descriptions** on and a TMDB key saved |
 | AniSkip | The MyAnimeList id and episode number of what you play, and the file's length. Never a name | Only with **Posters and descriptions** on, when you play an episode whose file does not mark its opening and ending |
 
+Adding a share to a TV from a phone (**Add share** on a TV) is the one time the app listens on
+your network. The TV serves a single page, on its own address, under a random path that the QR
+code carries, and stops after ten minutes or once a share is added. The phone sends the link to
+the TV over plain HTTP: a TV cannot hold a certificate a phone would trust for a home address, so
+anyone who can read the traffic on your home network could read the link. If you do not trust
+that network, choose **Type it instead**.
+
 Nothing else leaves your device. There is no telemetry, no crash reporting and no update check.
 
 **Posters and descriptions** are off by default. When they are on, the provider learns the names

@@ -31,6 +31,7 @@ import io.narl.protonstream.ui.theme.AppearanceState
 import uniffi.pstr_android.ArrangementRecord
 import uniffi.pstr_android.BrowseFacet
 import uniffi.pstr_android.SearchExtrasRecord
+import uniffi.pstr_android.ShareHandoff
 import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.ShareRecord
@@ -384,6 +385,19 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         reload()
         viewModelScope.launch { crawlAdded(listOf(share.id), announce = true) }
         return null
+    }
+
+    /**
+     * Listen for a share link from a phone on this device's home network; see
+     * [PhoneHandoffDialog]. Fails with what to do when there is no network a
+     * phone can reach.
+     */
+    suspend fun startShareHandoff(): Result<ShareHandoff> = runCatching {
+        withContext(Dispatchers.IO) {
+            val host = lanAddress()
+                ?: error("This device is not on a network your phone can reach. Connect it to Wi-Fi or Ethernet.")
+            NativeRuntime.engine().startShareHandoff(host)
+        }
     }
 
     /**
