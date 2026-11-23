@@ -54,8 +54,15 @@ the controls up, Skip intro, Up next, the end card and the error panel take
 the focus, Back puts the controls away first, and fast-forward, rewind, next,
 previous and stop work, through the media session too).
 
-Two ways to get a share onto a TV without typing its link on a remote:
+Three ways to get a share onto a TV without typing its link on a remote:
 
+- **Add share** shows a QR code (`PhoneHandoffDialog`). The core
+  (`pstr-core::handoff`) listens on the TV's private IPv4 address
+  (`pickLanAddress`: Ethernet, then Wi-Fi, never a VPN or a modem), under a
+  random 60-bit path, for ten minutes. The phone's browser gets a
+  form with no script. What it posts goes through the same `addShare` as the
+  typed form, and the refusal, if any, goes back to the page. Plain HTTP, as
+  `PRIVACY.md` says; **Type it instead** is the form.
 - Sign in to an account, so that shares added on a phone arrive through sync.
 - Send the link from a computer, which opens the add dialog with it filled in:
 

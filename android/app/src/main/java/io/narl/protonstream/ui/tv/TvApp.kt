@@ -395,6 +395,7 @@ private fun Page(
                         onError = model::reportError,
                     ),
                     onRename = model::renameShare,
+                    startHandoff = model::startShareHandoff,
                 )
             }
             Place.Settings -> Box(phonePage) {

@@ -1,0 +1,5 @@
+Android TV gets a UI of its own, made for the remote. To add a share, scan the code on the TV with your phone and paste the link there.
+
+- The suite's new look: plum neutrals, the Proton Light palette, a Copper accent and a new Stream icon.
+- The focused control is easy to see from across the room.
+- Error messages no longer start with "reason=".
