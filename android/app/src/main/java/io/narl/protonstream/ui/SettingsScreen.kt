@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import io.narl.protonstream.native.reason
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.ColumnScope
@@ -529,7 +530,7 @@ private fun LegalDocumentDialog(document: LegalDocument, onDismiss: () -> Unit) 
             withContext(Dispatchers.IO) {
                 context.assets.open(document.assetPath).bufferedReader().use { it.readText() }
             }
-        }.getOrElse { error -> "Unable to load this document: ${error.message}" }
+        }.getOrElse { error -> "Unable to load this document: ${error.reason}" }
     }
     AlertDialog(
         onDismissRequest = onDismiss,

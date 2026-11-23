@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import io.narl.protonstream.native.reason
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
@@ -384,13 +385,13 @@ internal fun DriveBrowserDialog(
             if (places == null) {
                 runCatching { NativeRuntime.engine().drivePlaces() }
                     .onSuccess { places = it }
-                    .onFailure { error = it.message }
+                    .onFailure { error = it.reason }
             }
         } else {
             entries = null
             runCatching { NativeRuntime.engine().driveFolder(current.volumeId, current.linkId) }
                 .onSuccess { entries = it }
-                .onFailure { error = it.message }
+                .onFailure { error = it.reason }
         }
     }
 

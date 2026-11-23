@@ -1,5 +1,6 @@
 package io.narl.protonstream.download
 
+import io.narl.protonstream.native.reason
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -121,10 +122,10 @@ class OfflineDownloadWorker(
                     }
                     Result.failure(error("cancelled"))
                 } else if (runAttemptCount < MAX_RETRIES) {
-                    store.put(retained.copy(status = RetainedDownload.STATUS_QUEUED, error = failure.message))
+                    store.put(retained.copy(status = RetainedDownload.STATUS_QUEUED, error = failure.reason))
                     Result.retry()
                 } else {
-                    val message = failure.message ?: "download failed"
+                    val message = failure.reason ?: "download failed"
                     store.put(retained.copy(status = RetainedDownload.STATUS_FAILED, error = message))
                     Result.failure(error(message))
                 }

@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import io.narl.protonstream.native.reason
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -251,7 +252,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             busy("Refreshing the library…") {
                 mutableState.update { it.copy(message = null) }
                 runCatching { crawlShares(null) }
-                    .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+                    .onFailure { error -> mutableState.update { it.copy(message = error.reason) } }
             }
             reloadNow()
             matchAfterCrawl()
@@ -328,7 +329,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             busy("Reading $name…") {
                 mutableState.update { it.copy(message = null) }
                 runCatching { crawlShares(id) }
-                    .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+                    .onFailure { error -> mutableState.update { it.copy(message = error.reason) } }
             }
             reloadNow()
             matchAfterCrawl()
@@ -359,7 +360,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                         mutableState.update { it.copy(message = describe(summary)) }
                     }
                 }
-                .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+                .onFailure { error -> mutableState.update { it.copy(message = error.reason) } }
         }
         reloadNow()
     }
@@ -379,7 +380,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             withContext(Dispatchers.IO) {
                 NativeRuntime.engine().addShare(name, url, password?.takeIf(String::isNotBlank))
             }
-        }.getOrElse { return it.message ?: "That link could not be added" }
+        }.getOrElse { return it.reason ?: "That link could not be added" }
         reload()
         viewModelScope.launch { crawlAdded(listOf(share.id), announce = true) }
         return null
@@ -399,7 +400,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             val name = mutableState.value.shares.firstOrNull { it.id == id }?.name ?: "the new share"
             busy("Reading $name…") {
                 runCatching { crawlShares(id) }
-                    .onFailure { failed += "$name: ${it.message}" }
+                    .onFailure { failed += "$name: ${it.reason}" }
             }
         }
         reloadNow()
@@ -498,7 +499,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                     engine.removeShare(id)
                 }
             }
-                .onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+                .onFailure { error -> mutableState.update { it.copy(message = error.reason) } }
             reload()
         }
     }
@@ -557,7 +558,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                     updateAccount {
                         it.copy(
                             busy = false,
-                            error = error.message ?: "Sign-in failed",
+                            error = error.reason ?: "Sign-in failed",
                             // A refused code spends the half-made session.
                             state = if (keepStepOnFailure) it.state else AccountState.SignedOut,
                         )
@@ -617,7 +618,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 },
                 onFailure = { error ->
                     val state = runCatching { NativeRuntime.engine().accountState() }.getOrNull()
-                    updateAccount { it.copy(state = state ?: it.state, syncError = error.message) }
+                    updateAccount { it.copy(state = state ?: it.state, syncError = error.reason) }
                     // Signed out by the engine: the session ended, and that is
                     // worth interrupting for, unlike a dropped connection.
                     if (state == AccountState.SignedOut) reportError(error)
@@ -786,7 +787,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
     }
 
     fun reportError(error: Throwable) {
-        mutableState.update { it.copy(message = error.message ?: "Unexpected error") }
+        mutableState.update { it.copy(message = error.reason ?: "Unexpected error") }
     }
 
     /**
@@ -807,7 +808,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 engine.setMetadataSettings(MetadataSettingsRecord(enabled, provider, language, true))
                 engine.metadataSettings()
             }
-        }.getOrElse { return it.message ?: "The settings could not be saved" }
+        }.getOrElse { return it.reason ?: "The settings could not be saved" }
         mutableState.update { it.copy(metadataSettings = stored) }
         reloadNow()
         if (enabled) viewModelScope.launch { match(force = false) }
@@ -837,7 +838,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { NativeRuntime.engine().removeOfflineEpisode(file.shareId, file.linkId) }
-            }.onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+            }.onFailure { error -> mutableState.update { it.copy(message = error.reason) } }
             reload()
         }
     }
@@ -957,7 +958,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
                 ) }
             }
             .onFailure { error ->
-                mutableState.update { it.copy(loading = false, message = error.message) }
+                mutableState.update { it.copy(loading = false, message = error.reason) }
             }
     }
 
@@ -975,7 +976,7 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
             }
         }.onSuccess { (titles, arrangement, extras) ->
             mutableState.update { it.copy(titles = titles, arrangement = arrangement, searchExtras = extras) }
-        }.onFailure { error -> mutableState.update { it.copy(message = error.message) } }
+        }.onFailure { error -> mutableState.update { it.copy(message = error.reason) } }
     }
 
     private companion object {
