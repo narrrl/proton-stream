@@ -17,27 +17,40 @@ monochrome icons and TV banner are generated from `images/logo.svg` with
 
 The same build installs on Android TV: it is listed in the TV launcher
 (`LEANBACK_LAUNCHER`, with the banner `scripts/render-tv-banner.sh` renders)
-and requires neither a touch screen nor leanback. This is the foundation for a
-TV app; a layout of its own (`ui/tv/`, on `androidx.tv:tv-material`) comes next.
-What is there now, in `ui/Tv.kt` and the screens that use it:
+and requires neither a touch screen nor leanback. `MainActivity` asks
+`isTelevision()`, which reads the configuration's UI mode, and on a TV composes
+`ui/tv/TvApp` instead of `ProtonStreamApp`: the same `AppViewModel`, library,
+account and player under a UI built on `androidx.tv:tv-material`.
 
-- `isTelevision()` reads the configuration's UI mode. On a TV the navigation
-  is always the rail, the library and a title never share the screen, the
-  whole app keeps Android TV's overscan margins (48dp × 27dp), and the player
-  has no rotation lock or touch lock.
-- `focusHighlight` outlines the focused control in the accent, and grows
-  artwork a little. Material's own focus tint did not show over a poster.
-- `onMenuKey` opens with the remote's Menu key what a long press opens:
-  a tile's sheet, which has "Remove from Continue watching", and an episode's
-  "Mark watched up to here". Holding OK down works too.
-- `returnsFocus` gives the focus back to the tile a title was opened from.
-- The featured banner stops turning while one of its buttons has focus.
-- The player: key presses keep the controls up. When they come up by key, the
-  play button has focus. Skip intro, Up next, the end card and the error
-  panel take the focus when they appear over hidden controls. Back puts the
-  controls away before it leaves the video. Fast-forward, rewind, next,
-  previous and stop work from the remote, and the media session takes
-  fast-forward and rewind as well.
+- `TvApp` has a drawer down the left edge, closed to its icons until it has
+  the focus: Home, Search, History, Downloads, Shares, Settings. While a video
+  plays nothing is composed under the player, and leaving the video stops it:
+  a TV has no mini player. Which title was open and how far each row was
+  scrolled are kept in `TvApp`, so both come back after the player closes.
+- `TvHome`: the focused title's backdrop, name and synopsis at the top, then
+  rows of Continue watching, My List, the shelves and every title. The top
+  follows the focus after a short pause, so running along a row does not load
+  every backdrop on the way.
+- `TvTitle`: Play focused when the page opens, Start over, My List, Mark
+  watched, season chips, episodes with their stills and synopses, the
+  franchise, and More like this.
+- `TvSearch` and `TvBrowse`: the field takes the focus and opens the TV's
+  keyboard or voice input on OK; results are people, genres, episodes and
+  titles.
+- History, Downloads, Shares and Settings are the phone's pages inside the
+  overscan margins (48dp × 27dp). They work with a D-pad and are visited
+  rarely enough not to need their own yet.
+- Menu, or holding OK, opens what a long press opens on a phone (`TvMenu`).
+- `TvTheme` hands the app's palette and accent to tv-material, so a focused
+  card is outlined in the accent.
+
+The phone UI keeps what it gained for keyboards and remotes, in `ui/Tv.kt`:
+`focusHighlight` outlines the focused control, `onMenuKey` opens a long
+press's menu, `returnsFocus` gives the focus back to the tile a title was
+opened from, and the shared player handles a remote's keys (key presses keep
+the controls up, Skip intro, Up next, the end card and the error panel take
+the focus, Back puts the controls away first, and fast-forward, rewind, next,
+previous and stop work, through the media session too).
 
 Two ways to get a share onto a TV without typing its link on a remote:
 

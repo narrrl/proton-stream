@@ -2,6 +2,7 @@ package io.narl.protonstream.ui
 
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
@@ -24,6 +25,8 @@ import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import io.narl.protonstream.ui.theme.AppearanceState
 import io.narl.protonstream.ui.theme.ProtonFallback
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
+import io.narl.protonstream.ui.tv.TvHome
+import io.narl.protonstream.ui.tv.TvTheme
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -81,5 +84,25 @@ class TvTest {
         compose.onAllNodes(hasText("Remove from Continue watching") or hasText("Download all"))
             .onFirst()
             .assertExists()
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun `the menu key on a card of the television's home opens its menu`() {
+        compose.setContent {
+            val modes = LocalInputModeManager.current
+            LaunchedEffect(Unit) { modes.requestInputMode(InputMode.Keyboard) }
+            ProtonStreamTheme {
+                CompositionLocalProvider(LocalArtworkLoading provides false) {
+                    TvTheme {
+                        TvHome(ScreenshotTest.MATCHED, ScreenshotTest.TV_ACTIONS, { LazyListState() }, LazyListState(), null, {})
+                    }
+                }
+            }
+        }
+        val card = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.OnLongClick)).onFirst()
+        card.requestFocus()
+        card.performKeyInput { pressKey(Key.Menu) }
+        compose.onNode(hasText("Open")).assertExists()
     }
 }

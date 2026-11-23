@@ -138,13 +138,28 @@ import uniffi.pstr_android.facetKind
 private const val CONTINUE_WATCHING_MAX = 12
 
 /** One row of the continue-watching shelf: which episode, and where it sits. */
-private data class Resumable(
+internal data class Resumable(
     val title: TitleRecord,
     val episode: EpisodeRecord,
     val index: Int,
     /** When the title was last played, which orders the shelf. */
     val lastPlayed: Long,
 )
+
+/**
+ * The Continue watching shelf: most recently played first, one episode per
+ * show — a shelf that lists four episodes of the same series is a shelf with
+ * room for nothing else. What to go on with is the engine's call
+ * (`continueIndex`): the part-watched episode, or the one after the episode
+ * finished last.
+ */
+internal fun continueWatching(titles: List<TitleRecord>): List<Resumable> = titles.mapNotNull { title ->
+    val index = title.continueIndex?.toInt() ?: return@mapNotNull null
+    val playlist = title.seasons.flatMap(SeasonRecord::episodes)
+    playlist.getOrNull(index)?.let { episode ->
+        Resumable(title, episode, index, playlist.maxOf { it.lastPlayed })
+    }
+}.sortedByDescending { it.lastPlayed }.take(CONTINUE_WATCHING_MAX)
 
 /** One tile of the grid: the title drawn, and how many more of its franchise it stands for. */
 private data class Tile(val title: TitleRecord, val folded: Int)
@@ -217,19 +232,7 @@ internal fun LibraryScreen(
     var menuFor by remember { mutableStateOf<TitleRecord?>(null) }
     var menuResume by remember { mutableStateOf<Resumable?>(null) }
     var matching by remember { mutableStateOf<TitleRecord?>(null) }
-    // Most recently played first, one episode per show: a shelf that lists four
-    // episodes of the same series is a shelf with room for nothing else.
-    // What to go on with is the engine's call (`continueIndex`): the
-    // part-watched episode, or the one after the episode finished last.
-    val resumable = remember(state.titles) {
-        state.titles.mapNotNull { title ->
-            val index = title.continueIndex?.toInt() ?: return@mapNotNull null
-            val playlist = title.seasons.flatMap(SeasonRecord::episodes)
-            playlist.getOrNull(index)?.let { episode ->
-                Resumable(title, episode, index, playlist.maxOf { it.lastPlayed })
-            }
-        }.sortedByDescending { it.lastPlayed }.take(CONTINUE_WATCHING_MAX)
-    }
+    val resumable = remember(state.titles) { continueWatching(state.titles) }
     // Search is an icon until it is wanted: a permanent field above the
     // library spent a band of every visit on something used in few of them.
     var searching by rememberSaveable { mutableStateOf(state.query.isNotEmpty()) }
@@ -1163,7 +1166,7 @@ private fun PosterTile(
 }
 
 /** "2023 · 11 episodes", or "1988 · Film" — never "1 episodes". */
-private fun TitleRecord.caption(): String = listOfNotNull(
+internal fun TitleRecord.caption(): String = listOfNotNull(
     (metadataYear ?: year)?.toString(),
     when {
         (metadataKind ?: kind) == TitleType.FILM && episodeCount == 1uL -> "Film"
@@ -1176,7 +1179,7 @@ private fun TitleRecord.caption(): String = listOfNotNull(
  * "12 min left", from where the episode was left and how far through that is.
  * Null when either is unknown — a guess would be worse than no figure.
  */
-private fun EpisodeRecord.timeLeft(): String? {
+internal fun EpisodeRecord.timeLeft(): String? {
     val at = resumeAt ?: return null
     val fraction = progress?.takeIf { it > 0.0 && it < 1.0 } ?: return null
     val minutes = ((at / fraction - at) / 60).toInt()
