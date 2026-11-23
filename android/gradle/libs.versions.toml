@@ -41,6 +41,10 @@ jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 rustls-platform-verifier = { module = "rustls:rustls-platform-verifier", version = "0.1.1" }
 junit = { module = "junit:junit", version.ref = "junit" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+# The Android runtime Robolectric runs host tests on: API 34 (robolectric.properties)
+# as Robolectric 4.16 names it. Bump it with Robolectric, from its
+# DefaultSdkProvider; a stale one fails offline with the file name it wanted.
+robolectric-android-all = { module = "org.robolectric:android-all-instrumented", version = "14-robolectric-10818077-i7" }
 androidx-test-core = { module = "androidx.test:core-ktx", version.ref = "androidx-test-core" }
 androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-test-junit" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test-runner" }

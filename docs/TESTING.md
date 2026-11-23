@@ -196,7 +196,10 @@ of a Kotlin version parser, which reads as a broken build.
 **Host tests** (`app/src/test`) run under Robolectric, pinned to API 34 because
 Robolectric ships no image for the app's targetSdk of 36, and against a plain
 `Application` because the real one calls `System.loadLibrary("pstr_android")`,
-which has no host build. What is pinned today is `DownloadStateStore`: the JSON
+which has no host build. They run offline: Gradle downloads that API 34 image
+(`robolectric-android-all` in the version catalog, bumped with Robolectric)
+and Robolectric reads it from `app/build/robolectric`, so a dropped download
+fails the Gradle download step, which retries, rather than every test. What is pinned today is `DownloadStateStore`: the JSON
 round trip, a corrupt row being skipped rather than failing the whole list, and
 the two decode fallbacks that are easy to get backwards — a missing `label`
 falling back to the link id, and a blank `error` reading as *no* error rather
