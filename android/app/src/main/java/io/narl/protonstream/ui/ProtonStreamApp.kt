@@ -541,7 +541,7 @@ private fun MiniTransport(
  * Not dismissible and not timed — it goes when the work does.
  */
 @Composable
-private fun ActivityBanner(activity: String?, onStop: (() -> Unit)?, modifier: Modifier = Modifier) {
+internal fun ActivityBanner(activity: String?, onStop: (() -> Unit)?, modifier: Modifier = Modifier) {
     AnimatedVisibility(
         visible = activity != null,
         modifier = modifier,

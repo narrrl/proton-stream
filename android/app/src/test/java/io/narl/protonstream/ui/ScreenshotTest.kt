@@ -1,6 +1,7 @@
 package io.narl.protonstream.ui
 
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -16,6 +17,12 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import io.narl.protonstream.ui.theme.AppearanceState
 import io.narl.protonstream.ui.theme.ProtonFallback
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
+import io.narl.protonstream.ui.tv.HomeActions
+import io.narl.protonstream.ui.tv.TitleActions
+import io.narl.protonstream.ui.tv.TvHome
+import io.narl.protonstream.ui.tv.TvSearch
+import io.narl.protonstream.ui.tv.TvTheme
+import io.narl.protonstream.ui.tv.TvTitle
 import java.time.LocalDate
 import java.time.ZoneOffset
 import org.junit.Before
@@ -98,14 +105,27 @@ class ScreenshotTest {
 
     @Test
     @Config(qualifiers = RobolectricDeviceQualifiers.Television1080p)
-    fun `the library on a television`() = capture("library-tv") {
-        LibraryScreen(MATCHED, {}, { _, _ -> }, {}, {}, { _, _ -> }, { _, _ -> }, PaddingValues())
+    fun `the television's home`() = capture("tv-home") {
+        TvTheme { TvHome(MATCHED, TV_ACTIONS, { LazyListState() }, LazyListState(), null, {}) }
     }
 
     @Test
     @Config(qualifiers = RobolectricDeviceQualifiers.Television1080p)
-    fun `a title on a television`() = capture("title-tv") {
-        TitleScreen(SERIES, true, { _, _ -> }, {}, {}, {}, { _, _ -> }, PaddingValues())
+    fun `a title on the television's own page`() = capture("tv-title") {
+        TvTheme {
+            TvTitle(
+                SERIES,
+                true,
+                TitleActions({}, { _, _ -> }, { _, _ -> }, { _, _, _ -> }, {}),
+                moreLike = MATCHED.titles.filter { it.key != SERIES.key },
+            )
+        }
+    }
+
+    @Test
+    @Config(qualifiers = RobolectricDeviceQualifiers.Television1080p)
+    fun `a search on a television`() = capture("tv-search") {
+        TvTheme { TvSearch(MATCHED.copy(query = "o"), {}, TV_ACTIONS, {}, {}) }
     }
 
     @Test
@@ -198,6 +218,9 @@ class ScreenshotTest {
     }
 
     internal companion object {
+        /** A home page whose every action goes nowhere. */
+        val TV_ACTIONS = HomeActions({ _, _ -> }, {}, { _, _ -> }, { _, _ -> }, { _, _ -> }, {}, {})
+
         /** Catppuccin Latte with the default accent, as `Palette::resolve` gives it. */
         val LATTE = PaletteRecord(
             background = 0xFFEFF1F5u,

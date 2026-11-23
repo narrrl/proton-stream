@@ -70,6 +70,10 @@ the share links people send you, on Linux, Windows, Android, Android TV and iOS.
       <img src="images/android-episodes.png" alt="Android: episodes and downloads" width="24%">
     </td>
   </tr>
+  <tr>
+    <td width="50%"><img src="images/android-tv-home.png" alt="Android TV: home"></td>
+    <td width="50%"><img src="images/android-tv-title.png" alt="Android TV: a title page"></td>
+  </tr>
 </table>
 
 ## Install

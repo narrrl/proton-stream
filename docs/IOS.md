@@ -91,10 +91,10 @@ Each of these is the platform's doing, not a choice to diverge.
   a tap that missed. `PressableStyle` and `tapAndHold` (`UI/Theme/Accent.swift`)
   stand in for the ripple, and a settings page goes back by an edge strip of its
   own, as a title page does, where Android has the system back.
-- **No television.** There is no tvOS target, so the Android TV work in
-  `ui/Tv.kt` (focus outlines, the Menu key, a remote's keys in the player,
-  overscan margins) has no Swift counterpart to keep in step. What would carry
-  over to an iPad with a keyboard is not ported yet.
+- **No television.** There is no tvOS target, so the Android TV UI in `ui/tv/`
+  and the remote support in `ui/Tv.kt` (focus outlines, the Menu key, a
+  remote's keys in the player) have no Swift counterpart to keep in step. What
+  would carry over to an iPad with a keyboard is not ported yet.
 - **No zoom into a title page.** iOS 18's `.navigationTransition(.zoom)` only
   runs inside a `NavigationStack`, and the title page is shown over the library
   by hand, so it keeps its slide in from the edge — Android's shared poster has

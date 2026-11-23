@@ -267,6 +267,8 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.material3.adaptive)
     implementation(libs.androidx.compose.material3.navigation.suite)
+    // The television's own UI (`ui/tv`): cards, buttons and a drawer made for a D-pad.
+    implementation(libs.androidx.tv.material)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)

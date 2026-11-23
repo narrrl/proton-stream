@@ -24,6 +24,8 @@ import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.sync.NewEpisodesWorker
 import io.narl.protonstream.sync.WatchSyncWorker
 import io.narl.protonstream.ui.ProtonStreamApp
+import io.narl.protonstream.ui.isTelevision
+import io.narl.protonstream.ui.tv.TvApp
 import io.narl.protonstream.ui.theme.AppearanceState
 import io.narl.protonstream.ui.theme.ProtonStreamTheme
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -89,11 +91,21 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             ProtonStreamTheme {
-                ProtonStreamApp(
-                    playerHost.value,
-                    shareLink = incomingShareLink.value,
-                    onShareLinkTaken = { incomingShareLink.value = null },
-                )
+                // One APK: a television gets a UI of its own over the same
+                // library, account and player.
+                if (isTelevision()) {
+                    TvApp(
+                        playerHost.value,
+                        shareLink = incomingShareLink.value,
+                        onShareLinkTaken = { incomingShareLink.value = null },
+                    )
+                } else {
+                    ProtonStreamApp(
+                        playerHost.value,
+                        shareLink = incomingShareLink.value,
+                        onShareLinkTaken = { incomingShareLink.value = null },
+                    )
+                }
             }
         }
     }
