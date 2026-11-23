@@ -290,6 +290,30 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
+// Robolectric fetches its Android runtime from Maven Central by itself, while the
+// tests run and outside Gradle, so one dropped download fails every Robolectric
+// test with an IOException in MavenArtifactFetcher. Gradle fetches it instead,
+// with its retries and its cache, and the tests run offline against that copy.
+val robolectricRuntime: Configuration by configurations.creating {
+    isTransitive = false
+}
+
+dependencies {
+    robolectricRuntime(libs.robolectric.android.all)
+}
+
+val robolectricJarDir = layout.buildDirectory.dir("robolectric")
+val stageRobolectricRuntime by tasks.registering(Sync::class) {
+    from(robolectricRuntime)
+    into(robolectricJarDir)
+}
+
+tasks.withType<Test>().configureEach {
+    inputs.files(stageRobolectricRuntime)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", robolectricJarDir.get().asFile.absolutePath)
+}
+
 ktlint {
     version.set("1.5.0")
     android.set(true)

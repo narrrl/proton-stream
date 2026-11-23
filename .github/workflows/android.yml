@@ -179,15 +179,6 @@ jobs:
           cargo install cargo-ndk --version 4.1.2 --locked
           cargo install uniffi --version 0.32.0 --features cli --locked
 
-      # Robolectric downloads its android-all jar from Maven Central on first
-      # use, outside Gradle's cache. A dropped download fails the unit tests
-      # with an IOException in MavenArtifactFetcher, so keep the jars.
-      - uses: actions/cache@v6
-        with:
-          path: ~/.m2/repository/org/robolectric
-          key: robolectric-${{ hashFiles('android/gradle/libs.versions.toml') }}
-          restore-keys: robolectric-
-
       - name: Android checks and artifacts
         run: bash scripts/build-android.sh all
 
