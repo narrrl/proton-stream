@@ -101,6 +101,13 @@ Unpin it and pin it again once.
 Fixed. On Wayland the app limits its own frame rate instead of waiting for vsync, which a
 compositor withholds from a window it is not showing. Update to the latest release.
 
+### "start mpv: mpv: Raw(-8)" in the Flatpak
+
+Fixed in the next release: the Flatpak's mpv has no on-screen controller, and the app
+refused to start without one. If the native package works from a terminal but the
+launcher fails, both are installed and the launcher starts the Flatpak. Keep one of them,
+for example with `flatpak --user uninstall io.narl.proton-stream`.
+
 ## Logs
 
 Start the app from a terminal to see its log:

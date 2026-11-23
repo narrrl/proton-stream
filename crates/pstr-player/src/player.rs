@@ -247,7 +247,9 @@ impl Player {
                     "no"
                 },
             )?;
-            init.set_property("osc", config.on_screen_controller)?;
+            // The controller is a Lua script, and a libmpv built without Lua —
+            // the Flatpak's, see B68 — has no `osc` option to set at all.
+            without_lua(init.set_property("osc", config.on_screen_controller))?;
             init.set_property("input-default-bindings", config.default_keybindings)?;
             init.set_property("input-vo-keyboard", config.default_keybindings)?;
             match config.video {
@@ -669,6 +671,21 @@ pub fn subtitle_options(style: &SubtitleStyle) -> Vec<(&'static str, String)> {
     options
 }
 
+/// Treat an option this libmpv was built without as already unset.
+///
+/// For the options that only exist when mpv was built with Lua. A build without
+/// them has nothing to turn on or off, which is every reason to start anyway.
+fn without_lua(result: libmpv2::Result<()>) -> libmpv2::Result<()> {
+    use libmpv2::mpv_error::{OptionNotFound, PropertyNotFound};
+    match result {
+        Err(libmpv2::Error::Raw(code)) if code == PropertyNotFound || code == OptionNotFound => {
+            tracing::debug!("this libmpv has no Lua, so no on-screen controller");
+            Ok(())
+        }
+        other => other,
+    }
+}
+
 /// Hand `style` to `set` option by option, best effort.
 ///
 /// An option this libmpv refuses costs that option, not the player:
@@ -718,6 +735,26 @@ mod tests {
             .iter()
             .find(|(option, _)| *option == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn a_libmpv_without_lua_still_starts_without_its_on_screen_controller() {
+        use libmpv2::mpv_error::{OptionNotFound, PropertyNotFound};
+        assert_eq!(
+            without_lua(Err(libmpv2::Error::Raw(PropertyNotFound))),
+            Ok(())
+        );
+        assert_eq!(
+            without_lua(Err(libmpv2::Error::Raw(OptionNotFound))),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn any_other_refusal_of_the_on_screen_controller_still_fails() {
+        use libmpv2::mpv_error::OptionFormat;
+        let refused = Err(libmpv2::Error::Raw(OptionFormat));
+        assert_eq!(without_lua(refused.clone()), refused);
     }
 
     #[test]
