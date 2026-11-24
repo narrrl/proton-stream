@@ -1320,6 +1320,48 @@ pub struct QrRecord {
     pub dark: Vec<bool>,
 }
 
+/// One share a `pstr://` invite adds; see `pstr_core::invite`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct InvitedShareRecord {
+    /// What the sender calls it; empty takes the shared folder's own name.
+    pub name: String,
+    /// The full share URL, fragment included. A secret.
+    pub url: String,
+    pub custom_password: Option<String>,
+    /// The library already has this share.
+    pub already_added: bool,
+}
+
+/// An invite link to hand out, and how many account folders it left out.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct InviteRecord {
+    /// The `pstr://add?…` link. A secret: it carries every password.
+    pub link: String,
+    pub left_out: u32,
+}
+
+/// The first `pstr://` invite in `text` — a message, the clipboard — if any.
+#[uniffi::export]
+pub fn find_invite(text: String) -> Option<String> {
+    pstr_core::invite::find(&text).map(str::to_owned)
+}
+
+/// Whether `text` is a `pstr://` invite rather than a bare share link.
+#[uniffi::export]
+pub fn is_invite(text: String) -> bool {
+    pstr_core::invite::is_invite(&text)
+}
+
+/// The QR code for `text`, an invite link.
+#[uniffi::export]
+pub fn qr_code(text: String) -> Result<QrRecord, BridgeError> {
+    let qr = pstr_core::handoff::Qr::encode(&text).map_err(BridgeError::from_display)?;
+    Ok(QrRecord {
+        width: u32::try_from(qr.width).map_err(BridgeError::from_display)?,
+        dark: qr.dark,
+    })
+}
+
 /// A TV listening for a share link from a phone; see `pstr_core::handoff`.
 /// [`Self::stop`] it when the screen showing its code goes away.
 #[derive(uniffi::Object)]
@@ -1401,6 +1443,8 @@ impl HandoffOffer {
 /// [`AndroidEngine::download_permits`]; the desktop runs three, a phone link
 /// is better served by two.
 const OFFLINE_DOWNLOAD_CONCURRENCY: usize = 2;
+/// Shares crawled at once by one `crawl`; see `AndroidEngine::crawl_inner`.
+const CRAWL_CONCURRENCY: usize = 3;
 
 /// How often a download waiting for a slot asks whether it was cancelled.
 const DOWNLOAD_WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
@@ -1826,6 +1870,32 @@ impl AndroidEngine {
         })
         .await
         .map_err(BridgeError::from_display)?
+    }
+
+    /// The shares a `pstr://` invite, or a bare share link, adds, each marked
+    /// when the library already has it. See `pstr_core::invite`.
+    pub fn decode_invite(&self, text: String) -> Result<Vec<InvitedShareRecord>, BridgeError> {
+        let invited = pstr_core::invite::decode(&text).map_err(BridgeError::from_display)?;
+        Ok(invited
+            .into_iter()
+            .map(|share| InvitedShareRecord {
+                already_added: self.store.contains_link(&share.url).unwrap_or(false),
+                name: share.name,
+                url: share.url,
+                custom_password: share.password,
+            })
+            .collect())
+    }
+
+    /// The invite for `share_ids`, or for every share when empty. Folders of
+    /// the account have no link and are left out.
+    pub fn invite_link(&self, share_ids: Vec<String>) -> Result<InviteRecord, BridgeError> {
+        let ids: Vec<&str> = share_ids.iter().map(String::as_str).collect();
+        let (link, left_out) = self.store.invite(&ids).map_err(BridgeError::from_display)?;
+        Ok(InviteRecord {
+            link,
+            left_out: u32::try_from(left_out).unwrap_or(u32::MAX),
+        })
     }
 
     /// Listen on `host`, this device's address on its home network, for a
@@ -3363,71 +3433,29 @@ impl AndroidEngine {
             Some(id) => vec![id],
             None => connection.library.share_ids().map(str::to_owned).collect(),
         };
-        for id in targets {
-            if stop.has_changed().unwrap_or(false) {
-                return Ok(());
-            }
-            connection
-                .library
-                .refresh_session(&id)
-                .await
-                .map_err(|error| BridgeError::Failure {
-                    reason: format!("refresh session for {id}: {error}"),
-                })?;
-            let before = self
-                .catalog
-                .lock()
-                .all_offline_files()
-                .map_err(BridgeError::from_display)?;
-            let crawled = tokio::select! {
-                crawled = connection.library.crawl(&id) => crawled,
-                _ = stop.changed() => return Ok(()),
-            };
-            let nodes = match crawled {
-                Ok(nodes) => nodes,
-                Err(error) => {
-                    // On the share's row until a crawl succeeds: a link revoked
-                    // upstream otherwise just stops growing.
-                    if let Err(error) = self
-                        .catalog
-                        .lock()
-                        .record_crawl_failure(&id, &error.describe())
-                    {
-                        log::warn!("record a failed crawl: {error}");
-                    }
-                    return Err(BridgeError::from_display(error.describe()));
-                }
-            };
-            let rows = build_rows(&id, &nodes);
-            let sidecars = build_sidecars(&id, &nodes);
-            {
-                let mut catalog = self.catalog.lock();
-                catalog
-                    .replace_share(&id, &rows)
-                    .and_then(|()| catalog.replace_sidecars(&id, &sidecars))
-                    .map_err(BridgeError::from_display)?;
-            }
-            let after = self
-                .catalog
-                .lock()
-                .all_offline_files()
-                .map_err(BridgeError::from_display)?;
-            for ((stored_share_id, link_id), file) in before {
-                if stored_share_id != id
-                    || after.get(&(stored_share_id.clone(), link_id.clone())) == Some(&file)
-                {
-                    continue;
-                }
-                remove_file_if_present(self.dirs.offline_file(
-                    &stored_share_id,
-                    &link_id,
-                    &file.revision_id,
-                ))
-                .await?;
-                let (partial, marker) = self.partial_paths(&stored_share_id, &link_id);
-                remove_file_if_present(partial).await?;
-                remove_file_if_present(marker).await?;
-            }
+        // Read once for the whole crawl: each share only looks at its own
+        // entries, and a share's crawl never touches another's.
+        let before = self
+            .catalog
+            .lock()
+            .all_offline_files()
+            .map_err(BridgeError::from_display)?;
+        // A few shares at a time, as the desktop crawls them all at once: each
+        // is its own session against its own tree, and one large share no
+        // longer holds the rest back behind it. Three, not all, because a
+        // phone's radio and CPU are the bottleneck well before Proton is.
+        use futures::StreamExt as _;
+        let failures: Vec<BridgeError> = futures::stream::iter(targets)
+            .map(|id| self.crawl_one(&connection, id, &before, stop.clone()))
+            .buffer_unordered(CRAWL_CONCURRENCY)
+            .filter_map(|result| async move { result.err() })
+            .collect()
+            .await;
+        if stop.has_changed().unwrap_or(false) {
+            return Ok(());
+        }
+        if let Some(first) = failures.into_iter().next() {
+            return Err(first);
         }
         if !connection.open_failures.is_empty() {
             return Err(BridgeError::Failure {
@@ -3436,6 +3464,73 @@ impl AndroidEngine {
                     connection.open_failures.join("; ")
                 ),
             });
+        }
+        Ok(())
+    }
+
+    /// Crawl one share and store what it holds. `Ok` when stopped.
+    async fn crawl_one(
+        &self,
+        connection: &Connection,
+        id: String,
+        before: &HashMap<(String, String), pstr_core::catalog::OfflineFile>,
+        mut stop: tokio::sync::watch::Receiver<u64>,
+    ) -> Result<(), BridgeError> {
+        if stop.has_changed().unwrap_or(false) {
+            return Ok(());
+        }
+        // Refreshed only when old, and once more if the listing is refused —
+        // not a handshake per share per crawl.
+        let library = &connection.library;
+        // Only new and changed files are opened in full; see
+        // `SharedLibrary::crawl_known`.
+        let known = self.catalog.lock().known_files(&id).unwrap_or_default();
+        let crawled = tokio::select! {
+            crawled = library.reauthenticating(&id, || library.crawl_known(&id, &known, |_| {})) => crawled,
+            _ = stop.changed() => return Ok(()),
+        };
+        let nodes = match crawled {
+            Ok(nodes) => nodes,
+            Err(error) => {
+                // On the share's row until a crawl succeeds: a link revoked
+                // upstream otherwise just stops growing.
+                if let Err(error) = self
+                    .catalog
+                    .lock()
+                    .record_crawl_failure(&id, &error.describe())
+                {
+                    log::warn!("record a failed crawl: {error}");
+                }
+                return Err(BridgeError::from_display(error.describe()));
+            }
+        };
+        // Parsing and SQLite off the async workers, where the other shares'
+        // listings run.
+        // `block_in_place`, not `spawn_blocking`: the catalog is borrowed
+        // from the engine, and the runtime is multi-threaded.
+        let after = tokio::task::block_in_place(|| {
+            let rows = build_rows(&id, &nodes);
+            let sidecars = build_sidecars(&id, &nodes);
+            let mut catalog = self.catalog.lock();
+            catalog
+                .replace_share(&id, &rows)
+                .and_then(|()| catalog.replace_sidecars(&id, &sidecars))?;
+            catalog.offline_files_for_share(&id)
+        })
+        .map_err(BridgeError::from_display)?;
+        for ((stored_share_id, link_id), file) in before {
+            if *stored_share_id != id || after.get(link_id) == Some(file) {
+                continue;
+            }
+            remove_file_if_present(self.dirs.offline_file(
+                stored_share_id,
+                link_id,
+                &file.revision_id,
+            ))
+            .await?;
+            let (partial, marker) = self.partial_paths(stored_share_id, link_id);
+            remove_file_if_present(partial).await?;
+            remove_file_if_present(marker).await?;
         }
         Ok(())
     }

@@ -1,5 +1,7 @@
 package io.narl.protonstream.ui.tv
 
+import io.narl.protonstream.ui.theme.horizontalScrim
+import io.narl.protonstream.ui.theme.verticalScrim
 import io.narl.protonstream.ui.theme.CORNER_SHEET
 import io.narl.protonstream.ui.theme.CORNER_TIGHT
 import io.narl.protonstream.ui.theme.CORNER
@@ -36,8 +38,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
@@ -85,15 +85,16 @@ private val CARD_SHAPE = RoundedCornerShape(CORNER.dp)
 /** How much a focused card grows: noticeable, without hiding its neighbours. */
 private const val FOCUSED_SCALE = 1.08f
 
-/** The outline a focused card wears: the accent, as on the phone's D-pad focus. */
+/**
+ * The outline a focused card wears: the accent, solid, standing off the card,
+ * as on the phone's D-pad focus and the desktop's keyboard focus. One focus
+ * language across the suite; a gradient border read as decoration, not as
+ * "this one".
+ */
 @Composable
 internal fun focusBorder(shape: Shape = CARD_SHAPE) = Border(
-    // The accent running into the suite's copper, the two metals of its
-    // icons: what says "this one" from across the room.
-    border = BorderStroke(
-        3.dp,
-        Brush.linearGradient(listOf(MaterialTheme.colorScheme.border, LocalBrand.current.highlight)),
-    ),
+    border = BorderStroke(3.dp, MaterialTheme.colorScheme.border),
+    inset = (-3).dp,
     shape = shape,
 )
 
@@ -328,16 +329,8 @@ internal fun BoxScope.PageBackdrop(title: TitleRecord?, height: Float = 0.8f) {
             .fillMaxHeight(height),
     ) {
         title?.let { Backdrop(it, Modifier.fillMaxSize()) }
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.horizontalGradient(0f to background, 0.45f to background.copy(alpha = 0.55f), 1f to Color.Transparent),
-            ),
-        )
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(0.45f to Color.Transparent, 1f to background),
-            ),
-        )
+        Box(Modifier.fillMaxSize().background(horizontalScrim(background, to = 0.7f)))
+        Box(Modifier.fillMaxSize().background(verticalScrim(background, from = 0.4f)))
     }
 }
 

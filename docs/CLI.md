@@ -13,6 +13,7 @@ the app.
 ```bash
 proton-stream                                              # open the app
 proton-stream 'https://drive.proton.me/urls/TOKEN#KEY'     # open it with the Add form filled in
+proton-stream 'pstr://add?v=1&s=…'                         # open an invite for confirmation
 ```
 
 Only one window runs at a time. A second `proton-stream` brings the open window forward, hands it
@@ -34,6 +35,8 @@ password or key as an argument; it asks for them.
 | `pstr add --name NAME URL` | Add a public share link. Quote the URL, because of the `#`. |
 | `pstr add --name NAME URL --custom-password` | The same, and ask for the link's own password |
 | `pstr add-folder --name NAME VOLUME:LINK` | Add a folder of your Drive, by the id `pstr browse` prints |
+| `pstr invite [ID…]` | Print a `pstr://` invite for these shares, or all of them. It holds their passwords |
+| `pstr accept` | Ask for an invite and add every share in it that is not already here |
 | `pstr shares` | List the shares and their ids |
 | `pstr remove ID` | Remove a share and delete its link and password from the keyring |
 
@@ -53,7 +56,7 @@ password or key as an argument; it asks for them.
 
 | Command | Does |
 |---|---|
-| `pstr crawl [--share ID]` | Read every share, or one, into the library |
+| `pstr crawl [--share ID] [--timings]` | Read every share, or one, into the library. `--timings` says where the time went: listing, parsing, storing |
 | `pstr list [--share ID]` | Print what the library holds |
 
 ### Posters and descriptions

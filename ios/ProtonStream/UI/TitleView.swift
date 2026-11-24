@@ -161,17 +161,12 @@ struct TitleView: View {
             }
             .clipped()
             .overlay {
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0.4),
-                        // The picture's own colour on the way into the page,
-                        // as on the library's banner.
-                        .init(color: scheme.veil(mood).opacity(0.55), location: 0.75),
-                        .init(color: scheme.background, location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                // The picture's own colour on the way into the page, as on
+                // the library's banner, and eased so neither scrim ends in a line.
+                ZStack {
+                    scrim(scheme.veil(mood).opacity(0.7), to: 0.6)
+                    scrim(scheme.background, to: 0.25)
+                }
                 .animation(Motion.arrive, value: mood)
             }
             .background {
@@ -239,7 +234,7 @@ struct TitleView: View {
             if !aliases.isEmpty {
                 Text(aliases).textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
             }
-            Text(factLine)
+            Text(copperStar(factLine, scheme.highlight))
                 .textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant).padding(.top, 6)
             // Where the title stands, then what the files are rather than
             // what the title is.
@@ -352,7 +347,8 @@ struct TitleView: View {
     private func playLabel(playlist: [EpisodeRecord], upNext: EpisodeRecord?) -> String {
         guard let upNext else { return "Play" }
         if upNext.resumeAt != nil { return "Resume \(upNext.label)" }
-        if title.watchedCount > 0 { return "Continue with \(upNext.label)" }
+        // Watched through, it starts the show again: nothing to continue.
+        if title.watchedCount > 0, !upNext.watched { return "Continue with \(upNext.label)" }
         if playlist.count == 1 { return "Play" }
         return "Play \(upNext.label)"
     }

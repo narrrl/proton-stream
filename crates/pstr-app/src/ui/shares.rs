@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use pstr_core::Share;
 use pstr_core::catalog::CrawlRecord;
+use pstr_core::invite::InvitedShare;
 use pstr_core::library::Library;
 
 use crate::app::{Action, ShareForm};
@@ -42,6 +43,20 @@ pub fn show(
                     .count();
                 share_row(ui, share, titles, crawls.get(&share.id), form, actions);
             }
+            // Two or more links make a library worth handing on whole.
+            if shares.iter().filter(|share| share.folder.is_none()).count() > 1 {
+                ui.add_space(theme::space::S);
+                if ui
+                    .button(format!(
+                        "{}  Share the whole library",
+                        egui_phosphor::regular::SHARE_NETWORK
+                    ))
+                    .on_hover_text("One link that adds every share here on another device")
+                    .clicked()
+                {
+                    actions.push(Action::ShareInvite(Vec::new()));
+                }
+            }
 
             ui.add_space(theme::space::XXL);
             add_form(ui, shares, form, actions);
@@ -50,6 +65,232 @@ pub fn show(
             ui::account::section(ui, account, actions);
             ui::account::browser(ui, account, shares, actions);
         });
+
+    let ctx = ui.ctx().clone();
+    if let Some(incoming) = &mut form.invite_in
+        && !incoming_dialog(&ctx, incoming, actions)
+    {
+        form.invite_in = None;
+    }
+    if let Some(outgoing) = &mut form.invite_out
+        && !outgoing_dialog(&ctx, outgoing)
+    {
+        form.invite_out = None;
+    }
+}
+
+/// A `pstr://` invite that arrived, and which of its shares to add.
+pub struct IncomingInvite {
+    /// Each share, whether the library already has it, and whether it is
+    /// ticked.
+    rows: Vec<(InvitedShare, bool, bool)>,
+}
+
+impl IncomingInvite {
+    pub fn new(invited: Vec<InvitedShare>, shares: &[Share]) -> Self {
+        let rows = invited
+            .into_iter()
+            .map(|share| {
+                let have = pstr_core::shares::share_token(&share.url)
+                    .is_ok_and(|token| shares.iter().any(|known| known.token == token));
+                (share, have, !have)
+            })
+            .collect();
+        Self { rows }
+    }
+}
+
+/// The invite confirmation. `false` once it is closed.
+fn incoming_dialog(
+    ctx: &egui::Context,
+    invite: &mut IncomingInvite,
+    actions: &mut Vec<Action>,
+) -> bool {
+    let mut open = true;
+    egui::Modal::new(egui::Id::new("invite-in"))
+        .frame(dialog_frame())
+        .show(ctx, |ui| {
+            ui.set_width(460.0);
+            let count = invite.rows.len();
+            ui.label(
+                theme::Role::Heading
+                    .rich(if count == 1 {
+                        "Add a shared library?".to_owned()
+                    } else {
+                        format!("Add {count} shared libraries?")
+                    })
+                    .strong()
+                    .color(theme::text()),
+            );
+            ui.add_space(theme::space::S);
+            ui.label(ui::muted(
+                "Someone sent you an invite. Each share opens before it is added, and the \
+                 links and passwords go to your system keyring.",
+            ));
+            ui.add_space(theme::space::L);
+            egui::ScrollArea::vertical()
+                .max_height(280.0)
+                .show(ui, |ui| {
+                    for (share, have, ticked) in &mut invite.rows {
+                        let name = if share.name.is_empty() {
+                            "Shared folder".to_owned()
+                        } else {
+                            share.name.clone()
+                        };
+                        if *have {
+                            ui.horizontal(|ui| {
+                                ui.add_enabled_ui(false, |ui| {
+                                    ui::widgets::toggle(ui, &mut false, &name)
+                                });
+                                ui.label(ui::muted("already added"));
+                            });
+                        } else {
+                            let label = if share.password.is_some() {
+                                format!("{name}  ·  password included")
+                            } else {
+                                name
+                            };
+                            ui::widgets::toggle(ui, ticked, &label);
+                        }
+                        ui.add_space(theme::space::XS);
+                    }
+                });
+            ui.add_space(theme::space::XL);
+            let chosen: Vec<InvitedShare> = invite
+                .rows
+                .iter()
+                .filter(|(_, have, ticked)| !have && *ticked)
+                .map(|(share, _, _)| share.clone())
+                .collect();
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let verb = match chosen.len() {
+                    0 | 1 => "Add".to_owned(),
+                    count => format!("Add {count}"),
+                };
+                if ui
+                    .add_enabled_ui(!chosen.is_empty(), |ui| ui::accent_button(ui, &verb))
+                    .inner
+                    .clicked()
+                {
+                    actions.push(Action::AddInvited(chosen));
+                    open = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    open = false;
+                }
+            });
+        });
+    open
+}
+
+/// An invite being handed out.
+pub struct OutgoingInvite {
+    link: String,
+    left_out: usize,
+    /// `None` when the link is too long for a QR code — a very large library.
+    qr: Option<egui::TextureHandle>,
+}
+
+impl OutgoingInvite {
+    pub fn new(ctx: &egui::Context, link: String, left_out: usize) -> Self {
+        let qr = pstr_core::handoff::Qr::encode(&link)
+            .ok()
+            .map(|qr| ctx.load_texture("invite-qr", qr_image(&qr), egui::TextureOptions::NEAREST));
+        Self { link, left_out, qr }
+    }
+}
+
+/// The QR code as an image: black on white whatever the theme, since that is
+/// what a camera reads best, with the four-module quiet zone the standard asks
+/// for.
+fn qr_image(qr: &pstr_core::handoff::Qr) -> egui::ColorImage {
+    const QUIET: usize = 4;
+    let side = qr.width + 2 * QUIET;
+    let mut pixels = vec![egui::Color32::WHITE; side * side];
+    for (index, dark) in qr.dark.iter().enumerate() {
+        if *dark {
+            let (y, x) = (index / qr.width, index % qr.width);
+            pixels[(y + QUIET) * side + x + QUIET] = egui::Color32::BLACK;
+        }
+    }
+    egui::ColorImage {
+        size: [side, side],
+        source_size: egui::vec2(side as f32, side as f32),
+        pixels,
+    }
+}
+
+/// The invite's QR code and a button that copies its link. `false` once it is
+/// closed.
+fn outgoing_dialog(ctx: &egui::Context, invite: &mut OutgoingInvite) -> bool {
+    let mut open = true;
+    egui::Modal::new(egui::Id::new("invite-out"))
+        .frame(dialog_frame())
+        .show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.label(
+                theme::Role::Heading
+                    .rich("Invite to your library")
+                    .strong()
+                    .color(theme::text()),
+            );
+            ui.add_space(theme::space::S);
+            ui.label(ui::muted(
+                "Scan with a phone that has Proton Stream, or send the link. It opens in \
+                 Proton Stream on any device.",
+            ));
+            ui.add_space(theme::space::L);
+            if let Some(texture) = &invite.qr {
+                ui.vertical_centered(|ui| {
+                    ui.add(
+                        egui::Image::new(texture)
+                            .fit_to_exact_size(egui::vec2(240.0, 240.0))
+                            .corner_radius(egui::CornerRadius::same(theme::radius::MD)),
+                    );
+                });
+                ui.add_space(theme::space::L);
+            }
+            // The link carries every password in it, so it is never printed:
+            // only copied, on purpose.
+            ui.label(
+                theme::Role::Caption
+                    .rich(format!(
+                        "{}  Anyone with this link can open what it shares, passwords included. \
+                         Send it only to people you trust.",
+                        egui_phosphor::regular::WARNING
+                    ))
+                    .color(theme::muted()),
+            );
+            if invite.left_out > 0 {
+                ui.add_space(theme::space::XS);
+                ui.label(
+                    theme::Role::Caption
+                        .rich(format!(
+                            "{} from your Proton account left out: they have no link to share.",
+                            ui::library::plural(invite.left_out, "folder")
+                        ))
+                        .color(theme::muted()),
+                );
+            }
+            ui.add_space(theme::space::XL);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui::accent_button(ui, "Copy link").clicked() {
+                    ui.ctx().copy_text(invite.link.clone());
+                    open = false;
+                }
+                if ui.button("Close").clicked() {
+                    open = false;
+                }
+            });
+        });
+    open
+}
+
+fn dialog_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme::surface())
+        .inner_margin(egui::Margin::same(18))
+        .corner_radius(egui::CornerRadius::same(theme::radius::LG))
 }
 
 fn share_row(
@@ -104,6 +345,14 @@ fn share_row(
                         .clicked()
                     {
                         actions.push(Action::RemoveShare(share.id.clone()));
+                    }
+                    if share.folder.is_none()
+                        && ui
+                            .button(egui_phosphor::regular::SHARE_NETWORK)
+                            .on_hover_text("Invite someone: a link and QR code that add this share")
+                            .clicked()
+                    {
+                        actions.push(Action::ShareInvite(vec![share.id.clone()]));
                     }
                     if ui.button("Crawl").clicked() {
                         actions.push(Action::Crawl(Some(share.id.clone())));
@@ -257,7 +506,7 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
                         egui::TextEdit::singleline(&mut form.url)
                             .id(field)
                             .password(true)
-                            .hint_text("https://drive.proton.me/urls/…#…")
+                            .hint_text("https://drive.proton.me/urls/…#…  or a pstr:// invite")
                             .desired_width(ui.available_width() - paste),
                     ),
                 );
@@ -318,11 +567,16 @@ fn add_form(ui: &mut egui::Ui, shares: &[Share], form: &mut ShareForm, actions: 
                 ui.add_space(theme::space::S);
             }
             ui.horizontal(|ui| {
+                let invite = pstr_core::invite::is_invite(&form.url);
                 let clicked = ui
-                    .add_enabled_ui(ready, |ui| ui::accent_button(ui, "Add share"))
+                    .add_enabled_ui(ready, |ui| {
+                        ui::accent_button(ui, if invite { "Open invite" } else { "Add share" })
+                    })
                     .inner
                     .clicked();
-                if clicked || (ready && entered) {
+                if invite && (clicked || (ready && entered)) {
+                    actions.push(Action::PasteShare(form.url.trim().to_string()));
+                } else if clicked || (ready && entered) {
                     actions.push(Action::AddShare {
                         name: form.name.trim().to_string(),
                         url: form.url.trim().to_string(),
@@ -350,6 +604,11 @@ fn link_problem(url: &str, shares: &[Share]) -> Option<String> {
     let url = url.trim();
     if url.is_empty() {
         return None;
+    }
+    if pstr_core::invite::is_invite(url) {
+        return pstr_core::invite::decode(url)
+            .err()
+            .map(|error| error.to_string());
     }
     match pstr_core::shares::share_token(url) {
         Ok(token) if shares.iter().any(|share| share.token == token) => {

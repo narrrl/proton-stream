@@ -42,6 +42,9 @@ pstr-app (bin: proton-stream)     pstr-cli (bin: pstr)
   token into a registry, never an identity: the caller opens the stream in async
   code where a failure can be reported, then publishes it. mpv's open callback is
   a hash lookup that cannot block and cannot leak a share secret into a log line.
+  The protocol lives only inside mpv. The `pstr://add?…` links the OS hands the
+  app are invites (`pstr-core::invite`), read before anything reaches mpv; mpv
+  never sees one, and an invite never names a stream.
   Everything the callbacks decide lives in a safe, tested `StreamCursor`; the
   `unsafe` is confined to one module of pointer plumbing. What is inside the file
   — audio and subtitle tracks — is read from `track-list` one sub-property at a

@@ -246,6 +246,46 @@ impl ShareStore {
         Ok((share, client))
     }
 
+    /// The `pstr://` invite for the shares named by `ids`, in library order,
+    /// or for every share when `ids` is empty; see [`crate::invite`].
+    ///
+    /// Folders of the signed-in account have no secret to pass on and are
+    /// left out; the second value is how many were. A selection of nothing
+    /// but folders is an error, since there is no link to give.
+    pub fn invite(&self, ids: &[&str]) -> Result<(String, usize)> {
+        let mut invited = Vec::new();
+        let mut left_out = 0;
+        for share in self.list()? {
+            if !ids.is_empty() && !ids.contains(&share.id.as_str()) {
+                continue;
+            }
+            if share.folder.is_some() {
+                left_out += 1;
+                continue;
+            }
+            let secrets = self.load_secrets(&share.id)?;
+            invited.push(crate::invite::InvitedShare {
+                name: share.name,
+                url: secrets.url,
+                password: secrets.custom_password,
+            });
+        }
+        if invited.is_empty() {
+            return Err(Error::Config(if left_out > 0 {
+                "folders of your Proton account cannot be shared by invite".to_owned()
+            } else {
+                "nothing to invite to".to_owned()
+            }));
+        }
+        Ok((crate::invite::encode(&invited)?, left_out))
+    }
+
+    /// Whether the library already holds the share `url` links to.
+    pub fn contains_link(&self, url: &str) -> Result<bool> {
+        let id = format!("share-{}", token_from_url(url)?);
+        Ok(self.list()?.iter().any(|share| share.id == id))
+    }
+
     /// Record a share another installation has, with the secrets it opens
     /// with, replacing what this one holds under the same id. See
     /// [`crate::profile`].
@@ -510,6 +550,92 @@ impl SessionAges {
 /// signed-in account.
 pub use proton_drive_tree_rs::DriveTree as ShareClient;
 
+/// What the catalog holds for a share's files, by link id: the active
+/// revision a row was built from and the size it recorded. See
+/// [`SharedLibrary::crawl_known`] and `Catalog::known_files`.
+pub type KnownFiles = HashMap<String, (String, i64)>;
+
+/// A share listed without unlocking file keys, where the client can.
+struct LightTree<'a>(&'a ShareClient);
+
+#[async_trait::async_trait]
+impl proton_drive_tree_rs::TreeSource for LightTree<'_> {
+    type Node = Node;
+    type Error = ProtonError;
+
+    async fn children(&self, folder: &NodeUid) -> std::result::Result<Vec<Node>, ProtonError> {
+        match self.0 {
+            ShareClient::Account { client, .. } => {
+                let uids = client.enumerate_folder_children_node_uids(folder).await?;
+                if uids.is_empty() {
+                    return Ok(Vec::new());
+                }
+                client.enumerate_nodes_light(&uids).await
+            }
+            public => public.children(folder).await,
+        }
+    }
+
+    fn is_retriable(error: &ProtonError) -> bool {
+        error.is_retriable()
+    }
+}
+
+/// Give every file of a light walk its claimed size: from `known` when the
+/// catalog has the file at this revision, otherwise by opening it in full.
+async fn complete_files(
+    client: &ShareClient,
+    mut nodes: Vec<Node>,
+    known: &KnownFiles,
+    options: &WalkOptions,
+) -> Result<Vec<Node>> {
+    let ShareClient::Account { client: drive, .. } = client else {
+        return Ok(nodes);
+    };
+    let mut missing = Vec::new();
+    for (index, node) in nodes.iter_mut().enumerate() {
+        let proton_drive_rs::NodeKind::File {
+            active_revision_id,
+            claimed_size,
+            ..
+        } = &mut node.kind
+        else {
+            continue;
+        };
+        if claimed_size.is_some() {
+            continue;
+        }
+        let link_id = node.uid.link_id.to_string();
+        match (known.get(&link_id), active_revision_id.as_deref()) {
+            (Some((revision, size)), Some(current)) if revision == current => {
+                *claimed_size = Some(*size);
+            }
+            _ => missing.push(index),
+        }
+    }
+    if missing.is_empty() {
+        return Ok(nodes);
+    }
+    let uids: Vec<NodeUid> = missing
+        .iter()
+        .map(|&index| nodes[index].uid.clone())
+        .collect();
+    let full = retry(&options.retry_delays, ProtonError::is_retriable, || {
+        drive.enumerate_nodes(&uids)
+    })
+    .await?;
+    let mut full: HashMap<NodeUid, Node> = full
+        .into_iter()
+        .map(|node| (node.uid.clone(), node))
+        .collect();
+    for index in missing {
+        if let Some(node) = full.remove(&nodes[index].uid) {
+            nodes[index] = node;
+        }
+    }
+    Ok(nodes)
+}
+
 impl SharedLibrary {
     /// Open every configured share.
     ///
@@ -661,6 +787,27 @@ impl SharedLibrary {
         share_id: &str,
         progress: impl Fn(usize),
     ) -> Result<Vec<Node>> {
+        self.crawl_known(share_id, &KnownFiles::new(), progress)
+            .await
+    }
+
+    /// [`Self::crawl_reporting`], told what the catalog already holds, so a
+    /// recrawl only pays for what changed.
+    ///
+    /// A file's claimed size sits behind its own node key, and unlocking that
+    /// key is an S2K derivation of tens of milliseconds — over a thousand
+    /// files, most of a crawl. So an account folder is walked *light*
+    /// ([`LightTree`]): names, revisions and folders, no file keys. Then only
+    /// the files `known` does not already hold at their current revision are
+    /// opened in full; the rest take the size the catalog has. A first crawl
+    /// opens every file, as before; a recrawl of an unchanged library opens
+    /// none. Public links have no light listing and are walked in full.
+    pub async fn crawl_known(
+        &self,
+        share_id: &str,
+        known: &KnownFiles,
+        progress: impl Fn(usize),
+    ) -> Result<Vec<Node>> {
         let client = self
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
@@ -673,12 +820,13 @@ impl SharedLibrary {
             client.root_node()
         })
         .await?;
-        let nodes = walk(client, root, &options, progress)
+        let nodes = walk(&LightTree(client), root, &options, progress)
             .await
             .map_err(|error| match error {
                 WalkError::Source(error) => Error::from(error),
                 too_many => Error::Config(too_many.to_string()),
             })?;
+        let nodes = complete_files(client, nodes, known, &options).await?;
 
         if client.event_scope().is_some() {
             self.watch
@@ -1018,6 +1166,66 @@ mod tests {
                 .iter()
                 .any(|share| share.id == added.id && share.has_custom_password)
         );
+    }
+
+    #[test]
+    fn an_invite_for_the_whole_library_carries_every_link_and_password_but_no_folder() {
+        let (store, _) = store_in("invite");
+        store
+            .add(
+                "Anime",
+                "https://drive.proton.me/urls/ABC123#s3cr3t",
+                Some("pw"),
+            )
+            .expect("add");
+        store
+            .add("Films", "https://drive.proton.me/urls/DEF456#s3cr3t", None)
+            .expect("add");
+        store
+            .add_folder(
+                "Mine",
+                AccountFolder {
+                    volume_id: "v".into(),
+                    link_id: "l".into(),
+                },
+            )
+            .expect("add folder");
+
+        let (link, left_out) = store.invite(&[]).expect("invite");
+        assert_eq!(left_out, 1);
+        let shares = crate::invite::decode(&link).expect("decode");
+        assert_eq!(shares.len(), 2);
+        assert_eq!(shares[0].name, "Anime");
+        assert_eq!(shares[0].password.as_deref(), Some("pw"));
+        assert_eq!(shares[1].url, "https://drive.proton.me/urls/DEF456#s3cr3t");
+
+        let (one, _) = store.invite(&["share-DEF456"]).expect("invite one");
+        assert_eq!(crate::invite::decode(&one).expect("decode").len(), 1);
+        assert!(
+            store
+                .contains_link("https://drive.proton.me/urls/ABC123#other")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .contains_link("https://drive.proton.me/urls/XYZ789#s3cr3t")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn an_invite_of_only_account_folders_is_refused() {
+        let (store, _) = store_in("invite-folders");
+        let folder = store
+            .add_folder(
+                "Mine",
+                AccountFolder {
+                    volume_id: "v".into(),
+                    link_id: "l".into(),
+                },
+            )
+            .expect("add folder");
+        assert!(store.invite(&[folder.id.as_str()]).is_err());
     }
 
     #[test]

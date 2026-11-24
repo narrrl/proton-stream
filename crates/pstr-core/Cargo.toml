@@ -24,10 +24,13 @@ proton-base-rs.workspace = true
 proton-auth-rs.workspace = true
 proton-media-rs.workspace = true
 proton-drive-tree-rs.workspace = true
+# `LightTree`, a `proton_drive_tree_rs::TreeSource`.
+async-trait.workspace = true
 sha2.workspace = true
 parking_lot.workspace = true
 getrandom.workspace = true
 qrcode.workspace = true
+base64.workspace = true
 
 # The OS credential store on desktop. Android and iOS bring their own
 # keystore through `SecretStore`, so they do not link a keyring at all.

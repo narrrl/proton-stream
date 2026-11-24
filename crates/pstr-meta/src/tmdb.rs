@@ -147,6 +147,8 @@ impl Provider for Tmdb {
             backdrop_url: None,
             logo_url,
             chain: Vec::new(),
+            // One entry for the whole show: the match's status is the show's.
+            airing: None,
         })
     }
 }

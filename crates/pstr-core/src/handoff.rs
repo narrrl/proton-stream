@@ -83,6 +83,24 @@ pub struct Qr {
     pub dark: Vec<bool>,
 }
 
+impl Qr {
+    /// The QR code for `text`, at error correction M.
+    ///
+    /// Also what an invite link ([`crate::invite`]) is shown as.
+    pub fn encode(text: &str) -> Result<Self> {
+        let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M)
+            .map_err(|error| Error::Config(format!("QR code: {error}")))?;
+        Ok(Self {
+            width: code.width(),
+            dark: code
+                .to_colors()
+                .into_iter()
+                .map(|color| color == qrcode::Color::Dark)
+                .collect(),
+        })
+    }
+}
+
 struct Shared {
     token: String,
     deadline: Instant,
@@ -133,17 +151,7 @@ impl Handoff {
 
     /// The QR code for [`Self::url`].
     pub fn qr(&self) -> Result<Qr> {
-        let code =
-            qrcode::QrCode::with_error_correction_level(self.url.as_bytes(), qrcode::EcLevel::M)
-                .map_err(|error| Error::Config(format!("QR code: {error}")))?;
-        Ok(Qr {
-            width: code.width(),
-            dark: code
-                .to_colors()
-                .into_iter()
-                .map(|color| color == qrcode::Color::Dark)
-                .collect(),
-        })
+        Qr::encode(&self.url)
     }
 
     /// The next link a phone sends, or `None` once the code has expired or
@@ -502,7 +510,7 @@ input{display:block;width:100%;margin-top:6px;padding:12px 14px;font:inherit;\
 color:var(--text);background:var(--field);border:1px solid var(--line);border-radius:12px}\
 input:focus{outline:2px solid #8A6DFF;outline-offset:1px}\
 button{width:100%;margin-top:4px;padding:14px;border:0;border-radius:999px;font:inherit;\
-font-weight:600;color:#fff;background:linear-gradient(90deg,#6D4AFF,#B65BD6);cursor:pointer}\
+font-weight:600;color:#fff;background:#6D4AFF;cursor:pointer}\
 button:focus-visible{outline:2px solid #D69B77;outline-offset:2px}";
 
 #[cfg(test)]

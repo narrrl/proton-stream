@@ -308,10 +308,19 @@ val stageRobolectricRuntime by tasks.registering(Sync::class) {
     into(robolectricJarDir)
 }
 
+// A directory already holding the runtime jar, which CI keeps in a cache of its
+// own: Maven Central answers a burst of CI downloads of a 150 MB jar with 429,
+// and Gradle's cache of it is evicted with everything else in the Gradle home.
+val providedRobolectricDir: String? = providers.environmentVariable("PSTR_ROBOLECTRIC_DIR").orNull
+
 tasks.withType<Test>().configureEach {
-    inputs.files(stageRobolectricRuntime)
     systemProperty("robolectric.offline", "true")
-    systemProperty("robolectric.dependency.dir", robolectricJarDir.get().asFile.absolutePath)
+    if (providedRobolectricDir != null) {
+        systemProperty("robolectric.dependency.dir", providedRobolectricDir)
+    } else {
+        inputs.files(stageRobolectricRuntime)
+        systemProperty("robolectric.dependency.dir", robolectricJarDir.get().asFile.absolutePath)
+    }
 }
 
 ktlint {

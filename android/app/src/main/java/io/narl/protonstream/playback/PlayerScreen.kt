@@ -1072,7 +1072,10 @@ private fun PlayerControls(
     val duration = state.duration.toFloat().coerceAtLeast(1f)
     val density = LocalDensity.current
     val width = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
-    val roomForVolume = width >= VOLUME_SLIDER_MIN_WIDTH
+    // Never on a television: the remote's left and right move a focused
+    // slider, so focus that reaches it cannot leave, and the TV's own volume
+    // is the one a viewer there reaches for.
+    val roomForVolume = width >= VOLUME_SLIDER_MIN_WIDTH && !isTelevision()
     // A phone in portrait has room for the transport and two more buttons at
     // a thumb's size. The rest go behind "More" there rather than off the edge.
     val roomForAll = width >= INLINE_CONTROLS_MIN_WIDTH
@@ -1129,7 +1132,10 @@ private fun PlayerControls(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CompactIcon(Icons.Default.SkipPrevious, "Previous episode", enabled = hasPrevious, onClick = onPrevious)
                 CompactIcon(Icons.Default.Replay10, "Back ten seconds") { host.seek(state.position - 10) }
-                IconButton(onClick = { host.setPaused(!state.paused) }, modifier = Modifier.focusRequester(playFocus)) {
+                IconButton(
+                    onClick = { host.setPaused(!state.paused) },
+                    modifier = Modifier.focusHighlight(CircleShape).focusRequester(playFocus),
+                ) {
                     Icon(
                         if (state.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
                         contentDescription = if (state.paused) "Play" else "Pause",
@@ -1730,7 +1736,11 @@ private fun CompactIcon(
 ) {
     // 48dp: the smallest target Android's accessibility guidance allows, and
     // the size a thumb on a moving train actually hits.
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(48.dp)) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.focusHighlight(CircleShape).size(48.dp),
+    ) {
         Icon(
             icon,
             contentDescription = description,

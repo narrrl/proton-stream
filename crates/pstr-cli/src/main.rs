@@ -82,6 +82,17 @@ enum Command {
         /// The folder, as `VOLUME:LINK`.
         folder: String,
     },
+    /// Print a `pstr://` invite that adds these shares, or every share, on
+    /// another device. It carries each link's password: treat it as one.
+    Invite {
+        /// Share ids, as `shares` prints. Every share when none are given.
+        ids: Vec<String>,
+    },
+    /// Add every share a `pstr://` invite carries that is not already here.
+    ///
+    /// The invite is asked for, not taken as an argument: it holds passwords,
+    /// and an argument lands in the process list and shell history.
+    Accept,
     /// List configured shares.
     Shares,
     /// Sign in to a Proton account, for watch history across devices and for
@@ -114,6 +125,9 @@ enum Command {
         /// Crawl only this share.
         #[arg(long)]
         share: Option<String>,
+        /// Say where each share's time went: listing, parsing, storing.
+        #[arg(long)]
+        timings: bool,
     },
     /// Print what the catalog holds.
     List {
@@ -263,6 +277,32 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
             println!("added {} ({})", share.name, share.id);
         }
 
+        Command::Invite { ids } => {
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let (link, left_out) = store.invite(&ids).context("make invite")?;
+            if left_out > 0 {
+                eprintln!("left out {left_out} account folder(s): they have no link to share");
+            }
+            println!("{link}");
+        }
+
+        Command::Accept => {
+            let invite = read_password("Invite link: ")?;
+            for invited in pstr_core::invite::decode(&invite).context("read invite")? {
+                if store.contains_link(&invited.url)? {
+                    println!("already added: {}", invited.name);
+                    continue;
+                }
+                match store
+                    .add_verified(&invited.name, &invited.url, invited.password.as_deref())
+                    .await
+                {
+                    Ok((share, _)) => println!("added {} ({})", share.name, share.id),
+                    Err(error) => eprintln!("could not add {}: {error}", invited.name),
+                }
+            }
+        }
+
         Command::AddFolder { name, folder } => {
             let uid = parse_uid(&folder)?;
             let share = store
@@ -398,7 +438,8 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
             println!("removed {id}");
         }
 
-        Command::Crawl { share } => {
+        Command::Crawl { share, timings } => {
+            let wall = std::time::Instant::now();
             let account = accounts.resume().context("resume the account")?;
             let (library, failures) = SharedLibrary::open_all(&store, account.as_ref())
                 .await
@@ -414,27 +455,48 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
                 None => library.share_ids().map(str::to_string).collect(),
             };
 
+            let mut total_nodes = 0;
             for share_id in targets {
                 let started = std::time::Instant::now();
+                let known = catalog.known_files(&share_id).unwrap_or_default();
                 let nodes = library
-                    .crawl(&share_id)
+                    .crawl_known(&share_id, &known, |_| {})
                     .await
                     .with_context(|| format!("crawl {share_id}"))?;
+                let listed = started.elapsed();
 
                 let rows = build_rows(&share_id, &nodes);
+                let sidecars = build_sidecars(&share_id, &nodes);
+                let built = started.elapsed();
 
                 catalog
                     .replace_share(&share_id, &rows)
-                    .and_then(|()| {
-                        catalog.replace_sidecars(&share_id, &build_sidecars(&share_id, &nodes))
-                    })
+                    .and_then(|()| catalog.replace_sidecars(&share_id, &sidecars))
                     .with_context(|| format!("store {share_id}"))?;
+                let stored = started.elapsed();
+                total_nodes += nodes.len();
 
                 println!(
                     "{share_id}: {} nodes crawled, {} playable, in {:.1}s",
                     nodes.len(),
                     rows.len(),
-                    started.elapsed().as_secs_f64()
+                    stored.as_secs_f64()
+                );
+                if timings {
+                    let folders = nodes.iter().filter(|node| node.is_folder()).count();
+                    println!(
+                        "  list {:.2}s ({folders} folders, {:.0} nodes/s)  parse {:.3}s  store {:.3}s",
+                        listed.as_secs_f64(),
+                        nodes.len() as f64 / listed.as_secs_f64().max(0.001),
+                        (built - listed).as_secs_f64(),
+                        (stored - built).as_secs_f64(),
+                    );
+                }
+            }
+            if timings {
+                println!(
+                    "total: {total_nodes} nodes in {:.1}s",
+                    wall.elapsed().as_secs_f64()
                 );
             }
         }

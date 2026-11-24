@@ -15,6 +15,7 @@ pub mod discover;
 pub mod error;
 pub mod franchise;
 pub mod handoff;
+pub mod invite;
 pub mod language;
 pub mod library;
 pub mod matroska;

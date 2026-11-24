@@ -19,13 +19,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::error::Result;
 use crate::library::TitleKind;
 use crate::metadata::{
-    Enrichment, EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleDetails,
+    Airing, Enrichment, EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleDetails,
     TitleMetadata,
 };
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// The most files [`Catalog::ordered_part_candidates`] offers for one episode.
 pub const MAX_PART_CANDIDATES: usize = 32;
@@ -46,6 +46,7 @@ const SCHEMA: Schema = Schema::new(&[
     Step::Sql(MIGRATION_V12),
     Step::Sql(MIGRATION_V13),
     Step::Sql(MIGRATION_V14),
+    Step::Sql(MIGRATION_V15),
 ]);
 
 /// Keep the catalog's own wording for a refused database.
@@ -302,6 +303,20 @@ ALTER TABLE episode_metadata ADD COLUMN mal_id INTEGER;
 UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
 "#;
 
+/// Whether the latest season the library holds is still airing, and when its
+/// next episode is, kept apart from `details` as [`Airing`] JSON.
+///
+/// AniList files each season as its own entry, and a title matches the first,
+/// so `details.status` was season one's: The Apothecary Diaries read
+/// "Finished" while its third season aired, with no next episode. Enrichment
+/// walks to the season the files reach and stores that entry's here; a refresh of the match's
+/// details rewrites `details` and would lose it there. Re-enriching AniList
+/// titles fills it in for a library already matched.
+const MIGRATION_V15: &str = r#"
+ALTER TABLE title_metadata ADD COLUMN latest_airing TEXT;
+UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
+"#;
+
 /// How old a share's last crawl may be before an app looks again on its own.
 /// Long enough that a launch rarely costs a crawl; short enough that a new
 /// episode turns up the same day.
@@ -501,18 +516,56 @@ impl Catalog {
         retain_offline: bool,
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
 
+        // A diff, not a delete-all and re-insert: a recrawl mostly finds what
+        // the last one did, and a row that has not changed then costs a lookup
+        // instead of a delete, an insert and three index updates — the
+        // difference between rewriting the share in the WAL and writing what
+        // moved.
+        // Created and dropped inside the transaction, so a failed crawl
+        // rolls it back with everything else.
+        tx.execute(
+            "CREATE TEMP TABLE crawl_seen (link_id TEXT PRIMARY KEY)",
+            [],
+        )?;
         {
-            let mut insert = tx.prepare(
+            let mut upsert = tx.prepare(
                 "INSERT INTO nodes (
                      share_id, link_id, volume_id, parent_link_id, name, is_folder,
                      media_type, size, active_revision_id, title, season, episode, year,
                      episode_title
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 ON CONFLICT (share_id, link_id) DO UPDATE SET
+                     volume_id          = excluded.volume_id,
+                     parent_link_id     = excluded.parent_link_id,
+                     name               = excluded.name,
+                     is_folder          = excluded.is_folder,
+                     media_type         = excluded.media_type,
+                     size               = excluded.size,
+                     active_revision_id = excluded.active_revision_id,
+                     title              = excluded.title,
+                     season             = excluded.season,
+                     episode            = excluded.episode,
+                     year               = excluded.year,
+                     episode_title      = excluded.episode_title
+                 WHERE volume_id          IS NOT excluded.volume_id
+                    OR parent_link_id     IS NOT excluded.parent_link_id
+                    OR name               IS NOT excluded.name
+                    OR is_folder          IS NOT excluded.is_folder
+                    OR media_type         IS NOT excluded.media_type
+                    OR size               IS NOT excluded.size
+                    OR active_revision_id IS NOT excluded.active_revision_id
+                    OR title              IS NOT excluded.title
+                    OR season             IS NOT excluded.season
+                    OR episode            IS NOT excluded.episode
+                    OR year               IS NOT excluded.year
+                    OR episode_title      IS NOT excluded.episode_title",
             )?;
+            let mut seen =
+                tx.prepare("INSERT OR IGNORE INTO temp.crawl_seen (link_id) VALUES (?1)")?;
             for node in nodes {
-                insert.execute(params![
+                seen.execute(params![node.link_id])?;
+                upsert.execute(params![
                     node.share_id,
                     node.link_id,
                     node.volume_id,
@@ -530,6 +583,12 @@ impl Catalog {
                 ])?;
             }
         }
+        tx.execute(
+            "DELETE FROM nodes WHERE share_id = ?1
+                 AND link_id NOT IN (SELECT link_id FROM temp.crawl_seen)",
+            params![share_id],
+        )?;
+        tx.execute("DROP TABLE temp.crawl_seen", [])?;
 
         // Only files: a folder appearing is not something anyone watches.
         let now = unix_now();
@@ -557,6 +616,25 @@ impl Catalog {
 
         tx.commit()?;
         Ok(())
+    }
+
+    /// What this catalog holds for `share_id`'s files: by link id, the
+    /// active revision each row was built from and its recorded size. A
+    /// recrawl hands this to `SharedLibrary::crawl_known`, which then opens
+    /// only the files that are new or changed.
+    pub fn known_files(&self, share_id: &str) -> Result<crate::shares::KnownFiles> {
+        let mut select = self.conn.prepare(
+            "SELECT link_id, active_revision_id, size FROM nodes
+             WHERE share_id = ?1 AND is_folder = 0
+               AND active_revision_id IS NOT NULL AND size IS NOT NULL",
+        )?;
+        let rows = select.query_map(params![share_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, String>(1)?, row.get::<_, i64>(2)?),
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Replace one share's subtitle files with `sidecars`.
@@ -1041,7 +1119,7 @@ impl Catalog {
         let mut statement = self.conn.prepare(
             "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                     overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
-                    manual, details, chain, logo_url
+                    manual, details, chain, logo_url, latest_airing
              FROM title_metadata",
         )?;
         let rows = statement.query_map([], row_to_metadata)?;
@@ -1062,7 +1140,7 @@ impl Catalog {
             .query_row(
                 "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                         overview, year, kind, poster_url, backdrop_url, rating, genres, episodes,
-                        url, manual, details, chain, logo_url
+                        url, manual, details, chain, logo_url, latest_airing
                  FROM title_metadata WHERE title_key = ?1",
                 params![title_key],
                 row_to_metadata,
@@ -1134,6 +1212,7 @@ impl Catalog {
                  manual        = excluded.manual,
                  details       = excluded.details,
                  chain         = CASE WHEN same THEN title_metadata.chain END,
+                 latest_airing = CASE WHEN same THEN title_metadata.latest_airing END,
                  enriched_at   = CASE WHEN same THEN title_metadata.enriched_at END"
                 .replace(
                     "same",
@@ -1224,12 +1303,18 @@ impl Catalog {
         fetched_at: i64,
         enrichment: &Enrichment,
     ) -> Result<()> {
+        let airing = enrichment
+            .airing
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| crate::error::Error::Config(error.to_string()))?;
         let tx = self.conn.transaction()?;
         replace_episodes(&tx, title_key, provider, fetched_at, &enrichment.episodes)?;
         tx.execute(
             "UPDATE title_metadata
              SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url), chain = ?5,
-                 logo_url = COALESCE(?6, logo_url)
+                 logo_url = COALESCE(?6, logo_url), latest_airing = ?7
              WHERE title_key = ?1 AND provider = ?2",
             params![
                 title_key,
@@ -1238,6 +1323,7 @@ impl Catalog {
                 enrichment.backdrop_url.as_deref(),
                 enrichment.chain.join("\n"),
                 enrichment.logo_url.as_deref(),
+                airing,
             ],
         )?;
         tx.commit()?;
@@ -1406,8 +1492,21 @@ fn replace_episodes(
 /// JSON that will not parse is treated as never fetched rather than failing
 /// the read: the next match run fetches it again, where an error here would
 /// take the whole grid down over one row.
-fn details_column(details: Option<String>, chain: Option<String>) -> Option<TitleDetails> {
+///
+/// `latest_airing`, where enrichment found one, stands for the title's: see
+/// [`MIGRATION_V15`]. One that will not parse is ignored the same way.
+fn details_column(
+    details: Option<String>,
+    chain: Option<String>,
+    latest_airing: Option<String>,
+) -> Option<TitleDetails> {
     let mut details: TitleDetails = serde_json::from_str(&details?).ok()?;
+    if let Some(airing) = latest_airing.and_then(|json| serde_json::from_str::<Airing>(&json).ok())
+    {
+        details.status = airing.status;
+        details.next_episode = airing.next_episode;
+        details.next_airing_at = airing.next_airing_at;
+    }
     details.chain = chain
         .unwrap_or_default()
         .lines()
@@ -1456,7 +1555,7 @@ fn row_to_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MetadataR
                 .collect(),
             episodes: row.get(14)?,
             url: row.get(15)?,
-            details: details_column(row.get(17)?, row.get(18)?),
+            details: details_column(row.get(17)?, row.get(18)?, row.get(20)?),
         })
     };
 
@@ -2489,6 +2588,7 @@ mod tests {
             backdrop_url: None,
             logo_url: None,
             chain: Vec::new(),
+            airing: None,
         };
         catalog
             .set_enrichment("kusuriya", ProviderId::AniList, 1_000, &enrichment)
@@ -2556,6 +2656,7 @@ mod tests {
             backdrop_url: None,
             logo_url: None,
             chain: Vec::new(),
+            airing: None,
         };
         catalog
             .set_enrichment("kusuriya", ProviderId::AniList, fetched, &enrichment)
@@ -2619,6 +2720,7 @@ mod tests {
             backdrop_url: Some("fanart.jpg".into()),
             logo_url: None,
             chain: vec!["457".into(), "20595".into()],
+            airing: None,
         };
         catalog
             .set_enrichment("mushishi", ProviderId::AniList, 2, &enrichment)
@@ -2666,6 +2768,88 @@ mod tests {
         let read = catalog.metadata("mushishi").expect("read").expect("a row");
         assert_eq!(read.metadata.and_then(|data| data.backdrop_url), None);
         assert!(catalog.enrichment_ages().expect("ages").is_empty());
+    }
+
+    #[test]
+    fn the_latest_seasons_status_stands_for_the_title_and_survives_a_refresh() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let finished = || TitleMetadata {
+            details: Some(TitleDetails {
+                status: Some("FINISHED".into()),
+                ..TitleDetails::default()
+            }),
+            ..found()
+        };
+        let record = MetadataRecord {
+            title_key: "kusuriya".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(finished()),
+            fetched_at: 1,
+            manual: false,
+        };
+        catalog.set_metadata(&record).expect("store");
+        let status = |catalog: &Catalog| {
+            catalog
+                .metadata("kusuriya")
+                .expect("read")
+                .and_then(|record| record.metadata)
+                .and_then(|data| data.details)
+                .and_then(|details| details.status)
+        };
+        assert_eq!(status(&catalog).as_deref(), Some("FINISHED"));
+
+        catalog
+            .set_enrichment(
+                "kusuriya",
+                ProviderId::AniList,
+                2,
+                &Enrichment {
+                    airing: Some(Airing {
+                        status: Some("RELEASING".into()),
+                        next_episode: Some(7),
+                        next_airing_at: Some(4_102_444_800),
+                    }),
+                    ..Enrichment::default()
+                },
+            )
+            .expect("enrich");
+        assert_eq!(status(&catalog).as_deref(), Some("RELEASING"));
+        let next = catalog
+            .metadata("kusuriya")
+            .expect("read")
+            .and_then(|record| record.metadata)
+            .and_then(|data| data.details)
+            .and_then(|details| details.next_airing(0));
+        assert_eq!(next, Some((7, 4_102_444_800)));
+
+        // Refreshing season one's details rewrites them, not the season the
+        // files reach.
+        catalog
+            .set_metadata(&MetadataRecord {
+                fetched_at: 3,
+                ..record.clone()
+            })
+            .expect("refresh");
+        assert_eq!(status(&catalog).as_deref(), Some("RELEASING"));
+        assert!(
+            catalog.all_metadata().expect("read all")["kusuriya"]
+                .metadata
+                .as_ref()
+                .and_then(|data| data.details.as_ref())
+                .is_some_and(|details| details.is_airing())
+        );
+
+        // A different entry starts over.
+        catalog
+            .set_metadata(&MetadataRecord {
+                metadata: Some(TitleMetadata {
+                    remote_id: "999".into(),
+                    ..finished()
+                }),
+                ..record
+            })
+            .expect("repin");
+        assert_eq!(status(&catalog).as_deref(), Some("FINISHED"));
     }
 
     #[test]
@@ -3042,6 +3226,62 @@ mod tests {
         let read = catalog.files("s1").expect("read");
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].link_id, "a");
+    }
+
+    /// A recrawl writes only what moved: an unchanged row is left alone, and
+    /// a renamed file is updated in place.
+    #[test]
+    fn a_recrawl_rewrites_only_the_rows_that_changed() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let nodes: Vec<_> = (0..50)
+            .map(|index| {
+                file(
+                    "s1",
+                    &format!("l{index}"),
+                    &format!("One.S01E{index:02}.mkv"),
+                )
+            })
+            .collect();
+        catalog.replace_share("s1", &nodes).expect("first crawl");
+
+        let mut renamed = nodes.clone();
+        renamed[3] = file("s1", "l3", "One.S01E03.Renamed.mkv");
+        let before = catalog.writes();
+        catalog.replace_share("s1", &renamed).expect("second crawl");
+        let written = catalog.writes() - before;
+        // The renamed row and the crawl record, plus the scratch table's
+        // fifty marks — not fifty deletes and fifty inserts.
+        assert!(written < 60, "wrote {written} rows for one change");
+
+        let read = catalog.files("s1").expect("read");
+        assert_eq!(read.len(), 50);
+        assert!(
+            read.iter()
+                .any(|node| node.name == "One.S01E03.Renamed.mkv")
+        );
+    }
+
+    /// What a recrawl can skip opening: files with a revision and a size,
+    /// of this share only. A folder, or a file with no size recorded, is not
+    /// known and gets opened again.
+    #[test]
+    fn known_files_are_this_shares_files_with_a_revision_and_a_size() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let mut sized = file("s1", "a", "One.S01E01.mkv");
+        sized.active_revision_id = Some("r1".into());
+        sized.size = Some(1234);
+        let mut no_size = file("s1", "b", "One.S01E02.mkv");
+        no_size.active_revision_id = Some("r2".into());
+        no_size.size = None;
+        catalog.replace_share("s1", &[sized, no_size]).expect("s1");
+        let mut other = file("s2", "c", "Two.S01E01.mkv");
+        other.active_revision_id = Some("r3".into());
+        other.size = Some(5);
+        catalog.replace_share("s2", &[other]).expect("s2");
+
+        let known = catalog.known_files("s1").expect("known");
+        assert_eq!(known.len(), 1);
+        assert_eq!(known.get("a"), Some(&("r1".to_owned(), 1234)));
     }
 
     /// One share's crawl must not touch another's rows.
