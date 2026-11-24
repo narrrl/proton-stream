@@ -1,0 +1,3 @@
+On Android TV, Continue watching now appears in the launcher's Play Next row, and you can search by voice: with the mic on the Search page, the remote's Search key, or by asking the assistant.
+
+- Watch Next can be switched off in Settings → Playback.
