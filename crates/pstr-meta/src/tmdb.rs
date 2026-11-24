@@ -149,6 +149,7 @@ impl Provider for Tmdb {
             chain: Vec::new(),
             // One entry for the whole show: the match's status is the show's.
             airing: None,
+            seasons: Vec::new(),
         })
     }
 }

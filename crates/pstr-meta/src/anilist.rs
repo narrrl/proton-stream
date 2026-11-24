@@ -14,12 +14,13 @@
 //! AniList's own `SEQUEL` relations to find every entry the library's seasons
 //! are spread across.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::ops::Range;
 
 use pstr_core::library::{self, TitleKind};
 use pstr_core::metadata::{
-    Airing, CastMember, Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleDetails,
-    TitleMetadata, Trailer,
+    Airing, CastMember, Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, SeasonArt,
+    TitleDetails, TitleMetadata, Trailer,
 };
 use serde::Deserialize;
 
@@ -149,11 +150,16 @@ const MAX_TAGS: usize = 8;
 ///
 /// One hop at a time rather than a nested query several levels deep: most
 /// titles need no hop at all, and the ones that do stop as soon as the
-/// library's files are answered.
+/// library's files are answered. Each entry's own cover, name and synopsis
+/// come along, for the season it turns out to be — see [`season_art`].
 const RELATIONS: &str = r#"
 query ($id: Int) {
   Media(id: $id, type: ANIME) {
-    relations { edges { relationType node { id type format status nextAiringEpisode { episode airingAt } } } }
+    relations { edges { relationType node {
+      id type format status nextAiringEpisode { episode airingAt }
+      title { romaji english } description(asHtml: false) startDate { year }
+      coverImage { extraLarge large } bannerImage
+    } } }
   }
 }
 "#;
@@ -251,6 +257,9 @@ impl Provider for AniList {
         let mut visited = HashSet::new();
         // The same ids as `visited`, in the order they were read.
         let mut chain = Vec::new();
+        // Which of the episodes each entry contributed, and what it looks
+        // like.
+        let mut entries: Vec<(Range<usize>, SeasonArt)> = Vec::new();
         let mut series_entries = 0;
         // The match's own: a sequel's art is not the title's.
         let mut tmdb_id: Option<TmdbId> = None;
@@ -266,6 +275,8 @@ impl Provider for AniList {
                     next_airing_at: details.next_airing_at,
                 })
                 .unwrap_or_default(),
+            // The match's own art is the title's.
+            art: SeasonArt::default(),
         });
         while let Some(link) = next.take() {
             visited.insert(link.id);
@@ -301,6 +312,7 @@ impl Provider for AniList {
             {
                 enrichment.airing = Some(link.airing.clone());
             }
+            entries.push((before..enrichment.episodes.len(), link.art.clone()));
 
             if answers_all(&enrichment.episodes, &wanted) || visited.len() >= MAX_CHAIN_ENTRIES {
                 break;
@@ -322,6 +334,7 @@ impl Provider for AniList {
             enrichment.episodes.len(),
             visited.len()
         );
+        enrichment.seasons = season_art(&enrichment.episodes, &entries, &wanted);
         enrichment.chain = chain;
         Ok(enrichment)
     }
@@ -520,6 +533,8 @@ struct Link {
     series: bool,
     /// Where the entry itself stands.
     airing: Airing,
+    /// What the entry looks like, for the season it may turn out to be.
+    art: SeasonArt,
 }
 
 /// Which of an entry's relations the franchise continues through.
@@ -544,10 +559,72 @@ fn next_in_chain(edges: Vec<RelationEdge>, visited: &HashSet<i64>) -> Option<Lin
                     .next_airing_episode
                     .as_ref()
                     .and_then(|next| next.episode),
-                next_airing_at: node.next_airing_episode.and_then(|next| next.airing_at),
+                next_airing_at: node
+                    .next_airing_episode
+                    .as_ref()
+                    .and_then(|next| next.airing_at),
+            },
+            art: SeasonArt {
+                season: 0,
+                remote_id: node.id.to_string(),
+                name: node
+                    .title
+                    .as_ref()
+                    .and_then(|title| title.english.clone().or_else(|| title.romaji.clone())),
+                poster_url: node
+                    .cover_image
+                    .and_then(|cover| cover.extra_large.or(cover.large)),
+                banner_url: node.banner_image,
+                overview: node.description.map(|text| strip_markup(&text)),
+                year: node.start_date.and_then(|date| date.year),
             },
         })
         .min_by_key(|link| !link.series)
+}
+
+/// The art of each library season a sequel entry answers.
+///
+/// A season belongs to the entry that holds the answer to its lowest-numbered
+/// file. The match's own entry is left out: its art is the title's, which is
+/// what a season without art of its own shows anyway. So is a season-less
+/// title — it is one entry, or a run numbered straight through, where no one
+/// entry is the season.
+fn season_art(
+    episodes: &[EpisodeMetadata],
+    entries: &[(Range<usize>, SeasonArt)],
+    wanted: &[(Option<u32>, u32)],
+) -> Vec<SeasonArt> {
+    let guide = EpisodeGuide::new(episodes.to_vec());
+    let mut files: Vec<(u32, u32)> = wanted
+        .iter()
+        .filter_map(|&(season, number)| Some((season?, number)))
+        .collect();
+    files.sort_unstable();
+    let mut owner: BTreeMap<u32, usize> = BTreeMap::new();
+    for (season, number) in files {
+        if owner.contains_key(&season) {
+            continue;
+        }
+        let Some(found) = guide.get(Some(season), number) else {
+            continue;
+        };
+        let key = (found.season, found.number);
+        if let Some(entry) = entries.iter().position(|(span, _)| {
+            episodes[span.clone()]
+                .iter()
+                .any(|episode| (episode.season, episode.number) == key)
+        }) {
+            owner.insert(season, entry);
+        }
+    }
+    owner
+        .into_iter()
+        .filter(|&(_, entry)| entry > 0)
+        .map(|(season, entry)| SeasonArt {
+            season,
+            ..entries[entry].1.clone()
+        })
+        .collect()
 }
 
 fn is_series_format(format: Option<&str>) -> bool {
@@ -606,6 +683,22 @@ struct RelationNode {
     status: Option<String>,
     #[serde(rename = "nextAiringEpisode")]
     next_airing_episode: Option<NextAiring>,
+    #[serde(default)]
+    title: Option<NodeTitle>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(rename = "startDate", default)]
+    start_date: Option<FuzzyDate>,
+    #[serde(rename = "coverImage", default)]
+    cover_image: Option<CoverImage>,
+    #[serde(rename = "bannerImage", default)]
+    banner_image: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NodeTitle {
+    romaji: Option<String>,
+    english: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -893,6 +986,7 @@ impl Media {
                 })
                 .unwrap_or_default(),
             chain: Vec::new(),
+            seasons: Vec::new(),
         };
 
         Candidate {
@@ -1144,6 +1238,17 @@ mod tests {
                 format: Some(format.into()),
                 status: Some("FINISHED".into()),
                 next_airing_episode: None,
+                title: Some(NodeTitle {
+                    romaji: Some(format!("Entry {id}")),
+                    english: None,
+                }),
+                description: Some("<i>Its</i> synopsis.".into()),
+                start_date: None,
+                cover_image: Some(CoverImage {
+                    extra_large: None,
+                    large: Some(format!("{id}.jpg")),
+                }),
+                banner_image: None,
             }),
         }
     }
@@ -1165,6 +1270,13 @@ mod tests {
                 id: 20958,
                 series: true,
                 airing: finished(),
+                art: SeasonArt {
+                    remote_id: "20958".into(),
+                    name: Some("Entry 20958".into()),
+                    poster_url: Some("20958.jpg".into()),
+                    overview: Some("Its synopsis.".into()),
+                    ..SeasonArt::default()
+                },
             })
         );
     }
@@ -1180,6 +1292,13 @@ mod tests {
                 id: 20526,
                 series: false,
                 airing: finished(),
+                art: SeasonArt {
+                    remote_id: "20526".into(),
+                    name: Some("Entry 20526".into()),
+                    poster_url: Some("20526.jpg".into()),
+                    overview: Some("Its synopsis.".into()),
+                    ..SeasonArt::default()
+                },
             })
         );
         // With a series beside it, the series wins.
@@ -1229,7 +1348,70 @@ mod tests {
         assert!(answers_all(&[], &[]));
     }
 
-    /// Missing fields are the normal case    /// Missing fields are the normal case for a recently added entry, and must
+    /// The Apothecary Diaries: three AniList entries, numbered from one each,
+    /// held as `Season 1`, `2` and `3` folders. Seasons two and three show
+    /// their own entries' covers; season one is the match, whose art the title
+    /// already shows.
+    #[test]
+    fn each_season_takes_the_art_of_the_entry_that_answers_it() {
+        let episode = |entry, number| EpisodeMetadata {
+            season: None,
+            number: number + 100 * entry,
+            absolute: None,
+            entry_season: Some(entry),
+            entry_number: Some(number),
+            name: None,
+            overview: None,
+            still_url: None,
+            air_date: None,
+            runtime: None,
+            mal_id: None,
+        };
+        let art = |id: &str| SeasonArt {
+            remote_id: id.into(),
+            poster_url: Some(format!("{id}.jpg")),
+            ..SeasonArt::default()
+        };
+        let episodes = vec![
+            episode(1, 1),
+            episode(1, 2),
+            episode(2, 1),
+            episode(2, 2),
+            episode(3, 1),
+        ];
+        let entries = vec![
+            (0..2, SeasonArt::default()),
+            (2..4, art("161645")),
+            (4..5, art("189046")),
+        ];
+        let wanted = [
+            (Some(1), 2),
+            (Some(1), 1),
+            (Some(2), 2),
+            (Some(2), 1),
+            (Some(3), 1),
+            (None, 7),
+        ];
+        let seasons = season_art(&episodes, &entries, &wanted);
+        assert_eq!(
+            seasons,
+            vec![
+                SeasonArt {
+                    season: 2,
+                    ..art("161645")
+                },
+                SeasonArt {
+                    season: 3,
+                    ..art("189046")
+                },
+            ]
+        );
+        // One entry, or nothing answered: no season art at all.
+        assert!(season_art(&episodes[..2], &entries[..1], &wanted).is_empty());
+        assert!(season_art(&[], &[], &wanted).is_empty());
+    }
+
+    /// Missing fields are the normal case for a recently added entry, and must
     /// not fail the whole page of results.
     #[test]
     fn an_entry_with_almost_nothing_in_it_still_parses() {

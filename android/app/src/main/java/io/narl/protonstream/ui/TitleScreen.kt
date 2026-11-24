@@ -348,7 +348,31 @@ internal fun TitleScreen(
                             }
                         }
                     }
-                    title.overview?.let { overview ->
+                    // The picked season, where the provider files it as an
+                    // entry of its own: its cover and name, and its synopsis in
+                    // place of season one's.
+                    season?.takeIf { it.posterUrl != null || it.entryName != null }?.let { art ->
+                        Row(Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            art.posterUrl?.let { url ->
+                                RemoteArtwork(
+                                    url,
+                                    art.entryName ?: art.label,
+                                    Modifier.width(56.dp).aspectRatio(2f / 3f).clip(MaterialTheme.shapes.small),
+                                    labelled = false,
+                                )
+                                Spacer(Modifier.width(12.dp))
+                            }
+                            Column {
+                                Text(art.entryName ?: art.label, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    listOfNotNull(art.label, art.year?.toString()).joinToString("  ·  "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    (season?.overview ?: title.overview)?.let { overview ->
                         // Three lines, then a tap for the rest: a synopsis with its
                         // source notes ran to a screen and a half on a phone.
                         Text(

@@ -639,6 +639,17 @@ pub struct SeasonRecord {
     pub number: Option<u32>,
     pub label: String,
     pub episodes: Vec<EpisodeRecord>,
+    /// The season's own provider entry, where it is one — see
+    /// `pstr_core::metadata::SeasonArt`. Shown in place of the title's while
+    /// the season is picked; `None` keeps the title's.
+    #[uniffi(default = None)]
+    pub entry_name: Option<String>,
+    #[uniffi(default = None)]
+    pub poster_url: Option<String>,
+    #[uniffi(default = None)]
+    pub overview: Option<String>,
+    #[uniffi(default = None)]
+    pub year: Option<u32>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -4356,14 +4367,21 @@ fn title_record(
         seasons: title
             .seasons
             .iter()
-            .map(|season| SeasonRecord {
-                number: season.number,
-                label: season.label(),
-                episodes: season
-                    .episodes
-                    .iter()
-                    .map(|episode| episode_record(episode, offline, guide))
-                    .collect(),
+            .map(|season| {
+                let art = details.and_then(|details| details.season(season.number));
+                SeasonRecord {
+                    number: season.number,
+                    label: season.label(),
+                    episodes: season
+                        .episodes
+                        .iter()
+                        .map(|episode| episode_record(episode, offline, guide))
+                        .collect(),
+                    entry_name: art.and_then(|art| art.name.clone()),
+                    poster_url: art.and_then(|art| art.poster_url.clone()),
+                    overview: art.and_then(|art| art.overview.clone()),
+                    year: art.and_then(|art| art.year),
+                }
             })
             .collect(),
     }

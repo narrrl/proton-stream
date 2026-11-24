@@ -25,7 +25,7 @@ use crate::metadata::{
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 
 /// The most files [`Catalog::ordered_part_candidates`] offers for one episode.
 pub const MAX_PART_CANDIDATES: usize = 32;
@@ -47,6 +47,7 @@ const SCHEMA: Schema = Schema::new(&[
     Step::Sql(MIGRATION_V13),
     Step::Sql(MIGRATION_V14),
     Step::Sql(MIGRATION_V15),
+    Step::Sql(MIGRATION_V16),
 ]);
 
 /// Keep the catalog's own wording for a refused database.
@@ -314,6 +315,15 @@ UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
 /// titles fills it in for a library already matched.
 const MIGRATION_V15: &str = r#"
 ALTER TABLE title_metadata ADD COLUMN latest_airing TEXT;
+UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
+"#;
+
+/// Each season's own cover, name and synopsis, where the provider files it as
+/// an entry of its own, as [`crate::metadata::SeasonArt`] JSON by the library
+/// season it answers. The same walk as [`MIGRATION_V15`]'s finds them, so
+/// AniList titles are enriched again to fill it in.
+const MIGRATION_V16: &str = r#"
+ALTER TABLE title_metadata ADD COLUMN season_art TEXT;
 UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
 "#;
 
@@ -1119,7 +1129,7 @@ impl Catalog {
         let mut statement = self.conn.prepare(
             "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                     overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
-                    manual, details, chain, logo_url, latest_airing
+                    manual, details, chain, logo_url, latest_airing, season_art
              FROM title_metadata",
         )?;
         let rows = statement.query_map([], row_to_metadata)?;
@@ -1140,7 +1150,7 @@ impl Catalog {
             .query_row(
                 "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                         overview, year, kind, poster_url, backdrop_url, rating, genres, episodes,
-                        url, manual, details, chain, logo_url, latest_airing
+                        url, manual, details, chain, logo_url, latest_airing, season_art
                  FROM title_metadata WHERE title_key = ?1",
                 params![title_key],
                 row_to_metadata,
@@ -1213,6 +1223,7 @@ impl Catalog {
                  details       = excluded.details,
                  chain         = CASE WHEN same THEN title_metadata.chain END,
                  latest_airing = CASE WHEN same THEN title_metadata.latest_airing END,
+                 season_art    = CASE WHEN same THEN title_metadata.season_art END,
                  enriched_at   = CASE WHEN same THEN title_metadata.enriched_at END"
                 .replace(
                     "same",
@@ -1309,12 +1320,16 @@ impl Catalog {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|error| crate::error::Error::Config(error.to_string()))?;
+        let seasons = (!enrichment.seasons.is_empty())
+            .then(|| serde_json::to_string(&enrichment.seasons))
+            .transpose()
+            .map_err(|error| crate::error::Error::Config(error.to_string()))?;
         let tx = self.conn.transaction()?;
         replace_episodes(&tx, title_key, provider, fetched_at, &enrichment.episodes)?;
         tx.execute(
             "UPDATE title_metadata
              SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url), chain = ?5,
-                 logo_url = COALESCE(?6, logo_url), latest_airing = ?7
+                 logo_url = COALESCE(?6, logo_url), latest_airing = ?7, season_art = ?8
              WHERE title_key = ?1 AND provider = ?2",
             params![
                 title_key,
@@ -1324,6 +1339,7 @@ impl Catalog {
                 enrichment.chain.join("\n"),
                 enrichment.logo_url.as_deref(),
                 airing,
+                seasons,
             ],
         )?;
         tx.commit()?;
@@ -1494,11 +1510,13 @@ fn replace_episodes(
 /// take the whole grid down over one row.
 ///
 /// `latest_airing`, where enrichment found one, stands for the title's: see
-/// [`MIGRATION_V15`]. One that will not parse is ignored the same way.
+/// [`MIGRATION_V15`]. One that will not parse is ignored the same way, and so
+/// is `season_art`.
 fn details_column(
     details: Option<String>,
     chain: Option<String>,
     latest_airing: Option<String>,
+    season_art: Option<String>,
 ) -> Option<TitleDetails> {
     let mut details: TitleDetails = serde_json::from_str(&details?).ok()?;
     if let Some(airing) = latest_airing.and_then(|json| serde_json::from_str::<Airing>(&json).ok())
@@ -1507,6 +1525,9 @@ fn details_column(
         details.next_episode = airing.next_episode;
         details.next_airing_at = airing.next_airing_at;
     }
+    details.seasons = season_art
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
     details.chain = chain
         .unwrap_or_default()
         .lines()
@@ -1555,7 +1576,7 @@ fn row_to_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MetadataR
                 .collect(),
             episodes: row.get(14)?,
             url: row.get(15)?,
-            details: details_column(row.get(17)?, row.get(18)?, row.get(20)?),
+            details: details_column(row.get(17)?, row.get(18)?, row.get(20)?, row.get(21)?),
         })
     };
 
@@ -2068,6 +2089,7 @@ fn strip_prefix_title(episode: &str, series: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::SeasonArt;
 
     fn file(share: &str, link: &str, name: &str) -> CatalogNode {
         CatalogNode {
@@ -2589,6 +2611,7 @@ mod tests {
             logo_url: None,
             chain: Vec::new(),
             airing: None,
+            seasons: Vec::new(),
         };
         catalog
             .set_enrichment("kusuriya", ProviderId::AniList, 1_000, &enrichment)
@@ -2657,6 +2680,7 @@ mod tests {
             logo_url: None,
             chain: Vec::new(),
             airing: None,
+            seasons: Vec::new(),
         };
         catalog
             .set_enrichment("kusuriya", ProviderId::AniList, fetched, &enrichment)
@@ -2721,6 +2745,7 @@ mod tests {
             logo_url: None,
             chain: vec!["457".into(), "20595".into()],
             airing: None,
+            seasons: Vec::new(),
         };
         catalog
             .set_enrichment("mushishi", ProviderId::AniList, 2, &enrichment)
@@ -2809,11 +2834,27 @@ mod tests {
                         next_episode: Some(7),
                         next_airing_at: Some(4_102_444_800),
                     }),
+                    seasons: vec![SeasonArt {
+                        season: 3,
+                        remote_id: "189046".into(),
+                        poster_url: Some("third.jpg".into()),
+                        ..SeasonArt::default()
+                    }],
                     ..Enrichment::default()
                 },
             )
             .expect("enrich");
         assert_eq!(status(&catalog).as_deref(), Some("RELEASING"));
+        let third = |catalog: &Catalog| {
+            catalog
+                .metadata("kusuriya")
+                .expect("read")
+                .and_then(|record| record.metadata)
+                .and_then(|data| data.details)
+                .and_then(|details| details.season(Some(3)).cloned())
+                .and_then(|art| art.poster_url)
+        };
+        assert_eq!(third(&catalog).as_deref(), Some("third.jpg"));
         let next = catalog
             .metadata("kusuriya")
             .expect("read")
@@ -2831,6 +2872,7 @@ mod tests {
             })
             .expect("refresh");
         assert_eq!(status(&catalog).as_deref(), Some("RELEASING"));
+        assert_eq!(third(&catalog).as_deref(), Some("third.jpg"));
         assert!(
             catalog.all_metadata().expect("read all")["kusuriya"]
                 .metadata
@@ -2850,6 +2892,7 @@ mod tests {
             })
             .expect("repin");
         assert_eq!(status(&catalog).as_deref(), Some("FINISHED"));
+        assert_eq!(third(&catalog), None);
     }
 
     #[test]
