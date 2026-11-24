@@ -101,6 +101,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.4.0" date="2026-11-24">
+      <description>
+        <p>The Stream icon draws correctly in Qt-based shells and launchers, and the floating navigation bar no longer sits in a dark band.</p>
+        <ul>
+          <li>The icon no longer shows a pale slab below the play mark in Quickshell, KDE and other Qt shells.</li>
+          <li>The gap round the navigation bar takes the page's colour, which was most visible in light palettes.</li>
+          <li>On Android TV, Continue watching appears in the launcher's Play Next row, and Search can be used by voice, from the remote's Search key or through the assistant.</li>
+          <li>On iOS, playback, scrolling and posters are smoother, and the icon sits on the same violet plate as on Android.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.0" date="2026-11-23">
       <description>
         <p>The suite's new look: plum neutrals like Proton Drive and Proton Gallery, a Proton Light palette, a Copper accent and a new Stream icon.</p>
