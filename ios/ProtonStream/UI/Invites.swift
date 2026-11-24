@@ -91,16 +91,23 @@ struct IncomingInviteSheet: View {
 /// An invite to hand out: its QR code, Send and Copy. The link itself is never
 /// printed: it carries every password it shares.
 struct OutgoingInviteSheet: View {
-    let invite: Result<InviteRecord, Error>
+    /// The shares to invite to; empty is the whole library.
+    let ids: [String]
+    /// Built once the engine is up, which it may not be the moment the sheet
+    /// opens.
+    @State private var invite: Result<InviteRecord, Error>?
+    @Environment(AppModel.self) private var model
     @Environment(\.scheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         DialogSheet("Invite to your library") {
             switch invite {
-            case .failure(let error):
+            case nil:
+                ProgressView().frame(maxWidth: .infinity)
+            case .failure(let error)?:
                 Text(errorMessage(error)).textStyle(.bodyMedium).foregroundStyle(scheme.error)
-            case .success(let record):
+            case .success(let record)?:
                 Text("Scan with a device that has Proton Stream, or send the link.")
                     .textStyle(.bodyMedium).foregroundStyle(scheme.onSurfaceVariant)
                 if let qr = try? qrCode(text: record.link) {
@@ -114,7 +121,7 @@ struct OutgoingInviteSheet: View {
                 }
             }
         } buttons: {
-            if case .success(let record) = invite {
+            if case .success(let record)? = invite {
                 Button("Copy") {
                     // Marked local-only so Universal Clipboard does not carry
                     // the passwords to every other device signed in.
@@ -134,6 +141,7 @@ struct OutgoingInviteSheet: View {
             }
         }
         .secureContent()
+        .task(id: ids) { invite = await model.inviteLink(ids) }
     }
 }
 

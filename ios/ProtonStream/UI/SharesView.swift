@@ -86,7 +86,7 @@ struct SharesView: View {
             }
         }
         .sheet(item: $inviting) { request in
-            OutgoingInviteSheet(invite: model.inviteLink(request.ids))
+            OutgoingInviteSheet(ids: request.ids)
         }
         .sheet(isPresented: Binding(
             get: { signingIn || model.account.state == .secondFactor || model.account.state == .mailboxPassword },

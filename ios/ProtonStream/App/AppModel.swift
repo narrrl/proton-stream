@@ -306,7 +306,7 @@ final class AppModel {
     /// The shares an invite adds, each marked when the library has it already.
     func decodeInvite(_ text: String) async -> Result<[InvitedShareRecord], Error> {
         do {
-            return .success(try NativeRuntime.engine().decodeInvite(text: text))
+            return .success(try await NativeRuntime.engine().decodeInvite(text: text))
         } catch {
             return .failure(error)
         }
@@ -334,8 +334,12 @@ final class AppModel {
     }
 
     /// The invite for these shares, or for the whole library when empty.
-    func inviteLink(_ shareIds: [String]) -> Result<InviteRecord, Error> {
-        Result { try NativeRuntime.engine().inviteLink(shareIds: shareIds) }
+    func inviteLink(_ shareIds: [String]) async -> Result<InviteRecord, Error> {
+        do {
+            return .success(try await NativeRuntime.engine().inviteLink(shareIds: shareIds))
+        } catch {
+            return .failure(error)
+        }
     }
 
     /// Crawl shares that are new here — added on this device or by sync —
