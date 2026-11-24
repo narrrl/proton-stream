@@ -18,8 +18,8 @@ use std::collections::HashSet;
 
 use pstr_core::library::{self, TitleKind};
 use pstr_core::metadata::{
-    CastMember, Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleDetails, TitleMetadata,
-    Trailer,
+    Airing, CastMember, Enrichment, EpisodeGuide, EpisodeMetadata, ProviderId, TitleDetails,
+    TitleMetadata, Trailer,
 };
 use serde::Deserialize;
 
@@ -153,7 +153,7 @@ const MAX_TAGS: usize = 8;
 const RELATIONS: &str = r#"
 query ($id: Int) {
   Media(id: $id, type: ANIME) {
-    relations { edges { relationType node { id type format } } }
+    relations { edges { relationType node { id type format status nextAiringEpisode { episode airingAt } } } }
   }
 }
 "#;
@@ -257,6 +257,15 @@ impl Provider for AniList {
         let mut next = Some(Link {
             id: first,
             series: found.kind == TitleKind::Series,
+            airing: found
+                .details
+                .as_ref()
+                .map(|details| Airing {
+                    status: details.status.clone(),
+                    next_episode: details.next_episode,
+                    next_airing_at: details.next_airing_at,
+                })
+                .unwrap_or_default(),
         });
         while let Some(link) = next.take() {
             visited.insert(link.id);
@@ -277,12 +286,21 @@ impl Provider for AniList {
             }
             // Where two entries both list an episode, the earlier one — the
             // one closer to the match — keeps it.
+            let before = enrichment.episodes.len();
             enrichment.episodes.extend(
                 mapping
                     .episodes
                     .into_iter()
                     .filter(|episode| taken.insert((episode.season, episode.number))),
             );
+            // The title airs as long as the latest season it holds does: the
+            // match is season one, finished long ago.
+            if link.series
+                && link.airing.status.is_some()
+                && holds_any(&enrichment.episodes[before..], &wanted)
+            {
+                enrichment.airing = Some(link.airing.clone());
+            }
 
             if answers_all(&enrichment.episodes, &wanted) || visited.len() >= MAX_CHAIN_ENTRIES {
                 break;
@@ -493,13 +511,15 @@ struct SearchData {
 }
 
 /// One step along a franchise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Link {
     id: i64,
     /// Whether the entry is part of the series proper — TV, a short or a web
     /// series — rather than a film or a special, which no release counts as a
     /// season.
     series: bool,
+    /// Where the entry itself stands.
+    airing: Airing,
 }
 
 /// Which of an entry's relations the franchise continues through.
@@ -518,12 +538,31 @@ fn next_in_chain(edges: Vec<RelationEdge>, visited: &HashSet<i64>) -> Option<Lin
         .map(|node| Link {
             id: node.id,
             series: is_series_format(node.format.as_deref()),
+            airing: Airing {
+                status: node.status,
+                next_episode: node
+                    .next_airing_episode
+                    .as_ref()
+                    .and_then(|next| next.episode),
+                next_airing_at: node.next_airing_episode.and_then(|next| next.airing_at),
+            },
         })
         .min_by_key(|link| !link.series)
 }
 
 fn is_series_format(format: Option<&str>) -> bool {
     matches!(format, Some("TV" | "TV_SHORT" | "ONA"))
+}
+
+/// Whether any numbered file has its answer among `episodes`.
+fn holds_any(episodes: &[EpisodeMetadata], wanted: &[(Option<u32>, u32)]) -> bool {
+    if episodes.is_empty() {
+        return false;
+    }
+    let guide = EpisodeGuide::new(episodes.to_vec());
+    wanted
+        .iter()
+        .any(|&(season, number)| guide.get(season, number).is_some())
 }
 
 /// Whether every numbered file has an answer in `episodes`.
@@ -564,6 +603,9 @@ struct RelationNode {
     #[serde(rename = "type")]
     kind: Option<String>,
     format: Option<String>,
+    status: Option<String>,
+    #[serde(rename = "nextAiringEpisode")]
+    next_airing_episode: Option<NextAiring>,
 }
 
 #[derive(Deserialize)]
@@ -1086,6 +1128,13 @@ mod tests {
         );
     }
 
+    fn finished() -> Airing {
+        Airing {
+            status: Some("FINISHED".into()),
+            ..Airing::default()
+        }
+    }
+
     fn edge(relation: &str, id: i64, kind: &str, format: &str) -> RelationEdge {
         RelationEdge {
             relation_type: Some(relation.into()),
@@ -1093,6 +1142,8 @@ mod tests {
                 id,
                 kind: Some(kind.into()),
                 format: Some(format.into()),
+                status: Some("FINISHED".into()),
+                next_airing_episode: None,
             }),
         }
     }
@@ -1112,7 +1163,8 @@ mod tests {
             next_in_chain(edges, &HashSet::new()),
             Some(Link {
                 id: 20958,
-                series: true
+                series: true,
+                airing: finished(),
             })
         );
     }
@@ -1126,7 +1178,8 @@ mod tests {
             next_in_chain(edges, &HashSet::new()),
             Some(Link {
                 id: 20526,
-                series: false
+                series: false,
+                airing: finished(),
             })
         );
         // With a series beside it, the series wins.
