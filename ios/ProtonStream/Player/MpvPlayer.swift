@@ -46,9 +46,10 @@ struct MpvTrack: Identifiable, Hashable {
 
 /// One libmpv core rendering into a Metal layer, for the life of the app.
 ///
-/// Every public method runs on the main thread; mpv's events are read on a
-/// thread of their own and applied back on the main thread. The state mirrors
-/// what `pstr_mpv.cpp` publishes on Android, field for field.
+/// Every public method runs on the main thread, and hands its mpv calls to a
+/// queue of their own; mpv's events are read on a thread of their own and
+/// applied back on the main thread. The state mirrors what `pstr_mpv.cpp`
+/// publishes on Android, field for field.
 @MainActor
 @Observable
 final class MpvPlayer {
@@ -121,6 +122,12 @@ final class MpvPlayer {
     /// main thread must not; and a refit's "auto" must never land after the
     /// background's "no".
     @ObservationIgnored private let videoQueue = DispatchQueue(label: "mpv-video")
+    /// Every other property read and write, and every command, in order. Each
+    /// takes the core's lock, which the demuxer holds through a block fetch,
+    /// so on the main thread one would freeze the UI for as long as the fetch
+    /// — Android keeps them off its UI thread for the same reason
+    /// (`NativeMpvHost.kt`).
+    @ObservationIgnored private let coreQueue = DispatchQueue(label: "mpv-core", qos: .userInitiated)
 
     /// A core, or nil when libmpv would not start.
     static func create() -> MpvPlayer? {
@@ -204,14 +211,7 @@ final class MpvPlayer {
         subtitles: Bool,
         hardwareDecoding: Bool
     ) -> Bool {
-        guard mpv != nil else { return false }
-        // Per file, before `loadfile`: a file VideoToolbox decodes wrongly is
-        // fixed from the next episode without restarting the core.
-        setString("hwdec", hardwareDecoding ? "videotoolbox" : "no")
-        setString("start", start > 0 ? String(format: "%.3f", start) : "none")
-        setString("alang", audio ?? "")
-        setString("slang", subtitle ?? "")
-        setString("sid", subtitles ? "auto" : "no")
+        guard let mpv else { return false }
         // Retire the outgoing file's readings *before* the new one loads: mpv
         // only republishes them once it has demuxed enough of the stream, and
         // until then every reader would see the last episode's clock under the
@@ -236,7 +236,24 @@ final class MpvPlayer {
         pendingSubtitles = []
         pendingMedia = media
         loading = true
-        if command(["loadfile", "pstr://\(handle)", "replace"]) < 0 {
+        // Waited for, behind whatever the queue still holds: a seek queued for
+        // the outgoing file must not land on this one, and whether the load
+        // was issued decides who releases the handle.
+        let core = UncheckedCore(mpv)
+        let options = [
+            // Per file, before `loadfile`: a file VideoToolbox decodes wrongly
+            // is fixed from the next episode without restarting the core.
+            ("hwdec", hardwareDecoding ? "videotoolbox" : "no"),
+            ("start", start > 0 ? String(format: "%.3f", start) : "none"),
+            ("alang", audio ?? ""),
+            ("slang", subtitle ?? ""),
+            ("sid", subtitles ? "auto" : "no"),
+        ]
+        let issued: Int32 = coreQueue.sync {
+            for (name, value) in options { mpv_set_property_string(core.pointer, name, value) }
+            return Self.command(core.pointer, ["loadfile", "pstr://\(handle)", "replace"])
+        }
+        if issued < 0 {
             // Nothing was issued, so no START_FILE will arrive to clear this.
             loading = false
             return false
@@ -267,9 +284,9 @@ final class MpvPlayer {
     /// returns, through the stream protocol and so from the network.
     private func attach(_ subtitles: [(SubtitleFileRecord, Bool)]) {
         guard let mpv, !subtitles.isEmpty else { return }
-        let showing = getString("sid").map { $0 != "no" } ?? false
         let core = UncheckedCore(mpv)
         DispatchQueue.global(qos: .userInitiated).async {
+            let showing = Self.getString(core.pointer, "sid").map { $0 != "no" } ?? false
             for (file, select) in subtitles {
                 var args = ["sub-add", "pstr://\(file.handle)", select && !showing ? "select" : "auto", file.title]
                 if let language = file.language { args.append(language) }
@@ -359,7 +376,7 @@ final class MpvPlayer {
     /// Stop the open file. The stream behind it is released by mpv closing it,
     /// which this causes; releasing it from here would race that close.
     func stop() {
-        _ = command(["stop"])
+        command(["stop"])
         media = nil
         pendingMedia = nil
         chapters = []
@@ -381,11 +398,37 @@ final class MpvPlayer {
         case log(prefix: String, text: String)
     }
 
+    /// The readings mpv sends once per video frame: `time-pos` and
+    /// `demuxer-cache-time`.
+    private nonisolated static let clockReadings: Set<UInt64> = [1, 10]
+    /// How often a clock reading reaches the main thread: 4 Hz, as Android
+    /// polls. Each one re-renders whatever reads it, and a frame's worth of
+    /// them kept the main thread busy redrawing a clock that shows seconds.
+    private nonisolated static let clockInterval: UInt64 = 250_000_000
+
     /// Runs until the core shuts down, then destroys it. Nothing else calls
     /// `mpv_terminate_destroy`, so no main-thread call can race it.
     private nonisolated static func eventLoop(_ mpv: OpaquePointer, _ deliver: @escaping @MainActor (Event) -> Void) {
+        func send(_ event: Event) { DispatchQueue.main.async { deliver(event) } }
+        // The latest clock reading not yet sent, and when each was last sent.
+        var held: [UInt64: Double] = [:]
+        var sent: [UInt64: UInt64] = [:]
+        let due = { (id: UInt64) in (sent[id] ?? 0) + Self.clockInterval }
         while true {
-            guard let event = mpv_wait_event(mpv, -1)?.pointee else { continue }
+            // Wake for a held reading's turn even if mpv goes quiet, as it
+            // does on pause: the last reading must still arrive.
+            var timeout = -1.0
+            if let next = held.keys.map(due).min() {
+                let now = DispatchTime.now().uptimeNanoseconds
+                timeout = next > now ? Double(next - now) / 1e9 : 0
+            }
+            guard let event = mpv_wait_event(mpv, timeout)?.pointee else { continue }
+            let now = DispatchTime.now().uptimeNanoseconds
+            for (id, value) in held where due(id) <= now {
+                send(.double(id, value))
+                sent[id] = now
+                held[id] = nil
+            }
             var decoded: Event?
             switch event.event_id {
             case MPV_EVENT_SHUTDOWN:
@@ -426,9 +469,25 @@ final class MpvPlayer {
             default:
                 break
             }
-            if let decoded {
-                DispatchQueue.main.async { deliver(decoded) }
+            guard let decoded else { continue }
+            if case let .double(id, value) = decoded, Self.clockReadings.contains(id) {
+                if due(id) <= now {
+                    send(decoded)
+                    sent[id] = now
+                    held[id] = nil
+                } else {
+                    held[id] = value
+                }
+                continue
             }
+            // Anything else goes after the readings taken before it, in
+            // order: a held clock reading of the outgoing file must not land
+            // after the next file's START_FILE. And the clock reading after a
+            // seek, a pause or a load goes straight out, not a beat later.
+            for (id, value) in held.sorted(by: { $0.key < $1.key }) { send(.double(id, value)) }
+            held = [:]
+            sent = [:]
+            send(decoded)
         }
     }
 
@@ -482,15 +541,15 @@ final class MpvPlayer {
                 media = pendingMedia
             }
         case .loaded:
-            refreshTracks()
-            refreshChapters()
             // Mid-load, this is the outgoing file finishing its load.
-            if !loading {
+            let current = !loading
+            refreshChapters()
+            refreshTracks { player in if current { player.onLoaded?() } }
+            if current {
                 loadedGeneration = generation
                 let ready = pendingSubtitles
                 pendingSubtitles = []
                 attach(ready)
-                onLoaded?()
             }
         case .restarted:
             seeking = false
@@ -520,73 +579,111 @@ final class MpvPlayer {
         }
     }
 
-    private func refreshTracks() {
-        let count = getInt("track-list/count")
-        tracks = (0 ..< max(0, count)).map { index in
-            let base = "track-list/\(index)/"
-            return MpvTrack(
-                id: getInt(base + "id"),
-                type: getString(base + "type") ?? "",
-                language: getString(base + "lang") ?? "",
-                title: getString(base + "title") ?? "",
-                selected: getString(base + "selected") == "yes",
-                isDefault: getString(base + "default") == "yes",
-                forced: getString(base + "forced") == "yes"
-            )
+    /// Read the track list off the main thread, then `then` once it is in.
+    private func refreshTracks(then: (@MainActor (MpvPlayer) -> Void)? = nil) {
+        read(Self.readTracks) { player, tracks in
+            player.tracks = tracks
+            then?(player)
         }
     }
 
     private func refreshChapters() {
-        let count = getInt("chapter-list/count")
-        chapters = (0 ..< max(0, count)).map { index in
+        read(Self.readChapters) { player, chapters in player.chapters = chapters }
+    }
+
+    private nonisolated static func readTracks(_ mpv: OpaquePointer) -> [MpvTrack] {
+        let count = getInt(mpv, "track-list/count")
+        return (0 ..< max(0, count)).map { index in
+            let base = "track-list/\(index)/"
+            return MpvTrack(
+                id: getInt(mpv, base + "id"),
+                type: getString(mpv, base + "type") ?? "",
+                language: getString(mpv, base + "lang") ?? "",
+                title: getString(mpv, base + "title") ?? "",
+                selected: getString(mpv, base + "selected") == "yes",
+                isDefault: getString(mpv, base + "default") == "yes",
+                forced: getString(mpv, base + "forced") == "yes"
+            )
+        }
+    }
+
+    private nonisolated static func readChapters(_ mpv: OpaquePointer) -> [ChapterRecord] {
+        let count = getInt(mpv, "chapter-list/count")
+        return (0 ..< max(0, count)).map { index in
             let base = "chapter-list/\(index)/"
-            return ChapterRecord(index: index, title: getString(base + "title"), start: getDouble(base + "time"))
+            return ChapterRecord(index: index, title: getString(mpv, base + "title"), start: getDouble(mpv, base + "time"))
         }
     }
 
     // MARK: Property plumbing
 
-    private func command(_ args: [String]) -> Int32 {
-        guard let mpv else { return -1 }
+    /// `body` on the core queue, and its result to `apply` on the main thread
+    /// — unless another file has been loaded since, which the result is not
+    /// about.
+    private func read<T>(_ body: @escaping (OpaquePointer) -> T, apply: @escaping @MainActor (MpvPlayer, T) -> Void) {
+        guard let mpv else { return }
+        let core = UncheckedCore(mpv)
+        let generation = generation
+        let land: @MainActor (T) -> Void = { [weak self] value in
+            guard let self, self.generation == generation else { return }
+            apply(self, value)
+        }
+        coreQueue.async {
+            let value = body(core.pointer)
+            DispatchQueue.main.async { land(value) }
+        }
+    }
+
+    /// A command or a write, queued in order behind the ones before it.
+    private func onCore(_ body: @escaping (OpaquePointer) -> Void) {
+        guard let mpv else { return }
+        let core = UncheckedCore(mpv)
+        coreQueue.async { body(core.pointer) }
+    }
+
+    private func command(_ args: [String]) {
+        onCore { _ = Self.command($0, args) }
+    }
+
+    private func setString(_ name: String, _ value: String) {
+        onCore { mpv_set_property_string($0, name, value) }
+    }
+
+    private func setDouble(_ name: String, _ value: Double) {
+        onCore { mpv in
+            var value = value
+            mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &value)
+        }
+    }
+
+    private func setFlag(_ name: String, _ value: Bool) {
+        onCore { mpv in
+            var flag: Int32 = value ? 1 : 0
+            mpv_set_property(mpv, name, MPV_FORMAT_FLAG, &flag)
+        }
+    }
+
+    private nonisolated static func command(_ mpv: OpaquePointer, _ args: [String]) -> Int32 {
         var pointers = args.map { UnsafePointer<CChar>(strdup($0)) }
         pointers.append(nil)
         defer { pointers.forEach { free(UnsafeMutablePointer(mutating: $0)) } }
         return mpv_command(mpv, &pointers)
     }
 
-    private func setString(_ name: String, _ value: String) {
-        guard let mpv else { return }
-        mpv_set_property_string(mpv, name, value)
-    }
-
-    private func setDouble(_ name: String, _ value: Double) {
-        guard let mpv else { return }
-        var value = value
-        mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &value)
-    }
-
-    private func setFlag(_ name: String, _ value: Bool) {
-        guard let mpv else { return }
-        var flag: Int32 = value ? 1 : 0
-        mpv_set_property(mpv, name, MPV_FORMAT_FLAG, &flag)
-    }
-
-    private func getInt(_ name: String) -> Int64 {
-        guard let mpv else { return 0 }
+    private nonisolated static func getInt(_ mpv: OpaquePointer, _ name: String) -> Int64 {
         var value: Int64 = 0
         mpv_get_property(mpv, name, MPV_FORMAT_INT64, &value)
         return value
     }
 
-    private func getDouble(_ name: String) -> Double {
-        guard let mpv else { return 0 }
+    private nonisolated static func getDouble(_ mpv: OpaquePointer, _ name: String) -> Double {
         var value = 0.0
         mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &value)
         return value
     }
 
-    private func getString(_ name: String) -> String? {
-        guard let mpv, let raw = mpv_get_property_string(mpv, name) else { return nil }
+    private nonisolated static func getString(_ mpv: OpaquePointer, _ name: String) -> String? {
+        guard let raw = mpv_get_property_string(mpv, name) else { return nil }
         defer { mpv_free(raw) }
         return String(cString: raw)
     }

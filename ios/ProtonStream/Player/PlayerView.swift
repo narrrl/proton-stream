@@ -144,34 +144,10 @@ struct PlayerView: View {
                 // Drawn whether or not the rest of the controls are up: an
                 // opening lasts ninety seconds, and a button you have to wake
                 // with a tap is one nobody reaches in time.
-                VStack(alignment: .trailing, spacing: 8) {
-                    Spacer()
-                    if let offer = host.offer, !host.autoSkip {
-                        Button(offer.label) { host.seek(to: offer.target) }.buttonStyle(.tonal)
-                    }
-                    // A file with no chapters has no credits to count over, so
-                    // the card takes its last seconds instead, on the file's
-                    // own clock: the end of file is what advances.
-                    let tailLeft: Double? = {
-                        let left = player.duration - player.position
-                        guard host.chapters.creditsStart == nil,
-                              player.duration > Double(upNextSeconds * 6),
-                              left <= Double(upNextSeconds) else { return nil }
-                        return left
-                    }()
-                    UpNextCard(
-                        next: host.next,
-                        visible: host.autoplay && !host.stay && !host.stopsAfterThis && !player.paused && player.endReason == nil
-                            && host.playingOpenEpisode
-                            && (tailLeft != nil || host.chapters.creditsStart.map { player.position >= $0 } == true),
-                        secondsLeft: tailLeft.map { Int($0.rounded(.up)) },
-                        onPlayNow: host.advance,
-                        onStay: { host.stay = true }
-                    )
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 16)
-                .padding(.bottom, showControls ? 160 : 24)
+                SkipAndUpNext(host: host, player: player)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, showControls ? 160 : 24)
 
                 // Only while nothing else explains the still picture: an error
                 // is the more useful thing to say.
@@ -271,11 +247,7 @@ struct PlayerView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             IconButton("xmark", "Stop playback", tint: .white, action: host.close)
-            if player.duration > 0, player.duration - player.position >= 1 {
-                Text("\(clock(player.duration - player.position)) left")
-                    .textStyle(.labelMedium).foregroundStyle(.white.opacity(0.7))
-                    .padding(.leading, 12).padding(.trailing, 4)
-            }
+            TimeLeft(player: player)
         }
         .padding(.horizontal, 8)
         .padding(.top, 4)
@@ -403,6 +375,55 @@ private enum Screen {
 }
 
 /// The bubble in the middle of the picture while a swipe is under way.
+/// The skip button and the up-next card: views of their own because they read
+/// the clock, and a clock read in `PlayerView.body` rebuilds the whole player
+/// — gestures, overlays, sheets — on every reading.
+private struct SkipAndUpNext: View {
+    let host: PlayerHost
+    let player: MpvPlayer
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            Spacer()
+            if let offer = host.offer, !host.autoSkip {
+                Button(offer.label) { host.seek(to: offer.target) }.buttonStyle(.tonal)
+            }
+            // A file with no chapters has no credits to count over, so
+            // the card takes its last seconds instead, on the file's
+            // own clock: the end of file is what advances.
+            let tailLeft: Double? = {
+                let left = player.duration - player.position
+                guard host.chapters.creditsStart == nil,
+                      player.duration > Double(upNextSeconds * 6),
+                      left <= Double(upNextSeconds) else { return nil }
+                return left
+            }()
+            UpNextCard(
+                next: host.next,
+                visible: host.autoplay && !host.stay && !host.stopsAfterThis && !player.paused && player.endReason == nil
+                    && host.playingOpenEpisode
+                    && (tailLeft != nil || host.chapters.creditsStart.map { player.position >= $0 } == true),
+                secondsLeft: tailLeft.map { Int($0.rounded(.up)) },
+                onPlayNow: host.advance,
+                onStay: { host.stay = true }
+            )
+        }
+    }
+}
+
+/// "12:34 left" in the top bar, on its own for the same reason as `SkipAndUpNext`.
+private struct TimeLeft: View {
+    let player: MpvPlayer
+
+    var body: some View {
+        if player.duration > 0, player.duration - player.position >= 1 {
+            Text("\(clock(player.duration - player.position)) left")
+                .textStyle(.labelMedium).foregroundStyle(.white.opacity(0.7))
+                .padding(.leading, 12).padding(.trailing, 4)
+        }
+    }
+}
+
 private struct SwipeBubble: View {
     let swipe: Swipe
     @Environment(\.scheme) private var scheme

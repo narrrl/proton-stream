@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 import UIKit
 
@@ -513,4 +514,31 @@ struct FlowLayout: Layout {
         }
         return rows.filter { !$0.members.isEmpty }
     }
+}
+
+/// How solid a bar over a scrolling page is, from clear to filled in.
+///
+/// A reference rather than `@State`: it changes on every scroll frame, and a
+/// `@State` read in a page's `body` re-ran the whole page — catalog lookups,
+/// shelves, episode rows — for each. Only `RevealingBar` reads it, so only
+/// the bar redraws.
+@MainActor
+@Observable
+final class BarReveal {
+    private(set) var solid: CGFloat = 0
+
+    /// Fiftieths are finer than the bar's fade can show; a scroll that leaves
+    /// that unchanged, or one past either end, changes nothing.
+    func set(_ value: CGFloat) {
+        let value = (min(max(value, 0), 1) * 50).rounded() / 50
+        if value != solid { solid = value }
+    }
+}
+
+/// A bar drawn by `bar` from how solid `reveal` says it is.
+struct RevealingBar<Bar: View>: View {
+    let reveal: BarReveal
+    @ViewBuilder let bar: (CGFloat) -> Bar
+
+    var body: some View { bar(reveal.solid) }
 }

@@ -32,8 +32,8 @@ struct TitleView: View {
     // gesture is dragged, and springs back if it is let go of — Android's
     // predictive back, so the viewer sees where back goes before committing.
     @State private var backProgress: CGFloat = 0
-    /// How far the backdrop has scrolled up, which is how solid the bar is.
-    @State private var scrolled: CGFloat = 0
+    /// How solid the bar is, from how far the backdrop has scrolled up.
+    @State private var reveal = BarReveal()
     /// The backdrop's colour, once it has arrived — see `pictureMood`.
     @State private var mood: UInt32?
 
@@ -75,7 +75,7 @@ struct TitleView: View {
             let backdropHeight = min(geometry.size.width * 9 / 16, geometry.size.height * 0.55)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    backdrop(height: backdropHeight + geometry.safeAreaInsets.top)
+                    backdrop(height: backdropHeight + geometry.safeAreaInsets.top, barFrom: backdropHeight - 2 * titleBarHeight)
                     heading(playlist: playlist, nextUp: nextUp, upNext: upNext)
                         .padding(.horizontal, side + 16)
                     if franchise.count > 1 {
@@ -114,7 +114,7 @@ struct TitleView: View {
             .coordinateSpace(name: "title")
             .background(scheme.background)
             .overlay(alignment: .top) {
-                titleBar(solid: min(max((scrolled - (backdropHeight - 2 * titleBarHeight)) / titleBarHeight, 0), 1))
+                RevealingBar(reveal: reveal) { titleBar(solid: $0) }
             }
         }
         .scaleEffect(1 - 0.1 * backProgress)
@@ -150,7 +150,9 @@ struct TitleView: View {
     /// Edge to edge, fading into the page: the art is the first thing the page
     /// says. It moves at half the speed of the page, so the picture stays
     /// behind the page rather than being part of it.
-    private func backdrop(height: CGFloat) -> some View {
+    ///
+    /// The bar fills in over the `titleBarHeight` of scrolling from `barFrom`.
+    private func backdrop(height: CGFloat, barFrom: CGFloat) -> some View {
         Backdrop(title: title) { mood = $0 }
             .frame(height: height)
             .frame(maxWidth: .infinity)
@@ -175,14 +177,14 @@ struct TitleView: View {
             .background {
                 GeometryReader { geometry in
                     Color.clear.onChange(of: geometry.frame(in: .named("title")).minY) { _, minY in
-                        scrolled = -minY
+                        reveal.set((-minY - barFrom) / titleBarHeight)
                     }
                 }
             }
             // Scrolled far enough to leave the lazy stack: the bar is long
             // since solid.
-            .onDisappear { scrolled = .greatestFiniteMagnitude }
-            .onAppear { scrolled = 0 }
+            .onDisappear { reveal.set(1) }
+            .onAppear { reveal.set(0) }
     }
 
     /// The bar over the page: only the back button while the backdrop is on

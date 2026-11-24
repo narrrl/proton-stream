@@ -80,7 +80,7 @@ struct LibraryView: View {
     @SceneStorage("library.searching") private var searching = false
     @State private var collapsed = false
     /// How far the bar over the banner has filled in, from clear to solid.
-    @State private var reveal: CGFloat = 0
+    @State private var reveal = BarReveal()
 
     /// The page's bar: its title, shown as much as `solid` says, and its
     /// actions, in `ink` or the scheme's own.
@@ -126,9 +126,11 @@ struct LibraryView: View {
             if overBanner {
                 // White over the banner's own scrim, then the page's ink once
                 // the bar has filled in.
-                bar(solid: reveal, ink: reveal > 0.5 ? nil : .white)
-                    .background(scheme.surfaceContainer.opacity(reveal).ignoresSafeArea(edges: .top))
-                    .animation(.easeOut(duration: 0.15), value: reveal > 0.5)
+                RevealingBar(reveal: reveal) { solid in
+                    bar(solid: solid, ink: solid > 0.5 ? nil : .white)
+                        .background(scheme.surfaceContainer.opacity(solid).ignoresSafeArea(edges: .top))
+                        .animation(.easeOut(duration: 0.15), value: solid > 0.5)
+                }
             }
         }
         .background(scheme.background)
@@ -226,14 +228,14 @@ struct LibraryView: View {
                         .background {
                             GeometryReader { geometry in
                                 Color.clear.onChange(of: geometry.frame(in: .named("library")).minY) { _, top in
-                                    reveal = min(max(-top / 280, 0), 1)
+                                    reveal.set(-top / 280)
                                 }
                             }
                         }
                         // Scrolled far enough to leave the lazy stack: the bar
                         // is long since solid.
-                        .onDisappear { reveal = 1 }
-                        .onAppear { reveal = 0 }
+                        .onDisappear { reveal.set(1) }
+                        .onAppear { reveal.set(0) }
                 } else if !searching {
                     Text("Library")
                         .textStyle(.headlineMedium)
