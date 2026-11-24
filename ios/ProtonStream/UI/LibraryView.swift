@@ -691,20 +691,12 @@ private struct FeaturedPage: View {
         let veil = scheme.veil(mood)
         ZStack(alignment: .bottomLeading) {
             Backdrop(title: title) { mood = $0 }
-            LinearGradient(
-                stops: [
-                    // Dark under the status bar and the bar's white icons…
-                    .init(color: .black.opacity(0.5), location: 0),
-                    .init(color: .clear, location: 0.22),
-                    // …and the picture's own colour under the text, ending in
-                    // the page it hands over to.
-                    .init(color: veil.opacity(0.35), location: 0.45),
-                    .init(color: veil.opacity(0.92), location: 0.78),
-                    .init(color: scheme.background, location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            // Eased scrims, each with one job: dark under the status bar's
+            // white icons, the picture's own colour under the text, and the
+            // page it hands over to. As on Android (`FeaturedPage`).
+            scrim(.black.opacity(0.45), to: 0.25, start: .top, end: .bottom)
+            scrim(veil, from: 0.15, to: 0.65)
+            scrim(scheme.background, to: 0.15)
             VStack(alignment: .leading, spacing: 0) {
                 // A logo is lettering made for dark art, white as often as
                 // not; over a light palette's veil it is gone, so the light
@@ -715,7 +707,7 @@ private struct FeaturedPage: View {
                     RemoteLogo(title.logoUrl, title.displayName, maxWidth: 260, maxHeight: 88) { name }
                         .padding(.bottom, 8)
                 }
-                Text(factLine).textStyle(.bodySmall).foregroundStyle(scheme.onBackground.opacity(0.8))
+                Text(copperStar(factLine, scheme.highlight)).textStyle(.bodySmall).foregroundStyle(scheme.onBackground.opacity(0.8))
                 if let overview = title.overview {
                     Text(overview.trimmingCharacters(in: .whitespacesAndNewlines))
                         .textStyle(.bodySmall).foregroundStyle(scheme.onBackground.opacity(0.8)).lineLimit(2).padding(.top, 6)
@@ -832,9 +824,11 @@ struct PosterTile: View {
                     if let badge {
                         Text(badge)
                             .textStyle(.labelSmall, semibold: true)
-                            .foregroundStyle(scheme.onPrimary)
+                            // News wears the suite's copper, as on Android: the
+                            // accent already marks what can be pressed.
+                            .foregroundStyle(scheme.onHighlight)
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(scheme.primary, in: RoundedRectangle(cornerRadius: Corner.standard))
+                            .background(scheme.highlight, in: RoundedRectangle(cornerRadius: Corner.tight))
                             .padding(6)
                     }
                 }

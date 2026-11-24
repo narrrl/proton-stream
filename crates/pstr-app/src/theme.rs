@@ -732,9 +732,9 @@ pub fn brand_mark(ctx: &egui::Context) -> TextureHandle {
     mark
 }
 
-/// The ring around a control that has the keyboard's focus: the accent, with
-/// the copper highlight just inside it, the way the suite's icons put copper
-/// behind violet.
+/// The ring around a control that has the keyboard's focus: two points of
+/// accent, standing two points off the control so it never reads as the
+/// control's own border. The same ring the phone and TV clients draw.
 ///
 /// egui's own focus cue is a hairline in the selection colour, which on a dark
 /// page next to artwork nobody sees — and someone moving with Tab has to be
@@ -743,27 +743,11 @@ pub fn focus_ring(painter: &egui::Painter, rect: Rect, corner_radius: impl Into<
     let corner_radius = corner_radius.into();
     let palette = palette();
     painter.rect_stroke(
-        rect.expand(3.0),
-        corner_radius + 3,
+        rect.expand(4.0),
+        corner_radius + 4,
         Stroke::new(2.0, palette.accent),
         egui::StrokeKind::Inside,
     );
-    painter.rect_stroke(
-        rect.expand(1.0),
-        corner_radius + 1,
-        Stroke::new(1.0, palette.highlight),
-        egui::StrokeKind::Inside,
-    );
-}
-
-/// Whether ramps are drawn at all.
-///
-/// Wider than [`gradients`], which also asks whether the *accent* has two hues
-/// to run between. The viewer who turns gradients off is usually on a panel that
-/// bands them into stripes, and that applies to every ramp in the app, not only
-/// the accent's — so the bar fade and the title backdrop ask this one.
-pub fn ramps_on() -> bool {
-    ACTIVE.read().gradients
 }
 
 /// Whether the accent is currently drawn as a gradient.
@@ -807,12 +791,7 @@ pub fn accent_shape(
     if !ACTIVE.read().gradients || palette.accent == palette.accent_alt {
         return egui::epaint::RectShape::filled(rect, corner_radius, palette.accent).into();
     }
-    let texture = ramp(
-        ctx,
-        palette.accent,
-        palette.accent_alt,
-        Direction::Horizontal,
-    );
+    let texture = ramp(ctx, palette.accent, palette.accent_alt, Direction::Vertical);
     textured(rect, corner_radius, &texture)
 }
 
@@ -839,39 +818,9 @@ fn fill(painter: &egui::Painter, rect: Rect, corner_radius: CornerRadius, palett
         painter.ctx(),
         palette.accent,
         palette.accent_alt,
-        Direction::Horizontal,
+        Direction::Vertical,
     );
     painter.add(textured(rect, corner_radius, &texture));
-}
-
-/// A rounded rectangle running from one colour to another, at `opacity`.
-///
-/// For colours that are not the palette's — a title's own, on a tile with no
-/// picture. Drawn flat when the viewer has ramps off, like every other ramp.
-pub fn ramp_fill(
-    painter: &egui::Painter,
-    rect: Rect,
-    corner_radius: CornerRadius,
-    (from, to): (Color32, Color32),
-    direction: Direction,
-    opacity: f32,
-) {
-    let tint = Color32::WHITE.gamma_multiply(opacity);
-    if !ramps_on() {
-        painter.rect_filled(
-            rect,
-            corner_radius,
-            mix(from, to, 0.5).gamma_multiply(opacity),
-        );
-        return;
-    }
-    let texture = ramp(painter.ctx(), from, to, direction);
-    painter.add(
-        egui::epaint::RectShape::filled(rect, corner_radius, tint).with_texture(
-            texture.id(),
-            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-        ),
-    );
 }
 
 /// A ramp from `color` to nothing, for laying artwork into the page.
@@ -921,47 +870,23 @@ pub fn mood_veil(mood: Option<Color32>) -> Color32 {
     ))
 }
 
-/// The one gradient that is not the accent: the top bar, which runs from the
-/// surface colour down into the page so that the join between them is a fade
-/// rather than an edge.
+/// The top bar: the surface colour, closed by a hairline. Flat on purpose —
+/// chrome is not where the eye should go, and a ramp across a full-width bar
+/// is the first thing a 6-bit panel bands.
 ///
 /// Handed back as a shape rather than painted, because a panel's background has
 /// to be drawn *behind* content whose size is only known once it is laid out —
 /// the caller reserves an index before drawing and fills it in after.
-pub fn bar_shape(ctx: &egui::Context, rect: Rect) -> egui::Shape {
+pub fn bar_shape(_ctx: &egui::Context, rect: Rect) -> egui::Shape {
     let palette = palette();
-    let corner_radius = CornerRadius::same(radius::FLOAT);
-    if !ACTIVE.read().gradients {
-        return egui::epaint::RectShape::new(
-            rect,
-            corner_radius,
-            palette.surface,
-            Stroke::new(1.0, palette.border),
-            egui::StrokeKind::Inside,
-        )
-        .into();
-    }
-    let texture = ramp(
-        ctx,
-        palette.surface,
-        // Not all the way to the page colour: a bar that ends in exactly the
-        // background has no bottom edge, and the shadow under a top panel then
-        // reads as the only thing separating the chrome from the content.
-        mix(palette.surface, palette.background, 0.7),
-        Direction::Vertical,
-    );
-    let mut shape = egui::epaint::RectShape::new(
+    egui::epaint::RectShape::new(
         rect,
-        corner_radius,
-        Color32::WHITE,
+        CornerRadius::same(radius::FLOAT),
+        palette.surface,
         Stroke::new(1.0, palette.border),
         egui::StrokeKind::Inside,
-    );
-    shape.brush = Some(Arc::new(egui::epaint::Brush {
-        fill_texture_id: texture.id(),
-        uv: Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-    }));
-    shape.into()
+    )
+    .into()
 }
 
 /// The shadow under a raised tile, at `strength` of its full depth.
@@ -1232,7 +1157,13 @@ fn alpha_ramp(
         Color32::TRANSPARENT,
         direction,
         1 + u8::from(arriving),
-        move |from, _, t| from.gamma_multiply(if arriving { t } else { 1.0 - t }),
+        move |from, _, t| {
+            from.gamma_multiply(pstr_core::appearance::scrim(if arriving {
+                1.0 - t
+            } else {
+                t
+            }))
+        },
     )
 }
 

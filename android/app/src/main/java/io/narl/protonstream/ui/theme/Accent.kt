@@ -54,7 +54,9 @@ import androidx.compose.ui.unit.dp
 internal fun accentBrush(): Brush {
     val scheme = MaterialTheme.colorScheme
     return remember(scheme.primary, scheme.secondary) {
-        Brush.horizontalGradient(listOf(scheme.primary, scheme.secondary))
+        // Top to bottom, as light falls across a control: `secondary` is a
+        // shade of the accent, never a second hue (`Palette::resolve`).
+        Brush.verticalGradient(listOf(scheme.primary, scheme.secondary))
     }
 }
 

@@ -1012,6 +1012,20 @@ pub fn card(ui: &mut egui::Ui, card: Card<'_>) -> egui::Response {
             );
         }
         Some((texture, ArtShape::Portrait)) if fit => {
+            // The cover, cropped to fill the frame and dimmed, behind the cover
+            // whole: a poster on a bare card in a 16:9 frame looked like a
+            // picture that had failed to fill its slot.
+            painter.add(
+                egui::epaint::RectShape::filled(
+                    image_rect,
+                    radius,
+                    Color32::from_gray(70).gamma_multiply(art_in),
+                )
+                .with_texture(
+                    texture.id(),
+                    cover_uv(texture.size_vec2(), image_rect.size()),
+                ),
+            );
             painter.add(
                 egui::epaint::RectShape::filled(
                     contain_rect(texture.size_vec2(), image_rect),
@@ -1307,38 +1321,29 @@ pub fn cover_uv(image: Vec2, target: Vec2) -> Rect {
     Rect::from_center_size(egui::pos2(0.5, 0.5), Vec2::new(width, height))
 }
 
-/// What a tile with no picture shows: a gradient of its own, and its name.
+/// What a tile with no picture shows: a quiet card with the title's name set
+/// on it, as a book with no jacket shows its spine.
 ///
-/// Two grey letters on a grey card was the whole tile for any title nothing
-/// knew a picture for — a wall of them read as a page that had failed to load.
-/// The colours come from the name, so a title wears the same ones every time
-/// and two titles side by side rarely match.
-///
-/// The hash is FNV-1a: stable across runs and platforms, which the standard
-/// library's hasher deliberately is not.
+/// It used to be a ramp in a colour hashed from the name. A wall of those read
+/// as confetti, and as the one part of the page nobody had designed. A flat
+/// card in the surface tone with a hairline keeps the grid's rhythm, and the
+/// name, in the display face, is what tells two of them apart.
 pub(crate) fn placeholder(painter: &egui::Painter, rect: Rect, name: &str, opacity: f32) {
-    let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    });
-    let hue = (hash % 360) as f32 / 360.0;
-    let light = theme::palette().light;
-    let (saturation, value) = if light { (0.25, 0.92) } else { (0.45, 0.34) };
-    let from: Color32 = egui::ecolor::Hsva::new(hue, saturation, value, 1.0).into();
-    let to: Color32 =
-        egui::ecolor::Hsva::new((hue + 0.12) % 1.0, saturation, value * 0.65, 1.0).into();
-    theme::ramp_fill(
-        painter,
+    let palette = theme::palette();
+    let light = palette.light;
+    let corner = CornerRadius::same(theme::radius::MD);
+    painter.rect_filled(rect, corner, palette.card.gamma_multiply(opacity));
+    painter.rect_stroke(
         rect,
-        CornerRadius::same(theme::radius::MD),
-        (from, to),
-        theme::Direction::Vertical,
-        opacity,
+        corner,
+        egui::Stroke::new(1.0, palette.border.gamma_multiply(opacity)),
+        egui::StrokeKind::Inside,
     );
 
     let ink = if light {
-        Color32::from_black_alpha(170)
+        Color32::from_black_alpha(150)
     } else {
-        Color32::from_white_alpha(215)
+        Color32::from_white_alpha(170)
     }
     .gamma_multiply(opacity);
     let mut job = egui::text::LayoutJob::simple(
