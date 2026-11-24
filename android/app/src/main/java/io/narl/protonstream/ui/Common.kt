@@ -33,6 +33,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.Icon
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -60,6 +62,7 @@ import io.narl.protonstream.download.RetainedDownload
 import io.narl.protonstream.settings.SettingsStore
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.TonalButton
+import io.narl.protonstream.ui.theme.GLASS_ALPHA
 import uniffi.pstr_android.EpisodeRecord
 
 /**
@@ -391,15 +394,37 @@ internal fun SpecBadge(text: String) {
  * a third labelled button does not fit a phone.
  */
 @Composable
-internal fun ListButton(onList: Boolean, onSet: (Boolean) -> Unit, compact: Boolean = false) {
+internal fun ListButton(
+    onList: Boolean,
+    onSet: (Boolean) -> Unit,
+    compact: Boolean = false,
+    glass: Color? = null,
+) {
     val icon = if (onList) Icons.Default.Check else Icons.Default.Add
     val label = if (onList) "Remove from My List" else "Add to My List"
     if (compact) {
-        FilledTonalIconButton(onClick = { onSet(!onList) }, shape = MaterialTheme.shapes.small) {
+        // Round, beside pills: a rounded square read as a different kind of
+        // control from the two buttons it sits with.
+        FilledTonalIconButton(
+            onClick = { onSet(!onList) },
+            shape = CircleShape,
+            colors = if (glass != null) {
+                IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = glass.copy(alpha = GLASS_ALPHA),
+                    contentColor = glass,
+                )
+            } else {
+                IconButtonDefaults.filledTonalIconButtonColors()
+            },
+        ) {
             Icon(icon, contentDescription = label)
         }
     } else {
-        TonalButton(onClick = { onSet(!onList) }, modifier = Modifier.semantics { contentDescription = label }) {
+        TonalButton(
+            onClick = { onSet(!onList) },
+            modifier = Modifier.semantics { contentDescription = label },
+            glass = glass,
+        ) {
             Icon(icon, contentDescription = null)
             Spacer(Modifier.width(6.dp))
             Text("My List")

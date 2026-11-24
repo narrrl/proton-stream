@@ -22,6 +22,19 @@ internal val ProtonShapes = Shapes(
     extraLarge = RoundedCornerShape(CORNER_SHEET.dp),
 )
 
+/**
+ * What a tile with its caption under the picture clips its press ripple to:
+ * the card's corners on top, tight ones under the text. Clipped to [CORNER]
+ * all round, the bottom-left curve cut into the first letter of the caption's
+ * last line.
+ */
+internal val TileShape = RoundedCornerShape(
+    topStart = CORNER.dp,
+    topEnd = CORNER.dp,
+    bottomStart = CORNER_TIGHT.dp,
+    bottomEnd = CORNER_TIGHT.dp,
+)
+
 /** Cards, tiles, rows: `theme::radius::MD`. */
 internal const val CORNER = 12f
 

@@ -51,7 +51,12 @@ pub fn show(
     }
     ui.add_space(theme::space::S);
 
+    // Its own scroll position, per title. Unsalted, every page's area had the
+    // one id, so a title opened as far down as the library had been scrolled
+    // — blank for a frame when that was past its end — and the library came
+    // back at the top.
     egui::ScrollArea::vertical()
+        .id_salt(("title page", key))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             header(ui, art, title, on_list, &offline, actions);
@@ -801,8 +806,20 @@ fn description(ui: &mut egui::Ui, found: &TitleMetadata, key: &str, actions: &mu
         const LINES: usize = 4;
         let id = ui.id().with(("overview", &found.remote_id));
         let open = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+        // Folded, the paragraphs run on: a break that falls on the last line
+        // left the ellipsis alone on a row of its own under the text.
+        let text = if open {
+            overview.clone()
+        } else {
+            overview
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         let mut job = egui::text::LayoutJob::simple(
-            overview.clone(),
+            text,
             theme::Role::Label.font(),
             theme::text(),
             ui.available_width(),

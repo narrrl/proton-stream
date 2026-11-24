@@ -347,7 +347,8 @@ struct TitleView: View {
     private func playLabel(playlist: [EpisodeRecord], upNext: EpisodeRecord?) -> String {
         guard let upNext else { return "Play" }
         if upNext.resumeAt != nil { return "Resume \(upNext.label)" }
-        if title.watchedCount > 0 { return "Continue with \(upNext.label)" }
+        // Watched through, it starts the show again: nothing to continue.
+        if title.watchedCount > 0, !upNext.watched { return "Continue with \(upNext.label)" }
         if playlist.count == 1 { return "Play" }
         return "Play \(upNext.label)"
     }

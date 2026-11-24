@@ -102,19 +102,34 @@ internal fun AccentButton(
     }
 }
 
+/**
+ * The quiet button. [glass] is the ink of what it sits on — the banner's text
+ * colour over artwork — and makes it a translucent wash of that ink instead of
+ * the accent's dim shade, so a row over a picture has one coloured button, the
+ * one that plays.
+ */
 @Composable
 internal fun TonalButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    glass: Color? = null,
     content: @Composable RowScope.() -> Unit,
 ) = FilledTonalButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
     shape = Pill,
+    colors = if (glass != null) glassButtonColors(glass) else ButtonDefaults.filledTonalButtonColors(),
     content = content,
 )
+
+/** A wash of [ink] at the strength a dark glass chip has on the desktop. */
+internal const val GLASS_ALPHA = 0.16f
+
+@Composable
+private fun glassButtonColors(ink: Color) =
+    ButtonDefaults.filledTonalButtonColors(containerColor = ink.copy(alpha = GLASS_ALPHA), contentColor = ink)
 
 @Composable
 internal fun EdgedButton(

@@ -717,13 +717,13 @@ private struct FeaturedPage: View {
                         Label(resume?.episode.resumeAt != nil ? "Resume" : "Play", systemImage: "play.fill")
                     }
                     .buttonStyle(.accent)
-                    Button(action: onOpen) { Label("More info", systemImage: "info.circle") }.buttonStyle(.tonal)
+                    Button(action: onOpen) { Label("More info", systemImage: "info.circle") }.buttonStyle(.glass)
                     // The icon alone: a third labelled button does not fit a
                     // phone's row.
                     Button { model.setOnList(title, !title.onList) } label: {
                         Image(systemName: title.onList ? "checkmark" : "plus")
                     }
-                    .buttonStyle(.tonal)
+                    .buttonStyle(.glass)
                     .accessibilityLabel(title.onList ? "Remove from My List" : "Add to My List")
                 }
                 .padding(.top, 12)

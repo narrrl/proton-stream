@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import io.narl.protonstream.ui.theme.TileShape
 import io.narl.protonstream.ui.theme.verticalScrim
 import io.narl.protonstream.ui.theme.LocalBrand
 import androidx.compose.foundation.background
@@ -994,12 +995,12 @@ private fun FeaturedPage(
                     Spacer(Modifier.width(6.dp))
                     Text(if (resume?.episode?.resumeAt != null) "Resume" else "Play")
                 }
-                TonalButton(onClick = onOpen) {
+                TonalButton(onClick = onOpen, glass = ink) {
                     Icon(Icons.Default.Info, contentDescription = null)
                     Spacer(Modifier.width(6.dp))
                     Text("More info")
                 }
-                ListButton(title.onList, onSetOnList, compact = true)
+                ListButton(title.onList, onSetOnList, compact = true, glass = ink)
             }
             val episode = resume?.episode
             val progress = episode?.progress?.takeIf { episode.resumeAt != null }
@@ -1043,7 +1044,7 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
             .width(220.dp)
             .focusHighlight(MaterialTheme.shapes.medium, grow = true)
             .onMenuKey(onLongClick)
-            .clip(MaterialTheme.shapes.medium)
+            .clip(TileShape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this episode"),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.medium)) {
@@ -1106,7 +1107,7 @@ private fun PosterTile(
             .returnsFocus(title.key)
             .focusHighlight(MaterialTheme.shapes.medium, grow = true)
             .onMenuKey(onLongClick)
-            .clip(MaterialTheme.shapes.medium)
+            .clip(TileShape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this title"),
     ) {
         Box {

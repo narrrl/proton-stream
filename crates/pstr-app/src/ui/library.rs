@@ -65,6 +65,7 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
     let matches = pick(&view.matches);
 
     egui::ScrollArea::vertical()
+        .id_salt("library page")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if !featured.is_empty() {
@@ -235,6 +236,7 @@ pub fn browse(
     let keys = facet.titles(&library.titles, art.metadata);
     let titles: Vec<&Title> = keys.iter().filter_map(|key| library.get(key)).collect();
     egui::ScrollArea::vertical()
+        .id_salt(("browse page", facet))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.label(ui::muted(facet.kind()));

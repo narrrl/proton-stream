@@ -917,7 +917,11 @@ pub struct Card<'a> {
 /// Two lines of name plus one of subtitle. Fixed, because the tile is allocated
 /// before the name is laid out — and because a grid whose rows are each a
 /// different height by title length reads as broken.
-const CARD_TEXT_HEIGHT: f32 = 54.0;
+///
+/// The 6 px gap above the name, two 17 px rows of Body, the 2 px between name
+/// and subtitle and a 15 px row of Caption come to 57; at 54 the subtitle under
+/// a two-line name was cut through its middle.
+const CARD_TEXT_HEIGHT: f32 = 60.0;
 
 /// How tall [`card`] draws a tile of this width and shape, so a grid can step
 /// over rows it does not draw.
@@ -1185,6 +1189,10 @@ pub fn shelf<R>(
             egui::ScrollArea::horizontal()
                 .id_salt(id)
                 .auto_shrink([false, true])
+                // The fades and the edge buttons say there is more; a bar
+                // under the row only drew over the captions of its last line.
+                // A trackpad's sideways swipe still scrolls it.
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     if let Some(delta) = pending {
                         ui.scroll_with_delta_animation(
