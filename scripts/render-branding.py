@@ -26,6 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 BACKGROUND = "#F4F0FA"
 # Adaptive icon plate: lit from the top left like the copper rim.
 PLATE = (("0", "#3A2A6E"), (".55", "#231946"), ("1", "#140E2B"))
+# The plate's light, in the 108dp adaptive canvas.
+PLATE_CENTER, PLATE_RADIUS = (40, 32), 96
+# A launcher shows the central 72dp of that canvas; the mark fills 64dp of it.
+ADAPTIVE_VISIBLE, ADAPTIVE_MARK = 72, 64
 
 
 def run(*args, data=None, env=None):
@@ -171,10 +175,19 @@ class Artwork:
         return xml(root).encode()
 
     def ios(self):
+        # The same plate and crop as an Android launcher icon, so the two
+        # phones show one icon: the visible 72dp window becomes the 256-unit
+        # canvas, and the mark keeps its 64dp share of it.
+        unit = 256 / ADAPTIVE_VISIBLE
+        inset = (108 - ADAPTIVE_VISIBLE) / 2
+        cx, cy = ((v - inset) * unit for v in PLATE_CENTER)
+        stops = "".join(f'<stop offset="{o}" stop-color="{c}"/>' for o, c in PLATE)
+        scale = ADAPTIVE_MARK / ADAPTIVE_VISIBLE
         return HEADER + GENERATED + f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256">
 {self.svg_defs}
-<rect width="256" height="256" fill="{BACKGROUND}"/>
-{self.svg_mark}
+<radialGradient id="plate" cx="{cx:.1f}" cy="{cy:.1f}" r="{PLATE_RADIUS * unit:.1f}" gradientUnits="userSpaceOnUse">{stops}</radialGradient>
+<rect width="256" height="256" fill="url(#plate)"/>
+<g transform="translate(128 128) scale({scale:.4f}) translate(-128 -128)">{self.svg_mark}</g>
 </svg>
 '''
 
@@ -204,6 +217,11 @@ def main():
     if app not in {"drive", "stream", "gallery"}:
         parser.error("Unknown data-app in images/logo.svg")
     art = Artwork(master)
+    if app in {"drive", "stream"} and any("clip-path" in node.attrib for node in art.mark.iter()):
+        # The master ships as the desktop icon, and QtSvg, which Qt shells and
+        # launchers draw it with, ignores clip-path: whatever it was cutting
+        # spills out. Cut the shape in its own path instead.
+        parser.error("images/logo.svg ships as the desktop icon; its mark cannot use clip-path")
     desktop = source.read_bytes()
     outputs = {}
     if app in {"drive", "stream"}:
@@ -236,8 +254,8 @@ def main():
         plate = ET.SubElement(background, "path", {ANDROID + "pathData": "M0 0H108V108H0Z"})
         fill = ET.SubElement(plate, AAPT + "attr", {"name": "android:fillColor"})
         gradient = ET.SubElement(fill, "gradient", {
-            ANDROID + "type": "radial", ANDROID + "centerX": "40", ANDROID + "centerY": "32",
-            ANDROID + "gradientRadius": "96",
+            ANDROID + "type": "radial", ANDROID + "centerX": str(PLATE_CENTER[0]),
+            ANDROID + "centerY": str(PLATE_CENTER[1]), ANDROID + "gradientRadius": str(PLATE_RADIUS),
         })
         for offset, stop in PLATE:
             ET.SubElement(gradient, "item", {ANDROID + "offset": offset, ANDROID + "color": color(stop)})
