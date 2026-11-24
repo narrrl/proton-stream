@@ -502,7 +502,7 @@ input{display:block;width:100%;margin-top:6px;padding:12px 14px;font:inherit;\
 color:var(--text);background:var(--field);border:1px solid var(--line);border-radius:12px}\
 input:focus{outline:2px solid #8A6DFF;outline-offset:1px}\
 button{width:100%;margin-top:4px;padding:14px;border:0;border-radius:999px;font:inherit;\
-font-weight:600;color:#fff;background:linear-gradient(90deg,#6D4AFF,#B65BD6);cursor:pointer}\
+font-weight:600;color:#fff;background:#6D4AFF;cursor:pointer}\
 button:focus-visible{outline:2px solid #D69B77;outline-offset:2px}";
 
 #[cfg(test)]
