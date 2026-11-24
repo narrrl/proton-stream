@@ -2,7 +2,7 @@
 
 use pstr_core::library::{Episode, Library, Season, Title, TitleKind};
 
-use pstr_core::metadata::TitleMetadata;
+use pstr_core::metadata::{SeasonArt, TitleMetadata};
 
 use crate::app::{Action, Page};
 use crate::engine::{DownloadItem, DownloadKey, DownloadState};
@@ -59,7 +59,47 @@ pub fn show(
         .id_salt(("title page", key))
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            header(ui, art, title, on_list, &offline, actions);
+            // One season at a time, picked from a row of pills, rather than
+            // every season stacked as a collapsing header: a four-season show
+            // was a page of headers to scroll past to reach the one being
+            // watched. The one opened first is the one with the next episode.
+            //
+            // Picked before the header is drawn, because a season that is a
+            // provider entry of its own brings its own cover and synopsis.
+            let picked_id = ui.id().with(("season", &title.key));
+            let default = title
+                .next_up()
+                .and_then(|next| {
+                    title.seasons.iter().position(|season| {
+                        season
+                            .episodes
+                            .iter()
+                            .any(|episode| episode.node.link_id == next.node.link_id)
+                    })
+                })
+                .unwrap_or(0);
+            let mut picked = ui
+                .data(|data| data.get_temp::<usize>(picked_id))
+                .unwrap_or(default)
+                .min(title.seasons.len().saturating_sub(1));
+            let season_art = title.seasons.get(picked).and_then(|season| {
+                art.metadata
+                    .get(&title.key)
+                    .and_then(|record| record.metadata.as_ref())
+                    .and_then(|found| found.details.as_ref())
+                    .and_then(|details| details.season(season.number))
+                    .cloned()
+            });
+
+            header(
+                ui,
+                art,
+                title,
+                season_art.as_ref(),
+                on_list,
+                &offline,
+                actions,
+            );
             ui.add_space(theme::space::XL);
 
             if let Some(keys) = franchise {
@@ -77,27 +117,6 @@ pub fn show(
                     ui.add_space(theme::space::XL);
                 }
             }
-
-            // One season at a time, picked from a row of pills, rather than
-            // every season stacked as a collapsing header: a four-season show
-            // was a page of headers to scroll past to reach the one being
-            // watched. The one opened first is the one with the next episode.
-            let picked_id = ui.id().with(("season", &title.key));
-            let default = title
-                .next_up()
-                .and_then(|next| {
-                    title.seasons.iter().position(|season| {
-                        season
-                            .episodes
-                            .iter()
-                            .any(|episode| episode.node.link_id == next.node.link_id)
-                    })
-                })
-                .unwrap_or(0);
-            let mut picked = ui
-                .data(|data| data.get_temp::<usize>(picked_id))
-                .unwrap_or(default)
-                .min(title.seasons.len().saturating_sub(1));
 
             let Some(season) = title.seasons.get(picked) else {
                 return;
@@ -432,6 +451,7 @@ fn header(
     ui: &mut egui::Ui,
     art: &mut Art<'_>,
     title: &Title,
+    season: Option<&SeasonArt>,
     on_list: bool,
     offline: &OfflineView<'_>,
     actions: &mut Vec<Action>,
@@ -439,12 +459,23 @@ fn header(
     // Cloned out of the borrow: `art` is held mutably for the card below, and
     // the description is drawn beside it.
     let record = art.metadata.get(&title.key);
-    let found = record.and_then(|record| record.metadata.clone());
+    let mut found = record.and_then(|record| record.metadata.clone());
     let by_hand = record.is_some_and(|record| record.manual);
+    // The picked season's synopsis, where it has one of its own: season one's
+    // says nothing of what happens in season three.
+    if let (Some(found), Some(overview)) = (
+        found.as_mut(),
+        season.and_then(|season| season.overview.clone()),
+    ) {
+        found.overview = Some(overview);
+    }
     // The cover beside the text, and the widest, largest picture there is
     // behind all of it — two textures, because the band is drawn across the
     // whole window and a tile-sized one stretched that far is soft.
-    let picture = art.poster(title);
+    let picture = match season {
+        Some(season) => art.season_poster(title, season),
+        None => art.poster(title),
+    };
     let wide = art.wide(title);
 
     // Reserved before the header is laid out, because the band is as tall as
@@ -507,6 +538,13 @@ fn header(
                     "also known as {other}{}",
                     if by_hand { " (chosen by hand)" } else { "" }
                 )));
+            }
+            if let Some(name) = season.and_then(|season| season.name.as_deref()) {
+                let year = season
+                    .and_then(|season| season.year)
+                    .map(|year| format!("  ·  {year}"))
+                    .unwrap_or_default();
+                ui.label(ui::muted(format!("{name}{year}")));
             }
             ui.add_space(theme::space::XS);
             ui.label(ui::facts(&meta_line(title, found.as_ref())));

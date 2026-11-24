@@ -196,6 +196,11 @@ pub struct TitleDetails {
     /// it is enrichment's answer rather than the match's.
     #[serde(skip)]
     pub chain: Vec<String>,
+    /// The art of each season that is a provider entry of its own, by the
+    /// library's season number. Enrichment's answer, stored apart like
+    /// [`TitleDetails::chain`].
+    #[serde(skip)]
+    pub seasons: Vec<SeasonArt>,
 }
 
 /// One character, and who voices them.
@@ -253,6 +258,14 @@ impl TitleDetails {
     /// or a later one.
     pub fn is_current(&self) -> bool {
         self.revision >= Self::REVISION
+    }
+
+    /// The art of the library's season `number`, where that season is a
+    /// provider entry of its own. `None` for a title that is one entry, and
+    /// for a season with no number.
+    pub fn season(&self, number: Option<u32>) -> Option<&SeasonArt> {
+        let number = number?;
+        self.seasons.iter().find(|art| art.season == number)
     }
 
     /// `TV` → `TV`, `MOVIE` → `Film`, `TV_SHORT` → `TV short`.
@@ -449,6 +462,28 @@ pub struct Enrichment {
     /// provider files seasons as entries of their own. `None` leaves the
     /// match's.
     pub airing: Option<Airing>,
+    /// The library's seasons that a provider entry of their own answers, with
+    /// that entry's poster, name and synopsis. See [`TitleDetails::seasons`].
+    pub seasons: Vec<SeasonArt>,
+}
+
+/// What one season of a title looks like, where the provider files it as an
+/// entry of its own: AniList's *The Apothecary Diaries Season 3* has its own
+/// cover and synopsis, which the title, matched to season one, does not show.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeasonArt {
+    /// The season as the library numbers it — [`crate::library::Season::number`].
+    pub season: u32,
+    /// The provider's id for the entry.
+    pub remote_id: String,
+    /// The entry's own name: `The Apothecary Diaries Season 3`.
+    pub name: Option<String>,
+    pub poster_url: Option<String>,
+    /// As [`TitleDetails::banner_url`]: a wide strip, never a 16:9 tile.
+    pub banner_url: Option<String>,
+    pub overview: Option<String>,
+    pub year: Option<u32>,
 }
 
 /// The airing fields of [`TitleDetails`], taken from one provider entry.

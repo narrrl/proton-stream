@@ -118,6 +118,26 @@ impl Art<'_> {
         self.of(title)
     }
 
+    /// The cover of one season that is a provider entry of its own; the
+    /// title's [`Art::poster`] until it has loaded, or when it has none.
+    pub fn season_poster(
+        &mut self,
+        title: &Title,
+        season: &pstr_core::metadata::SeasonArt,
+    ) -> Option<(egui::TextureHandle, ArtShape)> {
+        if let Some(url) = season.poster_url.clone() {
+            let key = format!("{}#{}", poster_key(&title.key), season.season);
+            let engine = self.engine;
+            if let Some(texture) = self
+                .posters
+                .texture(&key, || engine.request_poster(key.clone(), url))
+            {
+                return Some((texture, ArtShape::Portrait));
+            }
+        }
+        self.poster(title)
+    }
+
     /// Art for a strip across the whole window, at full size: fanart, else
     /// AniList's banner, else the poster blurred into a wash of its colours —
     /// see [`crate::engine::Engine::request_ambient`] — else whatever

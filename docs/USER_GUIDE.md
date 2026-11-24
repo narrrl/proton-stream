@@ -113,7 +113,11 @@ top.
   seasons lists them in a drop-down instead of a row of buttons.
 - With posters and descriptions on, a chip under the name says where the show stands: **Airing**
   with the day the next episode comes out, **Finished**, **Upcoming**, **On hiatus** or
-  **Cancelled**.
+  **Cancelled**. For an anime whose seasons AniList lists separately, this is the latest season
+  in your library, not the first.
+- Keep each season in its own folder (`Season 2`, `2nd Season`, `S03`) and the app still shows
+  one title. When AniList lists a season as an entry of its own, picking that season shows its
+  own poster, name and description.
 - Each episode shows a tick when you have watched it, at the end of its row and in the corner of
   its picture. Right-click an episode and choose **Mark
   watched up to here** to tick it and every episode before it.
