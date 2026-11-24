@@ -179,6 +179,42 @@ jobs:
           cargo install cargo-ndk --version 4.1.2 --locked
           cargo install uniffi --version 0.32.0 --features cli --locked
 
+      # Robolectric's Android runtime, kept in a cache of its own and fetched
+      # with curl's backoff when it is missing: Maven Central answers bursts of
+      # CI downloads of this 150 MB jar with 429, which failed every
+      # Robolectric test. The version is the one libs.versions.toml pins.
+      - name: Robolectric runtime version
+        id: robolectric-version
+        run: |
+          version="$(sed -n 's/^robolectric-android-all = .*version = "\([^"]*\)".*/\1/p' android/gradle/libs.versions.toml)"
+          [[ -n "$version" ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "PSTR_ROBOLECTRIC_DIR=$RUNNER_TEMP/robolectric" >> "$GITHUB_ENV"
+
+      - id: robolectric
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/robolectric
+          key: robolectric-${{ steps.robolectric-version.outputs.version }}
+
+      - name: Fetch the Robolectric runtime
+        if: steps.robolectric.outputs.cache-hit != 'true'
+        env:
+          VERSION: ${{ steps.robolectric-version.outputs.version }}
+        run: |
+          mkdir -p "$PSTR_ROBOLECTRIC_DIR"
+          jar="android-all-instrumented-$VERSION.jar"
+          base="https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VERSION"
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 20 -o "$PSTR_ROBOLECTRIC_DIR/$jar" "$base/$jar"
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 20 -o "$RUNNER_TEMP/$jar.sha1" "$base/$jar.sha1"
+          echo "$(cut -c1-40 "$RUNNER_TEMP/$jar.sha1")  $PSTR_ROBOLECTRIC_DIR/$jar" | sha1sum -c -
+
+      - if: steps.robolectric.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/robolectric
+          key: ${{ steps.robolectric.outputs.cache-primary-key }}
+
       - name: Android checks and artifacts
         run: bash scripts/build-android.sh all
 
