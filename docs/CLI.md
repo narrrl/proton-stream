@@ -53,7 +53,7 @@ password or key as an argument; it asks for them.
 
 | Command | Does |
 |---|---|
-| `pstr crawl [--share ID]` | Read every share, or one, into the library |
+| `pstr crawl [--share ID] [--timings]` | Read every share, or one, into the library. `--timings` says where the time went: listing, parsing, storing |
 | `pstr list [--share ID]` | Print what the library holds |
 
 ### Posters and descriptions

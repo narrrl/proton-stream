@@ -462,6 +462,9 @@ pub struct Engine {
     desktop_file: Arc<DesktopPrefsFile>,
     /// Bumped to stop the crawls in flight; each watches it from its start.
     crawl_cancel: Arc<tokio::sync::watch::Sender<u64>>,
+    /// When a crawl last re-read the library, so shares finishing together
+    /// rebuild it once, not once each. See [`Engine::load_library_after_crawl`].
+    library_reloaded: Arc<Mutex<Option<std::time::Instant>>>,
     /// Crawls in progress. The change watch waits for zero rather than start a
     /// second crawl of a share one is already listing.
     crawls_running: Arc<std::sync::atomic::AtomicUsize>,
@@ -620,6 +623,7 @@ impl Engine {
             download_permits: Arc::new(tokio::sync::Semaphore::new(DOWNLOAD_CONCURRENCY)),
             picture_shown: Arc::new(AtomicBool::new(false)),
             crawl_cancel: Arc::new(tokio::sync::watch::channel(0).0),
+            library_reloaded: Arc::default(),
             crawls_running: Arc::default(),
             accounts: AccountStore::new(pstr_core::keyring_secrets()),
             account: Arc::new(Mutex::new(None)),
@@ -1616,6 +1620,8 @@ impl Engine {
                 .map(|share_id| self.crawl_share(&library, share_id, cancel.clone(), quiet)),
         )
         .await;
+        // The last word: whatever the throttle held back is in this one.
+        self.load_library();
         self.emit(Event::CrawlFinished);
         self.match_after_crawl().await;
     }
@@ -1686,9 +1692,17 @@ impl Engine {
         // Only the listing can be stopped. Past it the crawl is replacing the
         // share's rows and its stale downloads, and stopping halfway through
         // that would leave the two disagreeing.
+        // What the catalog has already, so only new and changed files are
+        // opened in full. Unreadable is no reason not to crawl: it costs a
+        // full walk, as a first crawl does.
+        let known = self
+            .catalog
+            .lock()
+            .known_files(&share_id)
+            .unwrap_or_default();
         let nodes = tokio::select! {
             result = library.reauthenticating(&share_id, || {
-                library.crawl_reporting(&share_id, &report)
+                library.crawl_known(&share_id, &known, &report)
             }) => match result {
                 Ok(nodes) => nodes,
                 Err(error) => {
@@ -1713,8 +1727,27 @@ impl Engine {
                 return;
             }
         };
-        let rows = build_rows(&share_id, &nodes);
-        let sidecars = build_sidecars(&share_id, &nodes);
+        // Off the async workers: parsing every name of a large share is
+        // CPU work, and the other shares' listings share these threads.
+        let node_count = nodes.len();
+        let built = {
+            let share_id = share_id.clone();
+            self.runtime
+                .spawn_blocking(move || {
+                    (
+                        build_rows(&share_id, &nodes),
+                        build_sidecars(&share_id, &nodes),
+                    )
+                })
+                .await
+        };
+        let Ok((rows, sidecars)) = built else {
+            self.fail(
+                &format!("read {name}"),
+                "the crawl's rows could not be built",
+            );
+            return;
+        };
         let files = rows.len();
 
         // A writer opened before the crawl may be producing the revision
@@ -1768,20 +1801,36 @@ impl Engine {
             return;
         }
 
+        // SQLite blocks; on a blocking thread it holds up no other share's
+        // listing while it writes this one.
+        let stale_links: Vec<String> = stale.into_iter().map(|(link_id, _)| link_id).collect();
         let stored = {
-            let mut catalog = self.catalog.lock();
-            catalog
-                .replace_share_retaining_offline(&share_id, &rows)
-                .and_then(|()| {
-                    for (link_id, _) in &stale {
-                        catalog.remove_offline_file(&share_id, link_id)?;
-                    }
-                    catalog.replace_sidecars(&share_id, &sidecars)
+            let catalog = Arc::clone(&self.catalog);
+            let share_id = share_id.clone();
+            self.runtime
+                .spawn_blocking(move || {
+                    let mut catalog = catalog.lock();
+                    catalog
+                        .replace_share_retaining_offline(&share_id, &rows)
+                        .and_then(|()| {
+                            for link_id in &stale_links {
+                                catalog.remove_offline_file(&share_id, link_id)?;
+                            }
+                            catalog.replace_sidecars(&share_id, &sidecars)
+                        })
                 })
+                .await
         };
-        if let Err(error) = stored {
-            self.fail(&format!("store {share_id}"), error);
-            return;
+        match stored {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                self.fail(&format!("store {share_id}"), error);
+                return;
+            }
+            Err(error) => {
+                self.fail(&format!("store {share_id}"), error);
+                return;
+            }
         }
 
         let added = self
@@ -1793,13 +1842,29 @@ impl Engine {
             .unwrap_or(0);
         self.emit(Event::Crawled {
             share_id,
-            nodes: nodes.len(),
+            nodes: node_count,
             files,
             added,
             seconds: started.elapsed().as_secs_f64(),
             quiet,
         });
         self.load_crawls();
+        self.load_library_after_crawl();
+    }
+
+    /// [`Self::load_library`] for a share that finished crawling, at most
+    /// every couple of seconds. The first share to finish shows at once; a
+    /// dozen finishing together do not rebuild the library a dozen times —
+    /// the crawl as a whole reloads once more at its end.
+    fn load_library_after_crawl(&self) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+        {
+            let mut last = self.library_reloaded.lock();
+            if last.is_some_and(|at| at.elapsed() < EVERY) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
         self.load_library();
     }
 

@@ -498,18 +498,56 @@ impl Catalog {
         retain_offline: bool,
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM nodes WHERE share_id = ?1", params![share_id])?;
 
+        // A diff, not a delete-all and re-insert: a recrawl mostly finds what
+        // the last one did, and a row that has not changed then costs a lookup
+        // instead of a delete, an insert and three index updates — the
+        // difference between rewriting the share in the WAL and writing what
+        // moved.
+        // Created and dropped inside the transaction, so a failed crawl
+        // rolls it back with everything else.
+        tx.execute(
+            "CREATE TEMP TABLE crawl_seen (link_id TEXT PRIMARY KEY)",
+            [],
+        )?;
         {
-            let mut insert = tx.prepare(
+            let mut upsert = tx.prepare(
                 "INSERT INTO nodes (
                      share_id, link_id, volume_id, parent_link_id, name, is_folder,
                      media_type, size, active_revision_id, title, season, episode, year,
                      episode_title
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 ON CONFLICT (share_id, link_id) DO UPDATE SET
+                     volume_id          = excluded.volume_id,
+                     parent_link_id     = excluded.parent_link_id,
+                     name               = excluded.name,
+                     is_folder          = excluded.is_folder,
+                     media_type         = excluded.media_type,
+                     size               = excluded.size,
+                     active_revision_id = excluded.active_revision_id,
+                     title              = excluded.title,
+                     season             = excluded.season,
+                     episode            = excluded.episode,
+                     year               = excluded.year,
+                     episode_title      = excluded.episode_title
+                 WHERE volume_id          IS NOT excluded.volume_id
+                    OR parent_link_id     IS NOT excluded.parent_link_id
+                    OR name               IS NOT excluded.name
+                    OR is_folder          IS NOT excluded.is_folder
+                    OR media_type         IS NOT excluded.media_type
+                    OR size               IS NOT excluded.size
+                    OR active_revision_id IS NOT excluded.active_revision_id
+                    OR title              IS NOT excluded.title
+                    OR season             IS NOT excluded.season
+                    OR episode            IS NOT excluded.episode
+                    OR year               IS NOT excluded.year
+                    OR episode_title      IS NOT excluded.episode_title",
             )?;
+            let mut seen =
+                tx.prepare("INSERT OR IGNORE INTO temp.crawl_seen (link_id) VALUES (?1)")?;
             for node in nodes {
-                insert.execute(params![
+                seen.execute(params![node.link_id])?;
+                upsert.execute(params![
                     node.share_id,
                     node.link_id,
                     node.volume_id,
@@ -527,6 +565,12 @@ impl Catalog {
                 ])?;
             }
         }
+        tx.execute(
+            "DELETE FROM nodes WHERE share_id = ?1
+                 AND link_id NOT IN (SELECT link_id FROM temp.crawl_seen)",
+            params![share_id],
+        )?;
+        tx.execute("DROP TABLE temp.crawl_seen", [])?;
 
         // Only files: a folder appearing is not something anyone watches.
         let now = unix_now();
@@ -554,6 +598,25 @@ impl Catalog {
 
         tx.commit()?;
         Ok(())
+    }
+
+    /// What this catalog holds for `share_id`'s files: by link id, the
+    /// active revision each row was built from and its recorded size. A
+    /// recrawl hands this to `SharedLibrary::crawl_known`, which then opens
+    /// only the files that are new or changed.
+    pub fn known_files(&self, share_id: &str) -> Result<crate::shares::KnownFiles> {
+        let mut select = self.conn.prepare(
+            "SELECT link_id, active_revision_id, size FROM nodes
+             WHERE share_id = ?1 AND is_folder = 0
+               AND active_revision_id IS NOT NULL AND size IS NOT NULL",
+        )?;
+        let rows = select.query_map(params![share_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, String>(1)?, row.get::<_, i64>(2)?),
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Replace one share's subtitle files with `sidecars`.
@@ -2981,6 +3044,62 @@ mod tests {
         let read = catalog.files("s1").expect("read");
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].link_id, "a");
+    }
+
+    /// A recrawl writes only what moved: an unchanged row is left alone, and
+    /// a renamed file is updated in place.
+    #[test]
+    fn a_recrawl_rewrites_only_the_rows_that_changed() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let nodes: Vec<_> = (0..50)
+            .map(|index| {
+                file(
+                    "s1",
+                    &format!("l{index}"),
+                    &format!("One.S01E{index:02}.mkv"),
+                )
+            })
+            .collect();
+        catalog.replace_share("s1", &nodes).expect("first crawl");
+
+        let mut renamed = nodes.clone();
+        renamed[3] = file("s1", "l3", "One.S01E03.Renamed.mkv");
+        let before = catalog.writes();
+        catalog.replace_share("s1", &renamed).expect("second crawl");
+        let written = catalog.writes() - before;
+        // The renamed row and the crawl record, plus the scratch table's
+        // fifty marks — not fifty deletes and fifty inserts.
+        assert!(written < 60, "wrote {written} rows for one change");
+
+        let read = catalog.files("s1").expect("read");
+        assert_eq!(read.len(), 50);
+        assert!(
+            read.iter()
+                .any(|node| node.name == "One.S01E03.Renamed.mkv")
+        );
+    }
+
+    /// What a recrawl can skip opening: files with a revision and a size,
+    /// of this share only. A folder, or a file with no size recorded, is not
+    /// known and gets opened again.
+    #[test]
+    fn known_files_are_this_shares_files_with_a_revision_and_a_size() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let mut sized = file("s1", "a", "One.S01E01.mkv");
+        sized.active_revision_id = Some("r1".into());
+        sized.size = Some(1234);
+        let mut no_size = file("s1", "b", "One.S01E02.mkv");
+        no_size.active_revision_id = Some("r2".into());
+        no_size.size = None;
+        catalog.replace_share("s1", &[sized, no_size]).expect("s1");
+        let mut other = file("s2", "c", "Two.S01E01.mkv");
+        other.active_revision_id = Some("r3".into());
+        other.size = Some(5);
+        catalog.replace_share("s2", &[other]).expect("s2");
+
+        let known = catalog.known_files("s1").expect("known");
+        assert_eq!(known.len(), 1);
+        assert_eq!(known.get("a"), Some(&("r1".to_owned(), 1234)));
     }
 
     /// One share's crawl must not touch another's rows.
