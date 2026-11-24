@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -1066,6 +1066,11 @@ pub struct AndroidStream {
     cancel: tokio::sync::Notify,
     /// The registry id this stream was published under, once it has been.
     native_id: Mutex<Option<u64>>,
+    /// How many of libmpv's streams have it open. mpv opens one file twice
+    /// when it checks an ordered-chapters episode for a second segment, and
+    /// closes that one at once: the release it makes must not take the
+    /// stream the episode is still playing from.
+    opens: AtomicUsize,
 }
 
 #[uniffi::export]
@@ -1182,12 +1187,64 @@ pub extern "C" fn pstr_android_stream_cancel(handle: u64) {
     });
 }
 
+/// libmpv opened the stream: its size, or `-1` for a handle that is not
+/// published. Counted, so that [`pstr_android_stream_release`] from the close
+/// of one open does not end another.
+#[unsafe(no_mangle)]
+pub extern "C" fn pstr_android_stream_open(handle: u64) -> i64 {
+    std::panic::catch_unwind(|| {
+        native_streams()
+            .lock()
+            .get(&handle)
+            .and_then(|stream| {
+                stream.opens.fetch_add(1, Ordering::AcqRel);
+                i64::try_from(stream.stream.size()).ok()
+            })
+            .unwrap_or(-1)
+    })
+    .unwrap_or(-1)
+}
+
+/// libmpv closed the stream, or the app is handing back one it never gave
+/// libmpv. Unpublished once nothing has it open.
 #[unsafe(no_mangle)]
 pub extern "C" fn pstr_android_stream_release(handle: u64) {
     let _ = std::panic::catch_unwind(|| {
         // Destructors may transitively release the runtime. Never run them
         // while the global registry mutex is held.
-        let stream = native_streams().lock().remove(&handle);
+        let stream = {
+            let mut streams = native_streams().lock();
+            // Under the registry lock, as every change to `opens` is.
+            let last = streams.get(&handle).is_some_and(|stream| {
+                let before = stream.opens.load(Ordering::Acquire);
+                stream
+                    .opens
+                    .store(before.saturating_sub(1), Ordering::Release);
+                before <= 1
+            });
+            if last { streams.remove(&handle) } else { None }
+        };
+        drop(stream);
+    });
+}
+
+/// Hand back a stream libmpv was offered but has not opened — an
+/// ordered-chapters part of a file that was replaced before mpv looked for
+/// it. One it has open is left to its close.
+#[unsafe(no_mangle)]
+pub extern "C" fn pstr_android_stream_release_unopened(handle: u64) {
+    let _ = std::panic::catch_unwind(|| {
+        let stream = {
+            let mut streams = native_streams().lock();
+            let unopened = streams
+                .get(&handle)
+                .is_some_and(|stream| stream.opens.load(Ordering::Acquire) == 0);
+            if unopened {
+                streams.remove(&handle)
+            } else {
+                None
+            }
+        };
         drop(stream);
     });
 }
@@ -2535,6 +2592,7 @@ impl AndroidEngine {
                 stream,
                 cancel: tokio::sync::Notify::new(),
                 native_id: Mutex::new(None),
+                opens: AtomicUsize::new(0),
             }))
         })
         .await
@@ -2600,6 +2658,7 @@ impl AndroidEngine {
                         stream,
                         cancel: tokio::sync::Notify::new(),
                         native_id: Mutex::new(None),
+                        opens: AtomicUsize::new(0),
                     })
                     .native_handle();
                     SubtitleFileRecord {
@@ -2615,6 +2674,66 @@ impl AndroidEngine {
         opened.unwrap_or_else(|error| {
             log::debug!("opening subtitles stopped: {error}");
             SubtitleFilesRecord::default()
+        })
+    }
+
+    /// The files an ordered-chapters episode takes its opening and ending
+    /// from, opened and published for the native player, which hands them to
+    /// mpv as `ordered-chapters-files` before it loads `episode`. Empty for the
+    /// usual file. See `pstr_stream::ordered`.
+    ///
+    /// The player releases a handle when mpv closes it; one mpv never opened
+    /// goes back through `pstr_android_stream_release_unopened`.
+    pub async fn open_ordered_parts(
+        self: Arc<Self>,
+        share_id: String,
+        link_id: String,
+        episode: Arc<AndroidStream>,
+    ) -> Vec<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let opened = spawned(&runtime, async move {
+            let candidates = self
+                .catalog
+                .lock()
+                .ordered_part_candidates(&share_id, &link_id)
+                .unwrap_or_default();
+            if candidates.is_empty() {
+                return Vec::new();
+            }
+            let Some(connection) = self.cached_connection() else {
+                return Vec::new();
+            };
+            let (engine, connection) = (&self, &connection);
+            let parts = pstr_stream::ordered::find_parts(
+                &episode.stream,
+                candidates,
+                |node| node.active_revision_id.clone(),
+                |node| async move {
+                    let uid = node_uid(&node.volume_id, &node.link_id);
+                    engine
+                        .open_from_source(connection, &node.share_id, &uid)
+                        .await
+                },
+            )
+            .await;
+            parts
+                .into_iter()
+                .map(|stream| {
+                    Arc::new(AndroidStream {
+                        runtime: Arc::clone(&self.runtime),
+                        stream,
+                        cancel: tokio::sync::Notify::new(),
+                        native_id: Mutex::new(None),
+                        opens: AtomicUsize::new(0),
+                    })
+                    .native_handle()
+                })
+                .collect()
+        })
+        .await;
+        opened.unwrap_or_else(|error| {
+            log::debug!("opening ordered-chapters parts stopped: {error}");
+            Vec::new()
         })
     }
 
@@ -4271,7 +4390,7 @@ fn episode_record(
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use parking_lot::Mutex;
     use pstr_core::library::TitleKind;
@@ -4282,7 +4401,8 @@ mod tests {
         AccentChoice, AndroidEngine, AndroidPaths, AndroidSecretStore, AndroidStream,
         AppearanceRecord, BridgeError, ChapterKind, ChapterRecord, FlavorChoice, PartialMarker,
         chapter_plan, match_record, news_since, node_uid, normalized_language, palette_record,
-        prepare_partial_file, pstr_android_stream_read, pstr_android_stream_release,
+        prepare_partial_file, pstr_android_stream_open, pstr_android_stream_read,
+        pstr_android_stream_release, pstr_android_stream_release_unopened,
         pstr_android_stream_size, read_partial_marker, resume_position, skip_offer, title_metadata,
         write_partial_marker,
     };
@@ -4671,6 +4791,7 @@ mod tests {
             stream: VideoStream::offline(node_uid("volume", "link"), blocks, 1024),
             cancel: tokio::sync::Notify::new(),
             native_id: Mutex::new(None),
+            opens: AtomicUsize::new(0),
         });
         let handle = stream.native_handle();
 
@@ -4684,6 +4805,51 @@ mod tests {
 
         pstr_android_stream_release(handle);
         assert_eq!(pstr_android_stream_size(handle), -1);
+    }
+
+    fn memory_stream(content: &[u8]) -> u64 {
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("runtime"),
+        );
+        let blocks = Arc::new(MemoryBlocks::new("revision", vec![content.to_vec()]));
+        Arc::new(AndroidStream {
+            runtime,
+            stream: VideoStream::offline(node_uid("volume", "link"), blocks, 1024),
+            cancel: tokio::sync::Notify::new(),
+            native_id: Mutex::new(None),
+            opens: AtomicUsize::new(0),
+        })
+        .native_handle()
+    }
+
+    /// mpv opens an ordered-chapters episode a second time to look for a
+    /// second segment, and closes that one at once. Its close used to
+    /// unpublish the stream the episode was still playing from.
+    #[test]
+    fn a_second_open_closing_leaves_the_first_one_reading() {
+        let handle = memory_stream(b"episode");
+        assert_eq!(pstr_android_stream_open(handle), 7);
+        assert_eq!(pstr_android_stream_open(handle), 7);
+        pstr_android_stream_release(handle);
+        assert_eq!(pstr_android_stream_size(handle), 7);
+        pstr_android_stream_release(handle);
+        assert_eq!(pstr_android_stream_size(handle), -1);
+    }
+
+    #[test]
+    fn only_a_part_mpv_never_opened_is_handed_back_unopened() {
+        let opened = memory_stream(b"opening");
+        let unopened = memory_stream(b"ending");
+        assert_eq!(pstr_android_stream_open(opened), 7);
+        pstr_android_stream_release_unopened(opened);
+        pstr_android_stream_release_unopened(unopened);
+        assert_eq!(pstr_android_stream_size(opened), 7);
+        assert_eq!(pstr_android_stream_size(unopened), -1);
+        pstr_android_stream_release(opened);
+        assert_eq!(pstr_android_stream_size(opened), -1);
     }
 
     /// The arrangement folds a franchise into its series, and the name

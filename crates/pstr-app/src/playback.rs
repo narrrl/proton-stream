@@ -624,6 +624,15 @@ fn run(
     orders: std::sync::mpsc::Receiver<Command>,
     finished: Arc<AtomicBool>,
 ) {
+    // Before the file loads: mpv looks for an ordered-chapters episode's
+    // opening and ending while it opens it. Kept for as long as it plays.
+    let parts = engine
+        .runtime()
+        .block_on(engine.open_ordered_parts(&target, &stream));
+    let _parts = player.set_ordered_parts(parts).unwrap_or_else(|error| {
+        tracing::warn!(%error, "could not hand mpv the ordered-chapters parts");
+        Vec::new()
+    });
     let opened = match target.resume_at {
         Some(at) => player.play_from(stream, at),
         None => player.play(stream),

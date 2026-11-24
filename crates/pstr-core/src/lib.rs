@@ -17,6 +17,7 @@ pub mod franchise;
 pub mod handoff;
 pub mod language;
 pub mod library;
+pub mod matroska;
 pub mod metadata;
 pub mod mylist;
 pub mod naming;

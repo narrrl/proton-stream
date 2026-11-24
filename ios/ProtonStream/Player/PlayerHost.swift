@@ -28,6 +28,7 @@ private final class StreamSession {
     let episode: EpisodeRecord
     private(set) var handle: UInt64?
     private(set) var size: UInt64 = 0
+    private var stream: AndroidStream?
 
     init(episode: EpisodeRecord) {
         self.episode = episode
@@ -37,11 +38,21 @@ private final class StreamSession {
         let stream = try await NativeRuntime.engine().openStream(shareId: episode.shareId, volumeId: episode.volumeId, linkId: episode.linkId)
         size = stream.size()
         handle = stream.nativeHandle()
+        self.stream = stream
+    }
+
+    /// The files this episode takes its ordered chapters from, published for
+    /// the player: an opening and an ending kept once beside every episode.
+    /// Empty for the usual file. The player owns them once given to a load.
+    func openOrderedParts() async -> [UInt64] {
+        guard let stream, let engine = try? await NativeRuntime.engine() else { return [] }
+        return await engine.openOrderedParts(shareId: episode.shareId, linkId: episode.linkId, episode: stream)
     }
 
     /// The player now owns the published handle until stop, end or close.
     func transferToPlayer() {
         handle = nil
+        stream = nil
     }
 
     /// Give the episode's stream back to Rust, from a task of its own: the one
@@ -274,6 +285,7 @@ final class PlayerHost {
         loadTask = Task {
             do {
                 try await session.open()
+                let parts = await session.openOrderedParts()
                 let startup = try await Task.detached {
                     let engine = try NativeRuntime.blockingEngine()
                     // A choice made on this title wins; without one, the choice
@@ -285,6 +297,7 @@ final class PlayerHost {
                     return (show, global, watch)
                 }.value
                 if Task.isCancelled || self.session !== session {
+                    parts.forEach { pstr_android_stream_release($0) }
                     abandon(session)
                     return
                 }
@@ -302,7 +315,8 @@ final class PlayerHost {
                     audio: show?.audioLanguage ?? global.audioLanguage,
                     subtitle: show?.subtitleLanguage ?? global.subtitleLanguage,
                     subtitles: show?.subtitles ?? global.subtitles,
-                    hardwareDecoding: SettingsStore().hardwareDecoding
+                    hardwareDecoding: SettingsStore().hardwareDecoding,
+                    orderedParts: parts
                 )
                 guard loaded else { throw PlaybackFailure("libmpv rejected the stream") }
                 // mpv's own buffering takes over the spinner from here.

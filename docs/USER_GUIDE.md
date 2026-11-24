@@ -147,6 +147,10 @@ The picture plays inside the app's window. Move the mouse to show the controls.
   or a preview. For an anime whose file marks neither, the app asks AniSkip where they are, with
   **Posters and descriptions** on; they then show as chapters too. Turn on **Skip openings and
   credits** in Settings to skip them without asking.
+- Some releases keep the opening and ending once, in files of their own named like `OP`, `ED2`
+  or `NCOP1`, and have every episode play them from there ("ordered chapters"). Keep those files
+  in the same folder as the episodes: the app finds the ones an episode uses and plays them in
+  place. They do not show up as episodes of their own.
 - **Up next** counts down 10 seconds when the credits start, then plays the next episode. Choose
   **Play now**, **Cancel** or **Watch till the end**.
 - **Subtitles and audio**, **Speed**, **Chapters** and **Sleep timer** are buttons at the bottom

@@ -10,6 +10,7 @@
 //! from the revision.
 #![forbid(unsafe_code)]
 
+pub mod ordered;
 pub mod reader;
 
 pub use proton_media_rs::stream::{

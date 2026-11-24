@@ -271,6 +271,7 @@ fun PlayerScreen(
                 Startup(
                     nativeHandle = session.nativeHandle(),
                     size = session.size(),
+                    orderedParts = session.openOrderedParts(),
                     // A finished episode restarts rather than resuming three
                     // seconds from its own credits.
                     startPosition = retryFrom ?: watch?.takeUnless { it.watched }?.positionSecs ?: 0.0,
@@ -285,7 +286,7 @@ fun PlayerScreen(
             nativeHost.play(
                 key, startup.nativeHandle, startup.size, startup.startPosition,
                 startup.audioLanguage, startup.subtitleLanguage, startup.subtitles,
-                SettingsStore(context).hardwareDecoding,
+                SettingsStore(context).hardwareDecoding, startup.orderedParts,
             )
 
             // After the load, because mpv keeps none of the three across one.
@@ -950,6 +951,7 @@ private const val STALL_LIMIT_MS = 20_000L
 private data class Startup(
     val nativeHandle: ULong,
     val size: ULong,
+    val orderedParts: List<ULong>,
     val startPosition: Double,
     val audioLanguage: String?,
     val subtitleLanguage: String?,

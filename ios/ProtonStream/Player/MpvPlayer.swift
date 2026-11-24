@@ -111,6 +111,9 @@ final class MpvPlayer {
     /// Subtitle files handed over before their file loaded, and whether each
     /// is the one to turn on.
     @ObservationIgnored private var pendingSubtitles: [(SubtitleFileRecord, Bool)] = []
+    /// The ordered-chapters parts offered with the last load. The ones mpv
+    /// opened are released by their close; the rest by the next load.
+    @ObservationIgnored private var orderedParts: [UInt64] = []
     /// The drawable size mpv last built its output for; see `outputResized`.
     @ObservationIgnored private var outputSize: CGSize = .zero
     /// Off while the app is in the background, where a refit must not bring
@@ -209,8 +212,13 @@ final class MpvPlayer {
         audio: String?,
         subtitle: String?,
         subtitles: Bool,
-        hardwareDecoding: Bool
+        hardwareDecoding: Bool,
+        orderedParts parts: [UInt64] = []
     ) -> Bool {
+        // The last file's parts mpv never asked for. Taken over here whether
+        // or not this load is issued, so they are released exactly once.
+        orderedParts.forEach { pstr_android_stream_release_unopened($0) }
+        orderedParts = parts
         guard let mpv else { return false }
         // Retire the outgoing file's readings *before* the new one loads: mpv
         // only republishes them once it has demuxed enough of the stream, and
@@ -248,6 +256,10 @@ final class MpvPlayer {
             ("alang", audio ?? ""),
             ("slang", subtitle ?? ""),
             ("sid", subtitles ? "auto" : "no"),
+            // Where an ordered-chapters episode's opening and ending are: mpv
+            // looks for them while it opens the file, and without this
+            // searches a directory a stream does not have.
+            ("ordered-chapters-files", parts.isEmpty ? "" : "memory://" + parts.map { "pstr://\($0)" }.joined(separator: "\n")),
         ]
         let issued: Int32 = coreQueue.sync {
             for (name, value) in options { mpv_set_property_string(core.pointer, name, value) }

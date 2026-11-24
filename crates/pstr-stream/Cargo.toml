@@ -14,3 +14,5 @@ proton-sdk.workspace = true
 proton-drive-rs.workspace = true
 proton-media-rs = { workspace = true, features = ["drive"] }
 async-trait.workspace = true
+futures.workspace = true
+tracing.workspace = true

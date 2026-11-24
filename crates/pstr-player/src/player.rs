@@ -353,6 +353,26 @@ impl Player {
         Ok(handle)
     }
 
+    /// Publish the files the next episode takes its ordered chapters from, and
+    /// point mpv at them — see `pstr_stream::ordered`. Before [`Self::play`]:
+    /// mpv looks for them while it opens the file. An empty list puts mpv back
+    /// to its own search, which on a stream finds nothing.
+    ///
+    /// The handles keep them readable, like [`Self::play`]'s, for as long as
+    /// the episode plays.
+    pub fn set_ordered_parts(&self, parts: Vec<VideoStream>) -> Result<Vec<StreamHandle>> {
+        let handles: Vec<StreamHandle> = parts
+            .into_iter()
+            .map(|part| self.registry.publish(part))
+            .collect();
+        let urls: Vec<String> = handles.iter().map(StreamHandle::url).collect();
+        self.mpv.set_property(
+            "ordered-chapters-files",
+            pstr_stream::ordered::chapters_files_option(&urls),
+        )?;
+        Ok(handles)
+    }
+
     /// Add a subtitle file to the one playing, read through the same
     /// registry as the video, so mpv never learns where either came from.
     ///

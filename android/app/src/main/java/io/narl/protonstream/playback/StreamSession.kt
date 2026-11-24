@@ -32,6 +32,18 @@ class RustStreamSession(
 
     fun nativeHandle(): ULong = checkNotNull(handle) { "stream is not published" }
 
+    /**
+     * The files this episode takes its ordered chapters from, published for
+     * the player: an opening and an ending kept once beside every episode.
+     * Empty for the usual file. The player owns them once handed to [LibmpvHost.play].
+     */
+    suspend fun openOrderedParts(): List<ULong> = withContext(Dispatchers.IO) {
+        val opened = stream ?: return@withContext emptyList()
+        runCatching {
+            checkNotNull(engine).openOrderedParts(episode.shareId, episode.linkId, opened)
+        }.getOrDefault(emptyList())
+    }
+
     fun size(): ULong = checkNotNull(streamSize) { "stream is not open" }
 
     fun releaseNative(host: LibmpvHost) {
@@ -93,6 +105,8 @@ interface LibmpvHost {
         subtitleLanguage: String? = null,
         subtitles: Boolean = true,
         hardwareDecoding: Boolean = true,
+        /** The episode's ordered-chapters parts, from [RustStreamSession.openOrderedParts]. */
+        orderedParts: List<ULong> = emptyList(),
     )
 
     /** Calls pstr_android_stream_release exactly once for a published handle. */

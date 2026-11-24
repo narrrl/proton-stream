@@ -5458,10 +5458,12 @@ name = "pstr-stream"
 version = "2.4.0"
 dependencies = [
  "async-trait",
+ "futures",
  "proton-drive-rs",
  "proton-media-rs",
  "proton-sdk",
  "pstr-core",
+ "tracing",
 ]
 
 [[package]]
