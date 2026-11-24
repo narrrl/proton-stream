@@ -180,9 +180,10 @@ jobs:
           cargo install uniffi --version 0.32.0 --features cli --locked
 
       # Robolectric's Android runtime, kept in a cache of its own and fetched
-      # with curl's backoff when it is missing: Maven Central answers bursts of
-      # CI downloads of this 150 MB jar with 429, which failed every
-      # Robolectric test. The version is the one libs.versions.toml pins.
+      # from Google's mirror of Maven Central, with curl's backoff, when it is
+      # missing: Central answers bursts of CI downloads of this 150 MB jar with
+      # 429, which failed every Robolectric test. The version is the one
+      # libs.versions.toml pins.
       - name: Robolectric runtime version
         id: robolectric-version
         run: |
@@ -204,7 +205,7 @@ jobs:
         run: |
           mkdir -p "$PSTR_ROBOLECTRIC_DIR"
           jar="android-all-instrumented-$VERSION.jar"
-          base="https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VERSION"
+          base="https://maven-central.storage-download.googleapis.com/maven2/org/robolectric/android-all-instrumented/$VERSION"
           curl -fsSL --retry 8 --retry-all-errors --retry-delay 20 -o "$PSTR_ROBOLECTRIC_DIR/$jar" "$base/$jar"
           curl -fsSL --retry 8 --retry-all-errors --retry-delay 20 -o "$RUNNER_TEMP/$jar.sha1" "$base/$jar.sha1"
           echo "$(cut -c1-40 "$RUNNER_TEMP/$jar.sha1")  $PSTR_ROBOLECTRIC_DIR/$jar" | sha1sum -c -
