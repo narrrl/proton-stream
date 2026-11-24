@@ -2388,6 +2388,13 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// The page colour, not eframe's near-black: the floating nav bar leaves
+    /// its outer margin unpainted so that it floats, and what shows there is
+    /// this. Asked every frame, so a palette switch follows.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::background().to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // Before the timer: this is the frame budget being spent waiting, not
         // the frame taking longer, and `FrameTimer` reports slow frames.
