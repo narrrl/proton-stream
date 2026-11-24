@@ -51,7 +51,12 @@ pub fn show(
     }
     ui.add_space(theme::space::S);
 
+    // Its own scroll position, per title. Unsalted, every page's area had the
+    // one id, so a title opened as far down as the library had been scrolled
+    // — blank for a frame when that was past its end — and the library came
+    // back at the top.
     egui::ScrollArea::vertical()
+        .id_salt(("title page", key))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             header(ui, art, title, on_list, &offline, actions);
@@ -687,55 +692,42 @@ fn band(
     // left half, where the poster, the name and the overview actually sit; the
     // right half keeps more of the still, so the band is still a picture.
     //
-    // Heavier still when there is no fade coming, since then these are the only
-    // things standing between the text and the picture.
-    //
     // Both in the page colour tinted by the picture's own, so each title's
     // page carries its light; the fade at the bottom stays the page's, since
     // that is what it ends in.
-    let ramps = theme::ramps_on();
+    // The scrims are always drawn: they are what makes the text readable, not
+    // decoration, so they do not follow the viewer's gradients switch. They
+    // are eased (`appearance::scrim`), which is what keeps the 6-bit banding
+    // that switch was for out of them.
     let veil = theme::mood_veil(mood);
     layers.push(
-        egui::epaint::RectShape::filled(
-            rect,
-            egui::CornerRadius::ZERO,
-            // Lighter with the ramps on: the horizontal one below is solid
-            // where the text is, so this coat only has to calm the picture's
-            // right side, not make it disappear.
-            veil.gamma_multiply(if ramps { 0.72 } else { 0.94 }),
-        )
-        .into(),
+        egui::epaint::RectShape::filled(rect, egui::CornerRadius::ZERO, veil.gamma_multiply(0.55))
+            .into(),
     );
-    if ramps {
-        let text_side = egui::Rect::from_min_max(
-            rect.min,
-            egui::pos2(rect.left() + rect.width() * 0.72, rect.bottom()),
-        );
-        layers.push(theme::fade_shape(
-            ui.ctx(),
-            text_side,
-            veil,
-            theme::Direction::Horizontal,
-            // Solid at the left, where the poster and the text are.
-            false,
-        ));
-    }
-
-    // A viewer with ramps off is on a panel that bands them; a 120-point ramp
-    // of one hue is exactly the case that shows it. The band then ends at its
-    // own edge, which is the honest version of the same thing.
-    if ramps {
-        let fade =
-            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 120.0), rect.max);
-        layers.push(theme::fade_shape(
-            ui.ctx(),
-            fade,
-            theme::background(),
-            theme::Direction::Vertical,
-            // Solid at the bottom, where the page it hands over to is.
-            true,
-        ));
-    }
+    let text_side = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.left() + rect.width() * 0.72, rect.bottom()),
+    );
+    layers.push(theme::fade_shape(
+        ui.ctx(),
+        text_side,
+        veil,
+        theme::Direction::Horizontal,
+        // Solid at the left, where the poster and the text are.
+        false,
+    ));
+    let fade = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.bottom() - 0.4 * rect.height()),
+        rect.max,
+    );
+    layers.push(theme::fade_shape(
+        ui.ctx(),
+        fade,
+        theme::background(),
+        theme::Direction::Vertical,
+        // Solid at the bottom, where the page it hands over to is.
+        true,
+    ));
 
     painter.set(index, egui::Shape::Vec(layers));
 }
@@ -814,8 +806,20 @@ fn description(ui: &mut egui::Ui, found: &TitleMetadata, key: &str, actions: &mu
         const LINES: usize = 4;
         let id = ui.id().with(("overview", &found.remote_id));
         let open = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+        // Folded, the paragraphs run on: a break that falls on the last line
+        // left the ellipsis alone on a row of its own under the text.
+        let text = if open {
+            overview.clone()
+        } else {
+            overview
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         let mut job = egui::text::LayoutJob::simple(
-            overview.clone(),
+            text,
             theme::Role::Label.font(),
             theme::text(),
             ui.available_width(),

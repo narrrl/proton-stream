@@ -151,11 +151,12 @@ struct Scheme: Equatable {
 
     var colorScheme: ColorScheme { light ? .light : .dark }
 
-    /// The accent, as a gradient when there is one to draw. With gradients
-    /// off, `Palette::resolve` sets `accent_alt` equal to `accent`, so this
-    /// collapses to a flat fill on its own.
+    /// The accent, as a gradient when there is one to draw: top to bottom,
+    /// into a shade of itself (`Palette::resolve`), never into a second hue.
+    /// With gradients off `accent_alt` equals `accent`, so this collapses to
+    /// a flat fill on its own.
     var accentGradient: LinearGradient {
-        LinearGradient(colors: [primary, secondary], startPoint: .leading, endPoint: .trailing)
+        LinearGradient(colors: [primary, secondary], startPoint: .top, endPoint: .bottom)
     }
 }
 
@@ -182,7 +183,7 @@ let protonFallback = PaletteRecord(
     text: 0xFFF4_F2FA,
     muted: 0xFFAA_A4BD,
     accent: 0xFF6D_4AFF,
-    accentAlt: 0xFFB6_5BD6,
+    accentAlt: 0xFF6D_4AFF,
     accentDim: 0xFF53_38C4,
     onAccent: 0xFFF4_F2FA,
     danger: 0xFFE0_5561,

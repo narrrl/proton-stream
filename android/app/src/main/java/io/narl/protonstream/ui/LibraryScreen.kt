@@ -1,5 +1,7 @@
 package io.narl.protonstream.ui
 
+import io.narl.protonstream.ui.theme.TileShape
+import io.narl.protonstream.ui.theme.verticalScrim
 import io.narl.protonstream.ui.theme.LocalBrand
 import androidx.compose.foundation.background
 import androidx.compose.animation.core.animateDpAsState
@@ -41,7 +43,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
-import androidx.compose.ui.graphics.Brush
 import io.narl.protonstream.ui.theme.AccentButton
 import io.narl.protonstream.ui.theme.TonalButton
 import androidx.compose.material3.Surface
@@ -949,20 +950,13 @@ private fun FeaturedPage(
             .clickable(onClickLabel = "Open ${title.displayName}", onClick = onOpen),
     ) {
         Backdrop(title, Modifier.fillMaxSize(), onMood = { mood = it })
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    // Dark under the status bar and the bar's white icons…
-                    0f to Color.Black.copy(alpha = 0.5f),
-                    0.22f to Color.Transparent,
-                    // …and the picture's own colour under the text, ending in
-                    // the page it hands over to.
-                    0.45f to veil.copy(alpha = 0.35f),
-                    0.78f to veil.copy(alpha = 0.92f),
-                    1f to background,
-                ),
-            ),
-        )
+        // Two eased scrims, each with one job: dark under the status bar's
+        // white icons, and the picture's own colour under the text, ending in
+        // the page it hands over to. They used to be one five-stop ramp, which
+        // banded and put a muddy tint across the middle of the art.
+        Box(Modifier.fillMaxSize().background(verticalScrim(Color.Black.copy(alpha = 0.45f), to = 0.25f, solidAtTop = true)))
+        Box(Modifier.fillMaxSize().background(verticalScrim(veil, from = 0.35f, to = 0.85f)))
+        Box(Modifier.fillMaxSize().background(verticalScrim(background, from = 0.85f, to = 1f)))
         Column(
             Modifier.align(Alignment.BottomStart).widthIn(max = 560.dp).padding(start = 16.dp, end = 16.dp, bottom = 28.dp),
         ) {
@@ -1001,12 +995,12 @@ private fun FeaturedPage(
                     Spacer(Modifier.width(6.dp))
                     Text(if (resume?.episode?.resumeAt != null) "Resume" else "Play")
                 }
-                TonalButton(onClick = onOpen) {
+                TonalButton(onClick = onOpen, glass = ink) {
                     Icon(Icons.Default.Info, contentDescription = null)
                     Spacer(Modifier.width(6.dp))
                     Text("More info")
                 }
-                ListButton(title.onList, onSetOnList, compact = true)
+                ListButton(title.onList, onSetOnList, compact = true, glass = ink)
             }
             val episode = resume?.episode
             val progress = episode?.progress?.takeIf { episode.resumeAt != null }
@@ -1050,7 +1044,7 @@ private fun ContinueCard(entry: Resumable, onClick: () -> Unit, onLongClick: () 
             .width(220.dp)
             .focusHighlight(MaterialTheme.shapes.medium, grow = true)
             .onMenuKey(onLongClick)
-            .clip(MaterialTheme.shapes.medium)
+            .clip(TileShape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this episode"),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.medium)) {
@@ -1113,7 +1107,7 @@ private fun PosterTile(
             .returnsFocus(title.key)
             .focusHighlight(MaterialTheme.shapes.medium, grow = true)
             .onMenuKey(onLongClick)
-            .clip(MaterialTheme.shapes.medium)
+            .clip(TileShape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "More for this title"),
     ) {
         Box {

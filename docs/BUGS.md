@@ -150,6 +150,49 @@ The first hardware run also found four defects in the harness itself and five in
 the release build; they are [B43](#b43--the-acceptance-harness-could-not-run-against-the-shipping-build)
 and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
+### B71 — "Failed to find ordered chapter part!" over an episode that played
+
+**Symptom.** On iOS, an Inuyasha episode showed mpv's `Failed to find ordered
+chapter part!` as a playback error. Android showed the same line over a picture
+that went on playing.
+
+**Cause.** The file is Matroska with *ordered chapters*: its opening and ending
+are separate files the episode links to by segment UID, and mpv looks for them
+in the episode's own directory. A stream has no directory, so mpv logs the parts
+as missing at error level and plays the episode without them. Android surfaced
+the first non-`ffmpeg` error line at once; iOS before
+[B70](#b70--ios-refused-some-files-with-an-mpv-rendering-error) did too, and
+after it the line could still stand in for the real reason a file failed.
+
+**Fix.** `record_log` in `pstr_mpv.cpp` and `MpvPlayer.firstError` skip any
+line about ordered chapters. The episode plays without its linked opening and
+ending, as before; finding them among the share's other files is not done.
+
+**Verified.** Not reproduced on a device; the message text is mpv's
+`demux_mkv_timeline.c`.
+
+### B70 — iOS refused some files with an mpv rendering error
+
+**Symptom.** Opening certain episodes on iOS put an mpv error line over the
+player (a failed frame upload or hardware-decode mapping), and the picture never
+came up. Other episodes in the same library played.
+
+**Cause.** Two things. The player asked for `hwdec=videotoolbox`, the zero-copy
+mode, whose frames reach `vo=gpu-next` through mpv's VideoToolbox-to-Vulkan
+interop (`hwdec_vt_pl.m`) on MoltenVK. That interop accepts only some
+`CVPixelBuffer` formats, so 10-bit and HDR HEVC fail there. Separately, the
+first error-level log line of a file became `problem` immediately, so an error
+mpv recovered from was shown as if it were fatal — the iOS side of
+[B49](#b49--a-recoverable-decoder-fallback-put-a-dialog-over-a-playing-episode).
+
+**Fix.** `hwdec=videotoolbox-copy`: hardware decoding that hands back ordinary
+frames, as Android does with `auto-copy-safe`. And the first error line is held
+back in `MpvPlayer.firstError`, becoming `problem` only when the file ends with
+`MPV_END_FILE_REASON_ERROR`.
+
+**Verified.** Needs a device run on macOS (`scripts/build-ios.sh test`); not yet
+reproduced against a 10-bit HEVC file.
+
 ### B69 — the window froze for a second when an episode ended or the next one started
 
 **Symptom.** The log said `ui thread blocked for 1092 ms drawing the player page`,

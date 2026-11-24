@@ -15,17 +15,20 @@ follow `images/BRANDING.md`.
 | Light page / bar / card / card hover | `#FAF9FC` / `#F4F1FA` / `#F1EEF8` / `#E3DEED` |
 | Light text / muted | `#1B1340` / `#615970` |
 | Violet (the accent) | `#6D4AFF`; 300 `#A48BFF`, 400 `#8A6DFF`, 600 `#5B36F2` |
-| Orchid (the accent's gradient partner) | `#B65BD6` |
-| Copper (the highlight) | `#D69B77` on dark, `#B47456` on light; 200 `#F2C9AA`, 700 `#703E30` |
+| Orchid (icons only) | `#B65BD6` |
+| Copper (the highlight) | 100 `#FBEBDD`, 200 `#F2C9AA`, 300 `#E5B08D`, **400 `#D69B77`** (on dark), **500 `#B47456`** (on light), 600 `#8F5940`, 700 `#703E30` |
 | Radii | 6 badge and chip, 8 small control, 12 card, 16 sheet, dialog and hero, 24 floating bar, pill for buttons and tabs |
 | Type | Inter; Inter Display for the largest size |
 
-**Violet** is the one strong colour, and marks what can be pressed. Where it is
-a gradient it runs into orchid, as the icons' faces do; white stays above 3:1
-along the whole run. **Copper** is the metal behind every icon. In the apps it
-is a highlight and nothing more: a new-episodes badge, a rating star, the
-inner edge of a focus ring. It is never a fill under body text and never a
-large area.
+**Violet** is the one strong colour, and marks what can be pressed. In the apps
+it is a flat fill. The violet-to-orchid ramp belongs to the icons' faces and
+nowhere else: across every button and bar it read as a template's decoration,
+not a decision. **Copper** is the metal behind every icon. In the apps it is
+the colour of news and of the viewer's own things: a new-episodes badge and a
+rating star. It is never a fill under body text and never a large area. The
+scale (`pstr_core::appearance::copper`) is there so a client that needs a
+tint behind a copper label or a copper border on a light page takes a step of
+it, not a mix of its own.
 
 In this repository the dark set is the **Proton** palette and the light set
 **Proton Light** (`pstr_core::appearance`). Copper is the palette's
@@ -107,9 +110,24 @@ through `assets/icon-256.png`, Android through the generated
 
 ## Focus
 
-A control that has the keyboard's or the remote's focus wears a ring of the
-accent with the copper highlight just inside it (`theme::focus_ring` on the
-desktop). It is drawn outside the control, so it never covers what it marks.
+A control that has the keyboard's or the remote's focus wears a solid ring of
+the accent, standing off the control (`theme::focus_ring` on the desktop,
+`focusHighlight` on the phone, `focusBorder` on the TV). It is drawn outside
+the control, so it never covers what it marks. One ring on every client: no
+gradient border and no second copper edge.
+
+## Scrims
+
+A scrim — a fade laid over artwork so text on it reads — is the one place a
+gradient is drawn on purpose, and every client draws it from one curve:
+`pstr_core::appearance::scrim`, `1 - smoothstep`, flat at both ends so neither
+end shows as a line. The desktop samples it per texel; Android
+(`ui/theme/Scrim.kt`) and iOS (`UI/Theme/Scrim.swift`) copy
+`SCRIM_STOPS`, which a test pins to the curve. Each scrim has one job — dark
+under the status bar, the picture's colour under the text, the page colour
+where the art hands over to the page — and they are layered, never merged into
+one many-stop ramp. Scrims do not follow the `gradients` switch: they are
+legibility, not decoration.
 
 ## A picture's colour
 
@@ -148,7 +166,10 @@ something to interact with; nothing wears it for decoration. Neither client
 draws an elevation tint (`surfaceTint` is transparent on Android) — a surface
 that is faintly accent-coloured because it happens to be raised breaks that rule.
 
-Where the accent is a ramp rather than a flat fill, in both clients:
+With `gradients` on (off by default), the accent is a **tonal** ramp, top to
+bottom, from the accent into a shade of itself (`TONAL_SHADE`), never into a
+second hue — the one exception is the Pink → Sky accent, which is a pair by
+choice. It is drawn on:
 
 - the primary button
 - the seek bar's spent side

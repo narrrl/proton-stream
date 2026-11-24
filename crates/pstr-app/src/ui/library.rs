@@ -65,6 +65,7 @@ pub fn show(ui: &mut egui::Ui, art: &mut Art<'_>, shelves: Shelves<'_>, actions:
     let matches = pick(&view.matches);
 
     egui::ScrollArea::vertical()
+        .id_salt("library page")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if !featured.is_empty() {
@@ -235,6 +236,7 @@ pub fn browse(
     let keys = facet.titles(&library.titles, art.metadata);
     let titles: Vec<&Title> = keys.iter().filter_map(|key| library.get(key)).collect();
     egui::ScrollArea::vertical()
+        .id_salt(("browse page", facet))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.label(ui::muted(facet.kind()));
@@ -333,7 +335,7 @@ fn hero(
     listed: &HashSet<String>,
     actions: &mut Vec<Action>,
 ) {
-    let height = (ui.ctx().content_rect().height() * 0.5).clamp(280.0, 520.0);
+    let height = (ui.ctx().content_rect().height() * 0.56).clamp(320.0, 620.0);
     let (column, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
@@ -402,13 +404,14 @@ fn hero(
     let shown_veil = backdrop(ui, &painter, art, title, rect, text_right, arriving);
     let veil = veil.map_or(shown_veil, |from| from.lerp_to_gamma(shown_veil, progress));
 
-    // The same two coats as the title page's band, for the same reason: a
-    // still is arbitrary, and the text over it has to read whatever it is.
-    // Tinted with the picture's own colour, so each title's banner has a light
-    // of its own; the fade at the bottom is the page's, because that is what
-    // it hands over to.
-    if theme::ramps_on() {
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, veil.gamma_multiply(0.3));
+    // Two scrims and nothing else: one behind the text, tinted with the
+    // picture's own colour so each title's banner has a light of its own,
+    // and one at the bottom in the page's colour, because that is what the
+    // banner hands over to. Always drawn — they are what makes the text
+    // readable, not decoration — and eased (`appearance::scrim`), so neither
+    // ends in a line. No wash over the whole picture: it only made the art
+    // muddy.
+    {
         let text_side = egui::Rect::from_min_max(
             rect.min,
             egui::pos2(
@@ -423,8 +426,10 @@ fn hero(
             theme::Direction::Horizontal,
             false,
         ));
-        let bottom =
-            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 120.0), rect.max);
+        let bottom = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 0.4 * rect.height()),
+            rect.max,
+        );
         painter.add(theme::fade_shape(
             ui.ctx(),
             bottom,
@@ -432,8 +437,6 @@ fn hero(
             theme::Direction::Vertical,
             true,
         ));
-    } else {
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, veil.gamma_multiply(0.82));
     }
 
     let inner = egui::Rect::from_min_max(

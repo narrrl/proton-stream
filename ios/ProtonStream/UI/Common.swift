@@ -542,3 +542,15 @@ struct RevealingBar<Bar: View>: View {
 
     var body: some View { bar(reveal.solid) }
 }
+
+/// `text` with every ★ in the suite's copper: the one warm mark on a title,
+/// as on the desktop and Android (`copperStar`).
+func copperStar(_ text: String, _ copper: Color) -> AttributedString {
+    var result = AttributedString(text)
+    var search = result.startIndex
+    while let range = result[search...].range(of: "★") {
+        result[range].foregroundColor = copper
+        search = range.upperBound
+    }
+    return result
+}
