@@ -44,6 +44,10 @@ import io.narl.protonstream.ui.theme.TonalButton
 import androidx.compose.material.icons.filled.Edit
 import uniffi.pstr_android.AccountState
 import uniffi.pstr_android.ShareRecord
+import uniffi.pstr_android.InviteRecord
+import uniffi.pstr_android.InvitedShareRecord
+import io.narl.protonstream.isInviteLink
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ListItem
@@ -78,6 +82,12 @@ internal fun SharesScreen(
      * it from a phone (`PhoneHandoffDialog`). Null on a phone.
      */
     startHandoff: (suspend () -> Result<ShareHandoff>)? = null,
+    /** The shares a `pstr://` invite adds; see [IncomingInviteDialog]. */
+    decodeInvite: suspend (String) -> Result<List<InvitedShareRecord>> = { Result.failure(UnsupportedOperationException()) },
+    /** Add a confirmed invite's shares; resolves to why any were refused. */
+    onAddInvited: suspend (List<InvitedShareRecord>) -> String? = { null },
+    /** The invite for these shares, or for every share when empty. */
+    inviteLink: (suspend (List<String>) -> Result<InviteRecord>)? = null,
 ) {
     var showAdd by remember { mutableStateOf(false) }
     var typing by remember { mutableStateOf(false) }
@@ -86,6 +96,7 @@ internal fun SharesScreen(
     var browsing by remember { mutableStateOf(false) }
     var repairing by remember { mutableStateOf<ShareRecord?>(null) }
     var removing by remember { mutableStateOf<ShareRecord?>(null) }
+    var inviting by remember { mutableStateOf<List<String>?>(null) }
     TabPage("Shares", padding) { body ->
         Box(Modifier.fillMaxSize().padding(body)) {
             if (shares.isEmpty() && account.state == null) {
@@ -119,7 +130,24 @@ internal fun SharesScreen(
                             onRepair = { repairing = share },
                             onRemove = { removing = share },
                             onRename = { renaming = share },
+                            onInvite = if (inviteLink != null && !share.fromAccount) {
+                                { inviting = listOf(share.id) }
+                            } else {
+                                null
+                            },
                         )
+                    }
+                    // Two or more links make a library worth handing on whole.
+                    if (inviteLink != null && shares.count { !it.fromAccount } > 1) {
+                        item(key = "invite-all") {
+                            TonalButton(
+                                onClick = { inviting = emptyList() },
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null)
+                                Text("Share the whole library", Modifier.padding(start = 8.dp))
+                            }
+                        }
                     }
                 }
             }
@@ -145,6 +173,13 @@ internal fun SharesScreen(
             onTypeInstead = { typing = true },
             onDismiss = closeAdding,
         )
+    } else if (adding && incomingLink != null && isInviteLink(incomingLink)) {
+        IncomingInviteDialog(
+            link = incomingLink,
+            decode = decodeInvite,
+            onAdd = onAddInvited,
+            onDismiss = closeAdding,
+        )
     } else if (adding) {
         AddShareDialog(
             initialUrl = incomingLink.orEmpty(),
@@ -159,6 +194,11 @@ internal fun SharesScreen(
     }
     if (accountActions != null && browsing) {
         DriveBrowserDialog(accountActions, onDismiss = { browsing = false })
+    }
+    if (inviteLink != null) {
+        inviting?.let { ids ->
+            OutgoingInviteDialog(ids, inviteLink, onDismiss = { inviting = null })
+        }
     }
     repairing?.let { share ->
         RepairShareDialog(
@@ -234,6 +274,7 @@ private fun ShareRow(
     onRepair: () -> Unit,
     onRemove: () -> Unit,
     onRename: () -> Unit = {},
+    onInvite: (() -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     ListItem(
@@ -281,6 +322,13 @@ private fun ShareRow(
                         leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
                         onClick = { menu = false; onRefresh() },
                     )
+                    onInvite?.let { invite ->
+                        DropdownMenuItem(
+                            text = { Text("Invite…") },
+                            leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                            onClick = { menu = false; invite() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Rename") },
                         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },

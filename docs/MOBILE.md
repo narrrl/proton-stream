@@ -28,6 +28,18 @@ one. The app checks the link before it saves it.
   system settings.
 - **iOS:** there is no share sheet. Copy the link, then tap **Paste link** in the dialog.
 
+### Invites
+
+Someone running Proton Stream can send you an **invite**: a `pstr://` link or its QR code that
+adds one share or a whole library, passwords included. Tap the link, or scan the code with the
+camera, and the app lists what it adds; tap **Add**. On Android you can also share a message
+holding an invite to the app.
+
+To make one, open a share's menu and choose **Invite…**, or tap **Share the whole library** below
+the list. **Send** opens the share sheet, **Copy** the clipboard, and the QR code is there for a
+phone next to you; on a TV, the QR code is the way. Anyone with an invite can open what it
+shares, so send it only to people you trust.
+
 Folders of your own Drive work as on the desktop: sign in on the **Shares** tab, then **Add from
 your Drive**. See [Account and sync](ACCOUNT_AND_SYNC.md).
 

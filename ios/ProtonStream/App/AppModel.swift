@@ -303,6 +303,41 @@ final class AppModel {
         return nil
     }
 
+    /// The shares an invite adds, each marked when the library has it already.
+    func decodeInvite(_ text: String) async -> Result<[InvitedShareRecord], Error> {
+        do {
+            return .success(try NativeRuntime.engine().decodeInvite(text: text))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// Add every share of a confirmed invite, each opened first as
+    /// `addShare` does, then crawl the ones that opened. Returns why any were
+    /// refused.
+    func addInvited(_ invited: [InvitedShareRecord]) async -> String? {
+        var added: [String] = []
+        var failed: [String] = []
+        for share in invited {
+            do {
+                let stored = try await NativeRuntime.engine().addShare(
+                    name: share.name, url: share.url, customPassword: share.customPassword
+                )
+                added.append(stored.id)
+            } catch {
+                failed.append("\(share.name.isEmpty ? "Shared folder" : share.name): \(errorMessage(error))")
+            }
+        }
+        reload()
+        if !added.isEmpty { Task { await crawlAdded(added, announce: true) } }
+        return failed.isEmpty ? nil : failed.joined(separator: "\n")
+    }
+
+    /// The invite for these shares, or for the whole library when empty.
+    func inviteLink(_ shareIds: [String]) -> Result<InviteRecord, Error> {
+        Result { try NativeRuntime.engine().inviteLink(shareIds: shareIds) }
+    }
+
     /// Crawl shares that are new here — added on this device or by sync —
     /// then match them when enrichment is on.
     private func crawlAdded(_ ids: [String], announce: Bool) async {

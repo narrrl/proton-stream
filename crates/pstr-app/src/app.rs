@@ -165,8 +165,13 @@ pub enum Action {
     StopCrawl,
     /// Save the frame on screen to the pictures folder.
     Screenshot,
-    /// A share link was pasted outside the form: open the form with it.
+    /// A share link was pasted outside the form: open the form with it. An
+    /// invite opens its confirmation instead.
     PasteShare(String),
+    /// Show the invite link for these shares, or for every share when empty.
+    ShareInvite(Vec<String>),
+    /// Add what a confirmed invite carries.
+    AddInvited(Vec<pstr_core::invite::InvitedShare>),
     /// Go to the add form, caret in the link field.
     OpenShareForm,
     /// Stop offering posters and synopses on the library page.
@@ -691,6 +696,10 @@ pub struct ShareForm {
     /// The share being renamed in its own row, if any, and the name so far.
     pub renaming: Option<String>,
     pub rename_to: String,
+    /// An invite that arrived, waiting to be confirmed.
+    pub invite_in: Option<crate::ui::shares::IncomingInvite>,
+    /// An invite being handed out: its link and QR code.
+    pub invite_out: Option<crate::ui::shares::OutgoingInvite>,
 }
 
 pub struct App {
@@ -986,6 +995,30 @@ impl App {
                     // The field the refusal asks for, opened and ready.
                     if needs_password {
                         self.form.has_password = true;
+                    }
+                }
+                Event::InviteAdded {
+                    added,
+                    already,
+                    failed,
+                } => {
+                    if added.is_empty() {
+                        self.crawling = false;
+                    }
+                    let mut said = match added.len() {
+                        0 => "added nothing".to_owned(),
+                        1 => format!("added {}", added[0]),
+                        count => format!("added {count} shares"),
+                    };
+                    if already > 0 {
+                        said.push_str(&format!(", {already} already in the library"));
+                    }
+                    self.note(ctx, said, false);
+                    if let Some(text) = describe_failures(&failed) {
+                        self.note(ctx, text, true);
+                    }
+                    if !added.is_empty() && self.library.is_empty() && self.page == Page::Shares {
+                        self.page = Page::Library;
                     }
                 }
                 Event::Connected { failures } => {
@@ -1930,6 +1963,34 @@ impl App {
                 ));
                 self.send_player(crate::playback::Command::Screenshot(path));
                 self.flash(ctx, egui_phosphor::regular::CAMERA, "Screenshot saved");
+            }
+            Action::PasteShare(url) if pstr_core::invite::is_invite(&url) => {
+                self.page = Page::Shares;
+                self.form.url.clear();
+                match pstr_core::invite::decode(&url) {
+                    Ok(invited) => {
+                        self.form.invite_in = Some(crate::ui::shares::IncomingInvite::new(
+                            invited,
+                            &self.shares,
+                        ));
+                    }
+                    Err(error) => self.note(ctx, error.to_string(), true),
+                }
+            }
+            Action::ShareInvite(ids) => {
+                let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+                match self.engine.invite_link(&ids) {
+                    Ok((link, left_out)) => {
+                        self.form.invite_out =
+                            Some(crate::ui::shares::OutgoingInvite::new(ctx, link, left_out));
+                    }
+                    Err(error) => self.note(ctx, error.to_string(), true),
+                }
+            }
+            Action::AddInvited(invited) => {
+                self.form.invite_in = None;
+                self.crawling = true;
+                self.engine.add_invited(invited);
             }
             Action::PasteShare(url) => {
                 self.page = Page::Shares;
@@ -3254,7 +3315,7 @@ fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>)
         if !typing {
             for event in &input.events {
                 if let egui::Event::Paste(text) = event
-                    && pstr_core::shares::share_token(text.trim()).is_ok()
+                    && pstr_core::invite::decode(text.trim()).is_ok()
                 {
                     actions.push(Action::PasteShare(text.trim().to_owned()));
                 }

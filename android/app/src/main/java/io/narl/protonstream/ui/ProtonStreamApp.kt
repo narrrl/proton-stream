@@ -401,6 +401,9 @@ fun ProtonStreamApp(
                             onError = model::reportError,
                         ),
                         onRename = model::renameShare,
+                        decodeInvite = model::decodeInvite,
+                        onAddInvited = model::addInvited,
+                        inviteLink = model::inviteLink,
                     )
                     Destination.History -> HistoryScreen(
                         state,

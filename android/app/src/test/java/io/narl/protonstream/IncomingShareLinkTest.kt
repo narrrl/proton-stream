@@ -31,6 +31,20 @@ class IncomingShareLinkTest {
     }
 
     @Test
+    fun `a viewed invite is taken whole`() {
+        val invite = "pstr://add?v=1&s=W3sidSI6Inh4In1d"
+        assertEquals(invite, shareLinkFrom(Intent.ACTION_VIEW, invite, null))
+        assertEquals(true, isInviteLink(invite))
+        assertEquals(false, isInviteLink(link))
+    }
+
+    @Test
+    fun `a shared message holding an invite and a link yields the invite`() {
+        val invite = "pstr://add?v=1&s=W3sidSI6Inh4In1d"
+        assertEquals(invite, shareLinkFrom(Intent.ACTION_SEND, null, "$link or just \"$invite\""))
+    }
+
+    @Test
     fun `other actions are ignored`() {
         assertNull(shareLinkFrom(Intent.ACTION_MAIN, link, link))
     }

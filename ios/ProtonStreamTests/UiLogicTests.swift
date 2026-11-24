@@ -36,6 +36,14 @@ final class IncomingShareLinkTests: XCTestCase {
         XCTAssertEqual(shareLink(from: URL(string: "protonstream://add?url=\(encoded)")!), link)
     }
 
+    func testAnInviteIsHandedOnWhole() {
+        let invite = "pstr://add?v=1&s=W3sidSI6Inh4In1d"
+        XCTAssertEqual(shareLink(from: URL(string: invite)!), invite)
+        XCTAssertTrue(isInviteLink(invite))
+        XCTAssertFalse(isInviteLink(link))
+        XCTAssertNil(shareLink(from: URL(string: "pstr://something-else")!))
+    }
+
     func testAnythingButAShareLinkIsIgnored() {
         XCTAssertNil(shareLink(from: URL(string: "https://drive.proton.me/urls/ABC123#s3cr3t")!))
         XCTAssertNil(shareLink(from: URL(string: "protonstream://example.com/urls/ABC")!))
