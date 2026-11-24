@@ -303,6 +303,7 @@ impl Show {
             backdrop_url: backdrop(&embedded.images),
             logo_url: None,
             chain: Vec::new(),
+            airing: None,
         }
     }
 }

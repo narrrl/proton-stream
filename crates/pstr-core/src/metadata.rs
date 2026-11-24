@@ -445,6 +445,21 @@ pub struct Enrichment {
     /// Every provider entry the episodes were taken from, the match's own
     /// included. See [`TitleDetails::chain`].
     pub chain: Vec<String>,
+    /// Where the latest entry the library's files reach stands, where a
+    /// provider files seasons as entries of their own. `None` leaves the
+    /// match's.
+    pub airing: Option<Airing>,
+}
+
+/// The airing fields of [`TitleDetails`], taken from one provider entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Airing {
+    /// As [`TitleDetails::status`].
+    pub status: Option<String>,
+    /// As [`TitleDetails::next_episode`].
+    pub next_episode: Option<u32>,
+    /// As [`TitleDetails::next_airing_at`].
+    pub next_airing_at: Option<i64>,
 }
 
 /// Every episode a provider listed for one title, ready to look up.

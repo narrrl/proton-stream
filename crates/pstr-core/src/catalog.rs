@@ -19,13 +19,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::error::Result;
 use crate::library::TitleKind;
 use crate::metadata::{
-    Enrichment, EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleDetails,
+    Airing, Enrichment, EpisodeGuide, EpisodeMetadata, MetadataRecord, ProviderId, TitleDetails,
     TitleMetadata,
 };
 use crate::naming::{self, ParsedName};
 
 /// Bump when adding a migration.
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// The migration steps, in order. Never edit a shipped one; append.
 const SCHEMA: Schema = Schema::new(&[
@@ -43,6 +43,7 @@ const SCHEMA: Schema = Schema::new(&[
     Step::Sql(MIGRATION_V12),
     Step::Sql(MIGRATION_V13),
     Step::Sql(MIGRATION_V14),
+    Step::Sql(MIGRATION_V15),
 ]);
 
 /// Keep the catalog's own wording for a refused database.
@@ -296,6 +297,20 @@ UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
 /// nothing is deleted meanwhile.
 const MIGRATION_V14: &str = r#"
 ALTER TABLE episode_metadata ADD COLUMN mal_id INTEGER;
+UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
+"#;
+
+/// Whether the latest season the library holds is still airing, and when its
+/// next episode is, kept apart from `details` as [`Airing`] JSON.
+///
+/// AniList files each season as its own entry, and a title matches the first,
+/// so `details.status` was season one's: The Apothecary Diaries read
+/// "Finished" while its third season aired, with no next episode. Enrichment
+/// walks to the season the files reach and stores that entry's here; a refresh of the match's
+/// details rewrites `details` and would lose it there. Re-enriching AniList
+/// titles fills it in for a library already matched.
+const MIGRATION_V15: &str = r#"
+ALTER TABLE title_metadata ADD COLUMN latest_airing TEXT;
 UPDATE title_metadata SET enriched_at = NULL WHERE provider = 'anilist';
 "#;
 
@@ -1071,7 +1086,7 @@ impl Catalog {
         let mut statement = self.conn.prepare(
             "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                     overview, year, kind, poster_url, backdrop_url, rating, genres, episodes, url,
-                    manual, details, chain, logo_url
+                    manual, details, chain, logo_url, latest_airing
              FROM title_metadata",
         )?;
         let rows = statement.query_map([], row_to_metadata)?;
@@ -1092,7 +1107,7 @@ impl Catalog {
             .query_row(
                 "SELECT title_key, provider, matched, fetched_at, remote_id, name, original_name,
                         overview, year, kind, poster_url, backdrop_url, rating, genres, episodes,
-                        url, manual, details, chain, logo_url
+                        url, manual, details, chain, logo_url, latest_airing
                  FROM title_metadata WHERE title_key = ?1",
                 params![title_key],
                 row_to_metadata,
@@ -1164,6 +1179,7 @@ impl Catalog {
                  manual        = excluded.manual,
                  details       = excluded.details,
                  chain         = CASE WHEN same THEN title_metadata.chain END,
+                 latest_airing = CASE WHEN same THEN title_metadata.latest_airing END,
                  enriched_at   = CASE WHEN same THEN title_metadata.enriched_at END"
                 .replace(
                     "same",
@@ -1254,12 +1270,18 @@ impl Catalog {
         fetched_at: i64,
         enrichment: &Enrichment,
     ) -> Result<()> {
+        let airing = enrichment
+            .airing
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| crate::error::Error::Config(error.to_string()))?;
         let tx = self.conn.transaction()?;
         replace_episodes(&tx, title_key, provider, fetched_at, &enrichment.episodes)?;
         tx.execute(
             "UPDATE title_metadata
              SET enriched_at = ?3, backdrop_url = COALESCE(?4, backdrop_url), chain = ?5,
-                 logo_url = COALESCE(?6, logo_url)
+                 logo_url = COALESCE(?6, logo_url), latest_airing = ?7
              WHERE title_key = ?1 AND provider = ?2",
             params![
                 title_key,
@@ -1268,6 +1290,7 @@ impl Catalog {
                 enrichment.backdrop_url.as_deref(),
                 enrichment.chain.join("\n"),
                 enrichment.logo_url.as_deref(),
+                airing,
             ],
         )?;
         tx.commit()?;
@@ -1436,8 +1459,21 @@ fn replace_episodes(
 /// JSON that will not parse is treated as never fetched rather than failing
 /// the read: the next match run fetches it again, where an error here would
 /// take the whole grid down over one row.
-fn details_column(details: Option<String>, chain: Option<String>) -> Option<TitleDetails> {
+///
+/// `latest_airing`, where enrichment found one, stands for the title's: see
+/// [`MIGRATION_V15`]. One that will not parse is ignored the same way.
+fn details_column(
+    details: Option<String>,
+    chain: Option<String>,
+    latest_airing: Option<String>,
+) -> Option<TitleDetails> {
     let mut details: TitleDetails = serde_json::from_str(&details?).ok()?;
+    if let Some(airing) = latest_airing.and_then(|json| serde_json::from_str::<Airing>(&json).ok())
+    {
+        details.status = airing.status;
+        details.next_episode = airing.next_episode;
+        details.next_airing_at = airing.next_airing_at;
+    }
     details.chain = chain
         .unwrap_or_default()
         .lines()
@@ -1486,7 +1522,7 @@ fn row_to_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MetadataR
                 .collect(),
             episodes: row.get(14)?,
             url: row.get(15)?,
-            details: details_column(row.get(17)?, row.get(18)?),
+            details: details_column(row.get(17)?, row.get(18)?, row.get(20)?),
         })
     };
 
@@ -2491,6 +2527,7 @@ mod tests {
             backdrop_url: None,
             logo_url: None,
             chain: Vec::new(),
+            airing: None,
         };
         catalog
             .set_enrichment("kusuriya", ProviderId::AniList, 1_000, &enrichment)
@@ -2558,6 +2595,7 @@ mod tests {
             backdrop_url: None,
             logo_url: None,
             chain: Vec::new(),
+            airing: None,
         };
         catalog
             .set_enrichment("kusuriya", ProviderId::AniList, fetched, &enrichment)
@@ -2621,6 +2659,7 @@ mod tests {
             backdrop_url: Some("fanart.jpg".into()),
             logo_url: None,
             chain: vec!["457".into(), "20595".into()],
+            airing: None,
         };
         catalog
             .set_enrichment("mushishi", ProviderId::AniList, 2, &enrichment)
@@ -2668,6 +2707,88 @@ mod tests {
         let read = catalog.metadata("mushishi").expect("read").expect("a row");
         assert_eq!(read.metadata.and_then(|data| data.backdrop_url), None);
         assert!(catalog.enrichment_ages().expect("ages").is_empty());
+    }
+
+    #[test]
+    fn the_latest_seasons_status_stands_for_the_title_and_survives_a_refresh() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let finished = || TitleMetadata {
+            details: Some(TitleDetails {
+                status: Some("FINISHED".into()),
+                ..TitleDetails::default()
+            }),
+            ..found()
+        };
+        let record = MetadataRecord {
+            title_key: "kusuriya".into(),
+            provider: ProviderId::AniList,
+            metadata: Some(finished()),
+            fetched_at: 1,
+            manual: false,
+        };
+        catalog.set_metadata(&record).expect("store");
+        let status = |catalog: &Catalog| {
+            catalog
+                .metadata("kusuriya")
+                .expect("read")
+                .and_then(|record| record.metadata)
+                .and_then(|data| data.details)
+                .and_then(|details| details.status)
+        };
+        assert_eq!(status(&catalog).as_deref(), Some("FINISHED"));
+
+        catalog
+            .set_enrichment(
+                "kusuriya",
+                ProviderId::AniList,
+                2,
+                &Enrichment {
+                    airing: Some(Airing {
+                        status: Some("RELEASING".into()),
+                        next_episode: Some(7),
+                        next_airing_at: Some(4_102_444_800),
+                    }),
+                    ..Enrichment::default()
+                },
+            )
+            .expect("enrich");
+        assert_eq!(status(&catalog).as_deref(), Some("RELEASING"));
+        let next = catalog
+            .metadata("kusuriya")
+            .expect("read")
+            .and_then(|record| record.metadata)
+            .and_then(|data| data.details)
+            .and_then(|details| details.next_airing(0));
+        assert_eq!(next, Some((7, 4_102_444_800)));
+
+        // Refreshing season one's details rewrites them, not the season the
+        // files reach.
+        catalog
+            .set_metadata(&MetadataRecord {
+                fetched_at: 3,
+                ..record.clone()
+            })
+            .expect("refresh");
+        assert_eq!(status(&catalog).as_deref(), Some("RELEASING"));
+        assert!(
+            catalog.all_metadata().expect("read all")["kusuriya"]
+                .metadata
+                .as_ref()
+                .and_then(|data| data.details.as_ref())
+                .is_some_and(|details| details.is_airing())
+        );
+
+        // A different entry starts over.
+        catalog
+            .set_metadata(&MetadataRecord {
+                metadata: Some(TitleMetadata {
+                    remote_id: "999".into(),
+                    ..finished()
+                }),
+                ..record
+            })
+            .expect("repin");
+        assert_eq!(status(&catalog).as_deref(), Some("FINISHED"));
     }
 
     #[test]
