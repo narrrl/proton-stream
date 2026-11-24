@@ -378,9 +378,14 @@ final class ArtworkLoader: @unchecked Sendable {
     /// Decoded posters, so scrolling the grid re-reads neither disk nor
     /// decoder. Keyed by artwork URL or by `share/link` for a Proton
     /// thumbnail; the two cannot collide, since one is always an `https:` URL.
+    ///
+    /// Room for a few screens of posters: at 32 MB it held about eleven, less
+    /// than one screen of the grid, so scrolling back re-read and re-decoded
+    /// every tile behind a skeleton. NSCache still lets go under memory
+    /// pressure.
     private let decoded: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
-        cache.totalCostLimit = 32 * 1024 * 1024
+        cache.totalCostLimit = 80 * 1024 * 1024
         return cache
     }()
 
@@ -398,8 +403,14 @@ final class ArtworkLoader: @unchecked Sendable {
 
     private static let maxBytes = 12 * 1024 * 1024
     private static let maxCacheBytes = 48 * 1024 * 1024
-    /// Longest edge worth decoding: a poster on a phone, or lock-screen art.
+    /// Longest edge worth decoding: a backdrop across a phone, or lock-screen
+    /// art.
     private static let maxEdge = 1024
+    /// The same for portrait art, which is a poster: tiles are 108 to about
+    /// 216 points wide, so 768 pixels tall covers a phone at 3x and an iPad at
+    /// 2x, at a little over half the memory. A poster standing in for a
+    /// backdrop is blurred, so it loses nothing there either.
+    private static let maxPortraitEdge = 768
 
     func cached(url: String?, fallback: ThumbnailSource?) -> UIImage? {
         if let url, let image = decoded.object(forKey: url as NSString) { return image }
@@ -511,11 +522,14 @@ final class ArtworkLoader: @unchecked Sendable {
     /// says nothing about what an image costs decoded.
     private static func decodeSampled(_ bytes: Data) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(bytes as CFData, nil) else { return nil }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let width = properties?[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let height = properties?[kCGImagePropertyPixelHeight] as? Int ?? 0
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxEdge,
+            kCGImageSourceThumbnailMaxPixelSize: height > width ? maxPortraitEdge : maxEdge,
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return UIImage(cgImage: image)
