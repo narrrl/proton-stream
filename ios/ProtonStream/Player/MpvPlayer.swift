@@ -80,8 +80,14 @@ final class MpvPlayer {
     /// episode, and a reading attributed to the wrong one resumes the next
     /// episode where the last one stopped.
     private(set) var media: String?
-    /// What mpv last complained about, until the viewer dismisses it.
+    /// What stopped the file, until the viewer dismisses it. Set only when
+    /// playback actually failed: mpv logs errors it recovers from (a
+    /// hardware decoder that falls back to software, a frame it could not
+    /// map) and those are not the viewer's business.
     var problem: String?
+    /// The first error mpv logged for the current file, held back until the
+    /// file ends in failure and it becomes `problem`.
+    private var firstError: String?
     /// Bumped by every load, so a reader can tell "episode two, second zero"
     /// from a leftover reading of episode one.
     private(set) var generation = 0
@@ -151,7 +157,10 @@ final class MpvPlayer {
             ("gpu-api", "vulkan"),
             ("gpu-context", "moltenvk"),
             // The default; `load` sets it per file from the viewer's setting.
-            ("hwdec", "videotoolbox"),
+            // The copy variant: zero-copy VideoToolbox frames go through
+            // mpv's Vulkan interop, which rejects 10-bit and HDR pixel
+            // formats and leaves the file unplayable.
+            ("hwdec", "videotoolbox-copy"),
             ("video-rotate", "no"),
             ("keep-open", "no"),
             ("cache", "yes"),
@@ -229,6 +238,7 @@ final class MpvPlayer {
         tracks = []
         chapters = []
         problem = nil
+        firstError = nil
         self.media = nil
         generation += 1
         // Subtitles for the file being replaced will never be added.
@@ -243,7 +253,7 @@ final class MpvPlayer {
         let options = [
             // Per file, before `loadfile`: a file VideoToolbox decodes wrongly
             // is fixed from the next episode without restarting the core.
-            ("hwdec", hardwareDecoding ? "videotoolbox" : "no"),
+            ("hwdec", hardwareDecoding ? "videotoolbox-copy" : "no"),
             ("start", start > 0 ? String(format: "%.3f", start) : "none"),
             ("alang", audio ?? ""),
             ("slang", subtitle ?? ""),
@@ -567,15 +577,19 @@ final class MpvPlayer {
             default: .other
             }
             endReason = ended
-            if ended == .failed { problem = problem ?? "This episode could not be played." }
+            if ended == .failed {
+                problem = problem ?? firstError ?? "This episode could not be played."
+            }
             if let media { onEnded?(ended, media) }
         case let .log(prefix, text):
             // The outgoing file's complaints are not the new one's.
             if loading { return }
             // The first complaint per file, and not ffmpeg's: its decoders log
             // recoverable glitches at error level all through a healthy file.
-            if text.isEmpty || prefix.hasPrefix("ffmpeg") || problem != nil { return }
-            problem = text
+            if text.isEmpty || prefix.hasPrefix("ffmpeg") || firstError != nil { return }
+            // Held back: most errors are ones mpv recovers from, and the
+            // file plays on. It becomes `problem` only if the file fails.
+            firstError = text
         }
     }
 
