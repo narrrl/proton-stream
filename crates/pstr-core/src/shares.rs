@@ -550,6 +550,92 @@ impl SessionAges {
 /// signed-in account.
 pub use proton_drive_tree_rs::DriveTree as ShareClient;
 
+/// What the catalog holds for a share's files, by link id: the active
+/// revision a row was built from and the size it recorded. See
+/// [`SharedLibrary::crawl_known`] and `Catalog::known_files`.
+pub type KnownFiles = HashMap<String, (String, i64)>;
+
+/// A share listed without unlocking file keys, where the client can.
+struct LightTree<'a>(&'a ShareClient);
+
+#[async_trait::async_trait]
+impl proton_drive_tree_rs::TreeSource for LightTree<'_> {
+    type Node = Node;
+    type Error = ProtonError;
+
+    async fn children(&self, folder: &NodeUid) -> std::result::Result<Vec<Node>, ProtonError> {
+        match self.0 {
+            ShareClient::Account { client, .. } => {
+                let uids = client.enumerate_folder_children_node_uids(folder).await?;
+                if uids.is_empty() {
+                    return Ok(Vec::new());
+                }
+                client.enumerate_nodes_light(&uids).await
+            }
+            public => public.children(folder).await,
+        }
+    }
+
+    fn is_retriable(error: &ProtonError) -> bool {
+        error.is_retriable()
+    }
+}
+
+/// Give every file of a light walk its claimed size: from `known` when the
+/// catalog has the file at this revision, otherwise by opening it in full.
+async fn complete_files(
+    client: &ShareClient,
+    mut nodes: Vec<Node>,
+    known: &KnownFiles,
+    options: &WalkOptions,
+) -> Result<Vec<Node>> {
+    let ShareClient::Account { client: drive, .. } = client else {
+        return Ok(nodes);
+    };
+    let mut missing = Vec::new();
+    for (index, node) in nodes.iter_mut().enumerate() {
+        let proton_drive_rs::NodeKind::File {
+            active_revision_id,
+            claimed_size,
+            ..
+        } = &mut node.kind
+        else {
+            continue;
+        };
+        if claimed_size.is_some() {
+            continue;
+        }
+        let link_id = node.uid.link_id.to_string();
+        match (known.get(&link_id), active_revision_id.as_deref()) {
+            (Some((revision, size)), Some(current)) if revision == current => {
+                *claimed_size = Some(*size);
+            }
+            _ => missing.push(index),
+        }
+    }
+    if missing.is_empty() {
+        return Ok(nodes);
+    }
+    let uids: Vec<NodeUid> = missing
+        .iter()
+        .map(|&index| nodes[index].uid.clone())
+        .collect();
+    let full = retry(&options.retry_delays, ProtonError::is_retriable, || {
+        drive.enumerate_nodes(&uids)
+    })
+    .await?;
+    let mut full: HashMap<NodeUid, Node> = full
+        .into_iter()
+        .map(|node| (node.uid.clone(), node))
+        .collect();
+    for index in missing {
+        if let Some(node) = full.remove(&nodes[index].uid) {
+            nodes[index] = node;
+        }
+    }
+    Ok(nodes)
+}
+
 impl SharedLibrary {
     /// Open every configured share.
     ///
@@ -701,6 +787,27 @@ impl SharedLibrary {
         share_id: &str,
         progress: impl Fn(usize),
     ) -> Result<Vec<Node>> {
+        self.crawl_known(share_id, &KnownFiles::new(), progress)
+            .await
+    }
+
+    /// [`Self::crawl_reporting`], told what the catalog already holds, so a
+    /// recrawl only pays for what changed.
+    ///
+    /// A file's claimed size sits behind its own node key, and unlocking that
+    /// key is an S2K derivation of tens of milliseconds — over a thousand
+    /// files, most of a crawl. So an account folder is walked *light*
+    /// ([`LightTree`]): names, revisions and folders, no file keys. Then only
+    /// the files `known` does not already hold at their current revision are
+    /// opened in full; the rest take the size the catalog has. A first crawl
+    /// opens every file, as before; a recrawl of an unchanged library opens
+    /// none. Public links have no light listing and are walked in full.
+    pub async fn crawl_known(
+        &self,
+        share_id: &str,
+        known: &KnownFiles,
+        progress: impl Fn(usize),
+    ) -> Result<Vec<Node>> {
         let client = self
             .client(share_id)
             .ok_or_else(|| Error::NotFound(format!("share {share_id} is not open")))?;
@@ -713,12 +820,13 @@ impl SharedLibrary {
             client.root_node()
         })
         .await?;
-        let nodes = walk(client, root, &options, progress)
+        let nodes = walk(&LightTree(client), root, &options, progress)
             .await
             .map_err(|error| match error {
                 WalkError::Source(error) => Error::from(error),
                 too_many => Error::Config(too_many.to_string()),
             })?;
+        let nodes = complete_files(client, nodes, known, &options).await?;
 
         if client.event_scope().is_some() {
             self.watch
