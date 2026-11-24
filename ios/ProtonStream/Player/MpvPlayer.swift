@@ -587,6 +587,11 @@ final class MpvPlayer {
             // The first complaint per file, and not ffmpeg's: its decoders log
             // recoverable glitches at error level all through a healthy file.
             if text.isEmpty || prefix.hasPrefix("ffmpeg") || firstError != nil { return }
+            // Nor a missing part of a Matroska file's "ordered chapters": its
+            // opening and ending live in files mpv looks for beside it, which
+            // a stream has none of. It plays the episode without them, and
+            // when a file does fail, this line hid the real reason.
+            if text.contains("ordered chapter") { return }
             // Held back: most errors are ones mpv recovers from, and the
             // file plays on. It becomes `problem` only if the file fails.
             firstError = text

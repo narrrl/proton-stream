@@ -665,9 +665,16 @@ class Player {
     /// initialise is an error there and a fallback here, so surfacing those
     /// puts a dialog over a file that goes on to play perfectly. When one of
     /// them really is fatal mpv says so itself, under a prefix of its own.
+    ///
+    /// Nor the errors mpv logs about a file it goes on to play whole. A
+    /// Matroska release that links its opening and ending from separate files
+    /// ("ordered chapters") names parts mpv looks for beside the file — which a
+    /// stream has none of — so it says it failed to find them and plays the
+    /// episode without them.
     void record_log(const mpv_event_log_message &message) {
         if (!message.text) return;
         if (message.prefix && !std::strncmp(message.prefix, "ffmpeg", 6)) return;
+        if (std::strstr(message.text, "ordered chapter")) return;
         std::lock_guard lock(state_mutex_);
         if (!error_.empty()) return;
         error_.assign(message.text);
