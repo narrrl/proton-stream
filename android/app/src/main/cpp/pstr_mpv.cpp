@@ -243,6 +243,10 @@ class Player {
         // falling back. The copy variants decode in hardware and hand back
         // ordinary frames, which is what this render path can actually use.
         option("hwdec", kHardwareDecoding);
+        // A box that cannot keep up must drop frames, not slow the picture:
+        // with the default (`vo` only) a late decoder falls further behind
+        // the audio and the video plays in slow motion beside it.
+        option("framedrop", "decoder+vo");
         option("cache", "yes");
         option("cache-secs", "30");
         option("demuxer-readahead-secs", "30");
