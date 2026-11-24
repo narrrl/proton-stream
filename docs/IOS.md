@@ -10,6 +10,7 @@ file of the same name is the one to change with it.
 | Android | iOS |
 |---|---|
 | `ui/AppViewModel.kt` | `App/AppModel.swift` |
+| `ui/Invites.kt` | `UI/Invites.swift` |
 | `ui/ProtonStreamApp.kt` | `App/ProtonStreamApp.swift` (`RootView`) |
 | `native/NativeRuntime.kt`, `native/KeystoreSecretStore.kt` | `App/NativeRuntime.swift`, `App/KeychainSecretStore.swift` |
 | `settings/SettingsStore.kt` | `App/SettingsStore.swift` (same keys, in `UserDefaults`) |
@@ -70,7 +71,8 @@ Each of these is the platform's doing, not a choice to diverge.
 - **No share sheet.** A share extension would cost a second app ID. A link reaches
   the app through its URL scheme — `protonstream://add?url=<link>`, or the link with
   `https` swapped for `protonstream` — or through **Paste link** in the Add share
-  form, which finds a link anywhere in the clipboard's text.
+  form, which finds a link anywhere in the clipboard's text. A `pstr://` invite
+  (`pstr_core::invite`) opens the app through the same `CFBundleURLTypes` entry.
 - **Downloads run while the app does.** A transfer is a Rust task, not a
   `URLSession` task, so iOS has nothing to hand it to in the background. A download
   keeps going for the grace iOS gives a backgrounded app, then stops at a block

@@ -12,6 +12,12 @@ func shareLink(in text: String) -> String? {
     text.range(of: shareLinkPattern, options: .regularExpression).map { String(text[$0]) }
 }
 
+/// Whether a link opened in this app is a `pstr://` invite (`pstr_core::invite`),
+/// to confirm, rather than one share link for the Add form.
+func isInviteLink(_ text: String) -> Bool {
+    text.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("pstr://")
+}
+
 /// The share link a URL opened in this app carries, if any.
 ///
 /// iOS hands an app no `https://drive.proton.me` link — Universal Links belong
@@ -19,6 +25,10 @@ func shareLink(in text: String) -> String? {
 /// `protonstream://add?url=<link>`, or the link itself with its scheme swapped,
 /// `protonstream://drive.proton.me/urls/…#…`.
 func shareLink(from url: URL) -> String? {
+    // An invite is handed on whole; Rust reads and checks it.
+    if url.scheme?.lowercased() == "pstr", url.host?.lowercased() == "add" {
+        return url.absoluteString
+    }
     guard url.scheme?.lowercased() == "protonstream" else { return nil }
     if url.host == "add" {
         let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?

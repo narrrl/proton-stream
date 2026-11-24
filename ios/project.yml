@@ -81,7 +81,7 @@ targets:
         # or the link with its scheme swapped (IncomingShareLink.swift).
         CFBundleURLTypes:
           - CFBundleURLName: io.narl.protonstream.share-link
-            CFBundleURLSchemes: [protonstream]
+            CFBundleURLSchemes: [protonstream, pstr]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

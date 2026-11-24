@@ -466,6 +466,9 @@ private fun Page(
                     ),
                     onRename = model::renameShare,
                     startHandoff = model::startShareHandoff,
+                    decodeInvite = model::decodeInvite,
+                    onAddInvited = model::addInvited,
+                    inviteLink = model::inviteLink,
                 )
             }
             Place.Settings -> Box(phonePage) {

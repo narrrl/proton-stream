@@ -36,6 +36,8 @@ import uniffi.pstr_android.ArrangementRecord
 import uniffi.pstr_android.BrowseFacet
 import uniffi.pstr_android.SearchExtrasRecord
 import uniffi.pstr_android.ShareHandoff
+import uniffi.pstr_android.InvitedShareRecord
+import uniffi.pstr_android.InviteRecord
 import uniffi.pstr_android.LibraryFilter
 import uniffi.pstr_android.LibrarySort
 import uniffi.pstr_android.ShareRecord
@@ -406,6 +408,36 @@ class AppViewModel(context: Context, private val workManager: WorkManager) : Vie
         reload()
         viewModelScope.launch { crawlAdded(listOf(share.id), announce = true) }
         return null
+    }
+
+    /** The shares an invite adds, each marked when the library has it already. */
+    suspend fun decodeInvite(text: String): Result<List<InvitedShareRecord>> = runCatching {
+        withContext(Dispatchers.IO) { NativeRuntime.engine().decodeInvite(text) }
+    }
+
+    /**
+     * Add every share of a confirmed invite, each opened first as [addShare]
+     * does, then crawl the ones that opened. Returns why any were refused.
+     */
+    suspend fun addInvited(shares: List<InvitedShareRecord>): String? {
+        val added = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        for (invited in shares) {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    NativeRuntime.engine().addShare(invited.name, invited.url, invited.customPassword)
+                }
+            }.onSuccess { added += it.id }
+                .onFailure { failed += "${invited.name.ifBlank { "Shared folder" }}: ${it.reason}" }
+        }
+        reload()
+        if (added.isNotEmpty()) viewModelScope.launch { crawlAdded(added, announce = true) }
+        return failed.takeIf { it.isNotEmpty() }?.joinToString("\n")
+    }
+
+    /** The invite for these shares, or for the whole library when empty. */
+    suspend fun inviteLink(shareIds: List<String>): Result<InviteRecord> = runCatching {
+        withContext(Dispatchers.IO) { NativeRuntime.engine().inviteLink(shareIds) }
     }
 
     /** Offer Continue watching on the television's home screen, or take it off. */

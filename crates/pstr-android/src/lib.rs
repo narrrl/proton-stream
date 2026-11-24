@@ -1263,6 +1263,48 @@ pub struct QrRecord {
     pub dark: Vec<bool>,
 }
 
+/// One share a `pstr://` invite adds; see `pstr_core::invite`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct InvitedShareRecord {
+    /// What the sender calls it; empty takes the shared folder's own name.
+    pub name: String,
+    /// The full share URL, fragment included. A secret.
+    pub url: String,
+    pub custom_password: Option<String>,
+    /// The library already has this share.
+    pub already_added: bool,
+}
+
+/// An invite link to hand out, and how many account folders it left out.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct InviteRecord {
+    /// The `pstr://add?…` link. A secret: it carries every password.
+    pub link: String,
+    pub left_out: u32,
+}
+
+/// The first `pstr://` invite in `text` — a message, the clipboard — if any.
+#[uniffi::export]
+pub fn find_invite(text: String) -> Option<String> {
+    pstr_core::invite::find(&text).map(str::to_owned)
+}
+
+/// Whether `text` is a `pstr://` invite rather than a bare share link.
+#[uniffi::export]
+pub fn is_invite(text: String) -> bool {
+    pstr_core::invite::is_invite(&text)
+}
+
+/// The QR code for `text`, an invite link.
+#[uniffi::export]
+pub fn qr_code(text: String) -> Result<QrRecord, BridgeError> {
+    let qr = pstr_core::handoff::Qr::encode(&text).map_err(BridgeError::from_display)?;
+    Ok(QrRecord {
+        width: u32::try_from(qr.width).map_err(BridgeError::from_display)?,
+        dark: qr.dark,
+    })
+}
+
 /// A TV listening for a share link from a phone; see `pstr_core::handoff`.
 /// [`Self::stop`] it when the screen showing its code goes away.
 #[derive(uniffi::Object)]
@@ -1769,6 +1811,32 @@ impl AndroidEngine {
         })
         .await
         .map_err(BridgeError::from_display)?
+    }
+
+    /// The shares a `pstr://` invite, or a bare share link, adds, each marked
+    /// when the library already has it. See `pstr_core::invite`.
+    pub fn decode_invite(&self, text: String) -> Result<Vec<InvitedShareRecord>, BridgeError> {
+        let invited = pstr_core::invite::decode(&text).map_err(BridgeError::from_display)?;
+        Ok(invited
+            .into_iter()
+            .map(|share| InvitedShareRecord {
+                already_added: self.store.contains_link(&share.url).unwrap_or(false),
+                name: share.name,
+                url: share.url,
+                custom_password: share.password,
+            })
+            .collect())
+    }
+
+    /// The invite for `share_ids`, or for every share when empty. Folders of
+    /// the account have no link and are left out.
+    pub fn invite_link(&self, share_ids: Vec<String>) -> Result<InviteRecord, BridgeError> {
+        let ids: Vec<&str> = share_ids.iter().map(String::as_str).collect();
+        let (link, left_out) = self.store.invite(&ids).map_err(BridgeError::from_display)?;
+        Ok(InviteRecord {
+            link,
+            left_out: u32::try_from(left_out).unwrap_or(u32::MAX),
+        })
     }
 
     /// Listen on `host`, this device's address on its home network, for a

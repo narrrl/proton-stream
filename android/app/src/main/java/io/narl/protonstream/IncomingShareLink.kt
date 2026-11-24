@@ -11,12 +11,26 @@ import android.content.Intent
  */
 private val SHARE_LINK = Regex("""https://drive\.proton\.me/urls/[^\s"'<>()\[\]]+""")
 
-/** The share link an `ACTION_VIEW` URL or an `ACTION_SEND` text carries, if any. */
+/**
+ * A `pstr://` invite (`pstr_core::invite`): one link carrying one share or a
+ * whole library, passwords included. Its payload is base64url, so the same
+ * stop characters end it.
+ */
+private val INVITE = Regex("""pstr://add[^\s"'<>()\[\]]*""", RegexOption.IGNORE_CASE)
+
+/**
+ * The share link or invite an `ACTION_VIEW` URL or an `ACTION_SEND` text
+ * carries, if any. In a message holding both, the invite wins: it is the
+ * newer, deliberate form.
+ */
 internal fun shareLinkFrom(action: String?, url: String?, text: CharSequence?): String? = when (action) {
-    Intent.ACTION_VIEW -> url?.let { SHARE_LINK.matchEntire(it)?.value }
-    Intent.ACTION_SEND -> text?.let { SHARE_LINK.find(it)?.value }
+    Intent.ACTION_VIEW -> url?.let { SHARE_LINK.matchEntire(it)?.value ?: INVITE.matchEntire(it)?.value }
+    Intent.ACTION_SEND -> text?.let { INVITE.find(it)?.value ?: SHARE_LINK.find(it)?.value }
     else -> null
 }
+
+/** Whether an incoming link is an invite, to confirm, rather than one share link for the form. */
+internal fun isInviteLink(text: String): Boolean = text.trimStart().startsWith("pstr://", ignoreCase = true)
 
 internal fun Intent.shareLink(): String? =
     shareLinkFrom(action, dataString, getCharSequenceExtra(Intent.EXTRA_TEXT))
