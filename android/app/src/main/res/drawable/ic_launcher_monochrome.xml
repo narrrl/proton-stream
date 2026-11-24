@@ -6,10 +6,7 @@
             <path android:pathData="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" android:fillType="nonZero" android:fillColor="#FFFFFFFF" />
         </group>
         <path android:pathData="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" android:fillType="nonZero" android:fillColor="#FFFFFFFF" />
-        <group>
-            <clip-path android:pathData="M65 37C54 31 40 39 40 52V212C40 225 54 233 65 227L219 141C230 135 230 121 219 115Z" />
-            <path android:pathData="M20 150C58 128 92 168 132 150C164 136 194 124 236 128V240H20Z" android:fillType="nonZero" android:fillColor="#FFFFFFFF" />
-            <path android:pathData="M20 182C62 160 98 198 140 178C170 164 198 152 236 150V240H20Z" android:fillType="nonZero" android:fillColor="#FFFFFFFF" />
-        </group>
+        <path android:pathData="M40 143.5C70.3 140.4 99.1 164.8 132 150C161.7 137 189.7 125.7 227.2 127.4C227.5 132.6 224.7 137.9 219 141L65 227C54 233 40 225 40 212Z" android:fillType="nonZero" android:fillColor="#FFFFFFFF" />
+        <path android:pathData="M40 175.5C73.8 170.8 104.8 194.8 140 178C155.7 170.7 170.8 163.9 187 158.9L65 227C54 233 40 225 40 212Z" android:fillType="nonZero" android:fillColor="#FFFFFFFF" />
     </group>
 </vector>

@@ -26,9 +26,10 @@ Requires Python 3, librsvg (`rsvg-convert`), and ImageMagick (`magick`). Stream'
 ## Platform treatment
 
 - Desktop SVGs and PNGs retain transparent margins and the exact approved geometry. The same colored artwork works on light and dark surfaces.
+- The desktop SVG uses no `clip-path` in its mark: QtSvg, which Qt shells and launchers draw icons with, ignores it, so a clipped shape spills outside the outline. Cut shapes in their own paths; the generator refuses a clipped Drive or Stream mark.
 - Android adaptive icons use a deep violet full-bleed plate, lit from the top left like the copper rim, and a separate foreground containing the complete object. The 256-unit canvas maps to the central 64dp of the 108dp adaptive canvas; the painted geometry stays within the central safe circle. Android supplies the outer mask.
 - Themed launcher icons and Stream's status-bar notification icon use a white silhouette without colored bevel highlights. Stream's currents sit inside the prism, so its silhouette is the plain play shape.
-- iOS uses the same play prism over an opaque pale lavender square, exported at 1024px. The system supplies the corner mask.
+- iOS uses Android's deep violet plate and the same crop as an Android launcher icon (the visible 72dp window, with the mark filling 64dp of it), so both phones show one icon. Exported opaque at 1024px; the system supplies the corner mask.
 - The Android TV banner pairs the play prism with the full Proton Stream name.
 
 Keep full product names in launcher metadata. Application UI typography and photo-content icons are independent of this branding.
