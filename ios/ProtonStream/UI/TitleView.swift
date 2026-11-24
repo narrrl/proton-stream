@@ -76,7 +76,7 @@ struct TitleView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     backdrop(height: backdropHeight + geometry.safeAreaInsets.top, barFrom: backdropHeight - 2 * titleBarHeight)
-                    heading(playlist: playlist, nextUp: nextUp, upNext: upNext)
+                    heading(playlist: playlist, nextUp: nextUp, upNext: upNext, season: season)
                         .padding(.horizontal, side + 16)
                     if franchise.count > 1 {
                         coverRow("In this franchise", franchise, side: side)
@@ -217,7 +217,7 @@ struct TitleView: View {
         .animation(.easeOut(duration: 0.15), value: solid > 0.5)
     }
 
-    @ViewBuilder private func heading(playlist: [EpisodeRecord], nextUp: Int, upNext: EpisodeRecord?) -> some View {
+    @ViewBuilder private func heading(playlist: [EpisodeRecord], nextUp: Int, upNext: EpisodeRecord?, season: SeasonRecord?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // A light page keeps the name: a clear logo is lettering made for
             // dark art, white as often as not.
@@ -280,7 +280,25 @@ struct TitleView: View {
                 }
             }
             .padding(.top, 12)
-            if let overview = title.overview {
+            // The picked season, where the provider files it as an entry of its
+            // own: its cover and name, and its synopsis in place of season one's.
+            if let season, season.posterUrl != nil || season.entryName != nil {
+                HStack(spacing: 12) {
+                    if let poster = season.posterUrl {
+                        RemoteArtwork(poster, season.entryName ?? season.label, labelled: false)
+                            .frame(width: 56)
+                            .aspectRatio(2 / 3, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(season.entryName ?? season.label).textStyle(.titleSmall).foregroundStyle(scheme.onSurface)
+                        Text([season.label, season.year.map { String($0) }].compactMap { $0 }.joined(separator: "  ·  "))
+                            .textStyle(.bodySmall).foregroundStyle(scheme.onSurfaceVariant)
+                    }
+                }
+                .padding(.top, 16)
+            }
+            if let overview = season?.overview ?? title.overview {
                 // Three lines, then a tap for the rest.
                 Text(overview.trimmingCharacters(in: .whitespacesAndNewlines))
                     .textStyle(.bodyLarge)

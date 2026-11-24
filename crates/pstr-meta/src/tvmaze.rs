@@ -304,6 +304,7 @@ impl Show {
             logo_url: None,
             chain: Vec::new(),
             airing: None,
+            seasons: Vec::new(),
         }
     }
 }

@@ -136,7 +136,16 @@ internal fun TvTitle(
                                 modifier = Modifier.padding(top = 4.dp),
                             )
                         }
-                        title.overview?.let {
+                        // The picked season's own name and synopsis, where the
+                        // provider files it as an entry of its own.
+                        season?.entryName?.let { name ->
+                            Text(
+                                listOfNotNull(name, season.year?.toString()).joinToString("  ·  "),
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(top = 12.dp),
+                            )
+                        }
+                        (season?.overview ?: title.overview)?.let {
                             Text(
                                 it,
                                 style = MaterialTheme.typography.bodyMedium,
