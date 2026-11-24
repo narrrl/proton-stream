@@ -175,7 +175,7 @@ fn appearance_form(
             ui,
             "Gradient accent",
             Some(
-                "Fade the accent into a second colour. Off draws it flat, which suits a panel that bands gradients into stripes.",
+                "Shade the accent darker across a button or a bar. Off draws it flat, the suite's own look.",
             ),
             |ui| {
                 if ui::widgets::toggle(ui, &mut gradients, "").changed() {

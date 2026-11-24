@@ -14,6 +14,7 @@ struct SharesView: View {
     @State private var repairing: ShareRecord?
     @State private var removing: ShareRecord?
     @State private var renaming: ShareRecord?
+    @State private var inviting: InviteRequest?
 
     var body: some View {
         TabPage("Shares") {
@@ -36,8 +37,17 @@ struct SharesView: View {
                                     onRefresh: { model.refreshShare(share.id) },
                                     onRepair: { repairing = share },
                                     onRename: { renaming = share },
-                                    onRemove: { removing = share }
+                                    onRemove: { removing = share },
+                                    onInvite: share.fromAccount ? nil : { inviting = InviteRequest(ids: [share.id]) }
                                 )
+                            }
+                            // Two or more links make a library worth handing on whole.
+                            if model.shares.filter({ !$0.fromAccount }).count > 1 {
+                                Button { inviting = InviteRequest(ids: []) } label: {
+                                    Label("Share the whole library", systemImage: "square.and.arrow.up")
+                                }
+                                .buttonStyle(.tonal)
+                                .padding(16)
                             }
                         }
                         .padding(.top, 8)
@@ -59,12 +69,24 @@ struct SharesView: View {
             }
         }
         .sheet(isPresented: Binding(get: { showAdd || incomingLink != nil }, set: { if !$0 { showAdd = false; incomingLink = nil } })) {
-            AddShareSheet(initialUrl: incomingLink ?? "") { name, url, password in
-                let first = model.titles.isEmpty
-                let refusal = await model.addShare(name: name, url: url, password: password)
-                if refusal == nil && first { onFirstShareAdded() }
-                return refusal
+            if let link = incomingLink, isInviteLink(link) {
+                IncomingInviteSheet(link: link) { invited in
+                    let first = model.titles.isEmpty
+                    let refusal = await model.addInvited(invited)
+                    if refusal == nil && first { onFirstShareAdded() }
+                    return refusal
+                }
+            } else {
+                AddShareSheet(initialUrl: incomingLink ?? "") { name, url, password in
+                    let first = model.titles.isEmpty
+                    let refusal = await model.addShare(name: name, url: url, password: password)
+                    if refusal == nil && first { onFirstShareAdded() }
+                    return refusal
+                }
             }
+        }
+        .sheet(item: $inviting) { request in
+            OutgoingInviteSheet(ids: request.ids)
         }
         .sheet(isPresented: Binding(
             get: { signingIn || model.account.state == .secondFactor || model.account.state == .mailboxPassword },
@@ -131,6 +153,7 @@ private struct ShareRow: View {
     let onRepair: () -> Void
     let onRename: () -> Void
     let onRemove: () -> Void
+    var onInvite: (() -> Void)?
     @Environment(\.scheme) private var scheme
 
     var body: some View {
@@ -153,6 +176,9 @@ private struct ShareRow: View {
                 // One share, not the library: a link that has just had files
                 // added should not cost a walk of every other one.
                 Button(action: onRefresh) { Label("Refresh", systemImage: "arrow.clockwise") }
+                if let onInvite {
+                    Button(action: onInvite) { Label("Invite…", systemImage: "square.and.arrow.up") }
+                }
                 Button(action: onRename) { Label("Rename", systemImage: "pencil") }
                 // Not a remove: a share whose secret has become unreadable
                 // cannot be removed either.

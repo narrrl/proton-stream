@@ -50,6 +50,7 @@ import androidx.tv.material3.FilterChip
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.OutlinedButton
+import androidx.tv.material3.OutlinedButtonDefaults
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import io.narl.protonstream.ui.RemoteArtwork
@@ -145,6 +146,12 @@ internal fun TvTitle(
                                 modifier = Modifier.fillMaxWidth(HEADER_WIDTH).padding(top = 12.dp),
                             )
                         }
+                        // The secondary buttons on a wash of the page rather than
+                        // bare: the row runs out over the artwork, and an outline
+                        // alone left "Watched" white on a white sky.
+                        val quiet = OutlinedButtonDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = QUIET_BUTTON_ALPHA),
+                        )
                         Row(
                             Modifier.padding(top = 20.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -162,7 +169,8 @@ internal fun TvTitle(
                                         !playerReady -> "Player loading…"
                                         upNext == null -> "Play"
                                         upNext.resumeAt != null -> "Resume ${upNext.label}"
-                                        title.watchedCount > 0uL -> "Continue with ${upNext.label}"
+                                        // Watched through, it starts the show again: nothing to continue.
+                                        title.watchedCount > 0uL && !upNext.watched -> "Continue with ${upNext.label}"
                                         playlist.size == 1 -> "Play"
                                         else -> "Play ${upNext.label}"
                                     },
@@ -172,19 +180,19 @@ internal fun TvTitle(
                             // Only where it would do something different: an unstarted
                             // show already starts at the beginning.
                             if (upNext?.resumeAt != null || title.watchedCount > 0uL) {
-                                OutlinedButton(onClick = { actions.onPlay(0) }, enabled = playerReady) {
+                                OutlinedButton(onClick = { actions.onPlay(0) }, enabled = playerReady, colors = quiet) {
                                     Icon(Icons.Default.Replay, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
                                     Text("Start over", maxLines = 1)
                                 }
                             }
-                            OutlinedButton(onClick = { actions.onSetOnList(title, !title.onList) }) {
+                            OutlinedButton(onClick = { actions.onSetOnList(title, !title.onList) }, colors = quiet) {
                                 Icon(if (title.onList) Icons.Default.Check else Icons.Default.Add, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
                                 Text("My List", maxLines = 1)
                             }
                             val allWatched = title.episodeCount > 0uL && title.watchedCount == title.episodeCount
-                            OutlinedButton(onClick = { actions.onSetTitleWatched(title, !allWatched) }) {
+                            OutlinedButton(onClick = { actions.onSetTitleWatched(title, !allWatched) }, colors = quiet) {
                                 Icon(
                                     if (allWatched) Icons.Default.CheckCircle else Icons.Outlined.CheckCircle,
                                     contentDescription = null,
@@ -378,3 +386,6 @@ private const val EPISODE_WIDTH = 0.8f
 private val TITLE_LOGO = 88.dp
 private val STILL_WIDTH = 176.dp
 private val EPISODE_INSET = 8.dp
+
+/** How much of the page shows under a secondary button over artwork. */
+private const val QUIET_BUTTON_ALPHA = 0.72f

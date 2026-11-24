@@ -246,6 +246,46 @@ impl ShareStore {
         Ok((share, client))
     }
 
+    /// The `pstr://` invite for the shares named by `ids`, in library order,
+    /// or for every share when `ids` is empty; see [`crate::invite`].
+    ///
+    /// Folders of the signed-in account have no secret to pass on and are
+    /// left out; the second value is how many were. A selection of nothing
+    /// but folders is an error, since there is no link to give.
+    pub fn invite(&self, ids: &[&str]) -> Result<(String, usize)> {
+        let mut invited = Vec::new();
+        let mut left_out = 0;
+        for share in self.list()? {
+            if !ids.is_empty() && !ids.contains(&share.id.as_str()) {
+                continue;
+            }
+            if share.folder.is_some() {
+                left_out += 1;
+                continue;
+            }
+            let secrets = self.load_secrets(&share.id)?;
+            invited.push(crate::invite::InvitedShare {
+                name: share.name,
+                url: secrets.url,
+                password: secrets.custom_password,
+            });
+        }
+        if invited.is_empty() {
+            return Err(Error::Config(if left_out > 0 {
+                "folders of your Proton account cannot be shared by invite".to_owned()
+            } else {
+                "nothing to invite to".to_owned()
+            }));
+        }
+        Ok((crate::invite::encode(&invited)?, left_out))
+    }
+
+    /// Whether the library already holds the share `url` links to.
+    pub fn contains_link(&self, url: &str) -> Result<bool> {
+        let id = format!("share-{}", token_from_url(url)?);
+        Ok(self.list()?.iter().any(|share| share.id == id))
+    }
+
     /// Record a share another installation has, with the secrets it opens
     /// with, replacing what this one holds under the same id. See
     /// [`crate::profile`].
@@ -1126,6 +1166,66 @@ mod tests {
                 .iter()
                 .any(|share| share.id == added.id && share.has_custom_password)
         );
+    }
+
+    #[test]
+    fn an_invite_for_the_whole_library_carries_every_link_and_password_but_no_folder() {
+        let (store, _) = store_in("invite");
+        store
+            .add(
+                "Anime",
+                "https://drive.proton.me/urls/ABC123#s3cr3t",
+                Some("pw"),
+            )
+            .expect("add");
+        store
+            .add("Films", "https://drive.proton.me/urls/DEF456#s3cr3t", None)
+            .expect("add");
+        store
+            .add_folder(
+                "Mine",
+                AccountFolder {
+                    volume_id: "v".into(),
+                    link_id: "l".into(),
+                },
+            )
+            .expect("add folder");
+
+        let (link, left_out) = store.invite(&[]).expect("invite");
+        assert_eq!(left_out, 1);
+        let shares = crate::invite::decode(&link).expect("decode");
+        assert_eq!(shares.len(), 2);
+        assert_eq!(shares[0].name, "Anime");
+        assert_eq!(shares[0].password.as_deref(), Some("pw"));
+        assert_eq!(shares[1].url, "https://drive.proton.me/urls/DEF456#s3cr3t");
+
+        let (one, _) = store.invite(&["share-DEF456"]).expect("invite one");
+        assert_eq!(crate::invite::decode(&one).expect("decode").len(), 1);
+        assert!(
+            store
+                .contains_link("https://drive.proton.me/urls/ABC123#other")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .contains_link("https://drive.proton.me/urls/XYZ789#s3cr3t")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn an_invite_of_only_account_folders_is_refused() {
+        let (store, _) = store_in("invite-folders");
+        let folder = store
+            .add_folder(
+                "Mine",
+                AccountFolder {
+                    volume_id: "v".into(),
+                    link_id: "l".into(),
+                },
+            )
+            .expect("add folder");
+        assert!(store.invite(&[folder.id.as_str()]).is_err());
     }
 
     #[test]

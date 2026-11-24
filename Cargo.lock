@@ -5406,6 +5406,7 @@ name = "pstr-core"
 version = "2.4.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "directories",
  "futures",
  "getrandom 0.3.4",

@@ -320,25 +320,23 @@ struct Skeleton: View {
     }
 }
 
-/// Art for a title that has none: the accent as a gradient, and its initials.
-///
-/// Each name sets where on the accent ramp its gradient starts, so neighbours
-/// differ while every one stays in the theme's colours — and since the hash is
-/// Java's, a title gets the same colour here as on Android.
+/// Art for a title that has none: a quiet card in the surface tone, with a
+/// hairline and the title's initials. As on Android: a wall of hashed accent
+/// gradients read as confetti, and the initials are what tells two apart.
 struct ArtworkPlaceholder: View {
     let name: String
     var labelled = true
     @Environment(\.scheme) private var scheme
 
     var body: some View {
-        let start = mix(scheme.primary, scheme.secondary, Double(javaHash(name).modulo(5)) / 4)
         GeometryReader { geometry in
-            LinearGradient(colors: [start, mix(start, .black, 0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            scheme.surfaceContainer
+                .overlay { Rectangle().strokeBorder(scheme.outlineVariant, lineWidth: 1) }
                 .overlay {
                     if labelled {
                         Text(initials(name))
                             .font(.inter(size: min(geometry.size.width, geometry.size.height) * 0.3, semibold: true))
-                            .foregroundStyle(Color.white.opacity(0.9))
+                            .foregroundStyle(scheme.onSurfaceVariant.opacity(0.7))
                             .lineLimit(1)
                     }
                 }

@@ -165,8 +165,13 @@ pub enum Action {
     StopCrawl,
     /// Save the frame on screen to the pictures folder.
     Screenshot,
-    /// A share link was pasted outside the form: open the form with it.
+    /// A share link was pasted outside the form: open the form with it. An
+    /// invite opens its confirmation instead.
     PasteShare(String),
+    /// Show the invite link for these shares, or for every share when empty.
+    ShareInvite(Vec<String>),
+    /// Add what a confirmed invite carries.
+    AddInvited(Vec<pstr_core::invite::InvitedShare>),
     /// Go to the add form, caret in the link field.
     OpenShareForm,
     /// Stop offering posters and synopses on the library page.
@@ -691,6 +696,10 @@ pub struct ShareForm {
     /// The share being renamed in its own row, if any, and the name so far.
     pub renaming: Option<String>,
     pub rename_to: String,
+    /// An invite that arrived, waiting to be confirmed.
+    pub invite_in: Option<crate::ui::shares::IncomingInvite>,
+    /// An invite being handed out: its link and QR code.
+    pub invite_out: Option<crate::ui::shares::OutgoingInvite>,
 }
 
 pub struct App {
@@ -986,6 +995,25 @@ impl App {
                     // The field the refusal asks for, opened and ready.
                     if needs_password {
                         self.form.has_password = true;
+                    }
+                }
+                Event::InviteAdded {
+                    added,
+                    already,
+                    failed,
+                } => {
+                    self.connecting = false;
+                    if !added.is_empty() {
+                        self.crawling = true;
+                    }
+                    if let Some(said) = invite_summary(&added, already) {
+                        self.note(ctx, said, false);
+                    }
+                    if let Some(text) = describe_failures(&failed) {
+                        self.note(ctx, text, true);
+                    }
+                    if !added.is_empty() && self.library.is_empty() && self.page == Page::Shares {
+                        self.page = Page::Library;
                     }
                 }
                 Event::Connected { failures } => {
@@ -1930,6 +1958,36 @@ impl App {
                 ));
                 self.send_player(crate::playback::Command::Screenshot(path));
                 self.flash(ctx, egui_phosphor::regular::CAMERA, "Screenshot saved");
+            }
+            Action::PasteShare(url) if pstr_core::invite::is_invite(&url) => {
+                self.page = Page::Shares;
+                self.form.url.clear();
+                match pstr_core::invite::decode(&url) {
+                    Ok(invited) => {
+                        self.form.invite_in = Some(crate::ui::shares::IncomingInvite::new(
+                            invited,
+                            &self.shares,
+                        ));
+                    }
+                    Err(error) => self.note(ctx, error.to_string(), true),
+                }
+            }
+            Action::ShareInvite(ids) => {
+                let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+                match self.engine.invite_link(&ids) {
+                    Ok((link, left_out)) => {
+                        self.form.invite_out =
+                            Some(crate::ui::shares::OutgoingInvite::new(ctx, link, left_out));
+                    }
+                    Err(error) => self.note(ctx, error.to_string(), true),
+                }
+            }
+            Action::AddInvited(invited) => {
+                self.form.invite_in = None;
+                // Opening each share is a handshake, not a crawl; the crawl
+                // that follows reports itself.
+                self.connecting = true;
+                self.engine.add_invited(invited);
             }
             Action::PasteShare(url) => {
                 self.page = Page::Shares;
@@ -3140,6 +3198,27 @@ fn page_fade(ctx: &egui::Context, shown: &mut (Option<Page>, f64), page: &Page) 
     theme::motion::ease_out(progress)
 }
 
+/// What an accepted invite did, for one status line; `None` when it added
+/// nothing and found nothing already there, so a refusal is the only line.
+fn invite_summary(added: &[String], already: usize) -> Option<String> {
+    let mut said = match added {
+        [] if already == 0 => return None,
+        [] => String::new(),
+        [one] => format!("added {one}"),
+        many => format!("added {} shares", many.len()),
+    };
+    if already > 0 {
+        if !said.is_empty() {
+            said.push_str(", ");
+        }
+        said.push_str(&match already {
+            1 => "1 was already in the library".to_owned(),
+            count => format!("{count} were already in the library"),
+        });
+    }
+    Some(said)
+}
+
 /// What the top bar says while shares are being listed: one share by name,
 /// several as a count, with the files found across all of them.
 fn crawl_label(progress: &std::collections::BTreeMap<String, usize>) -> String {
@@ -3254,7 +3333,7 @@ fn global_shortcuts(ctx: &egui::Context, page: &Page, actions: &mut Vec<Action>)
         if !typing {
             for event in &input.events {
                 if let egui::Event::Paste(text) = event
-                    && pstr_core::shares::share_token(text.trim()).is_ok()
+                    && pstr_core::invite::decode(text.trim()).is_ok()
                 {
                     actions.push(Action::PasteShare(text.trim().to_owned()));
                 }
@@ -3566,6 +3645,23 @@ mod tests {
                 "poster:found",
                 "poster:moved"
             ]
+        );
+    }
+
+    #[test]
+    fn an_invite_that_added_nothing_new_says_nothing_of_its_own() {
+        assert_eq!(invite_summary(&[], 0), None);
+        assert_eq!(
+            invite_summary(&[], 2).as_deref(),
+            Some("2 were already in the library")
+        );
+        assert_eq!(
+            invite_summary(&["anime".to_owned()], 1).as_deref(),
+            Some("added anime, 1 was already in the library")
+        );
+        assert_eq!(
+            invite_summary(&["a".to_owned(), "b".to_owned()], 0).as_deref(),
+            Some("added 2 shares")
         );
     }
 }

@@ -174,7 +174,7 @@ Press **?** anywhere to see this list in the app.
 | F5 or Ctrl+R | Read every share again |
 | Ctrl+1 – 5 | Library, History, Shares, Downloads, Settings |
 | Ctrl+, | Settings |
-| Ctrl+V | Paste a share link to add it |
+| Ctrl+V | Paste a share link or an invite to add it |
 | Tab or arrows | Move between titles and episodes |
 | Enter | Open or play what is highlighted |
 | Alt+← or mouse back | Back |
@@ -244,6 +244,22 @@ The **Shares** page lists every share, with what it holds and when it was last r
 - **Remove** takes the share's titles out of the library, deletes its downloads and removes its
   link and password from the keyring.
 
+### Inviting someone
+
+The share icon on a share's row makes an **invite**: one `pstr://` link, shown as a QR code
+too, that adds the share on another device running Proton Stream. With two or more shares,
+**Share the whole library** makes one invite for all of them. **Copy link** puts it on the
+clipboard; the link itself is never shown.
+
+An invite carries each share's link and custom password, so anyone who has it can open what it
+shares. Send it only to people you trust. Folders of your own Proton account are left out: they
+have no link to pass on.
+
+Opening an invite — clicking it, or pasting it anywhere in the window or into the Add form —
+lists what it adds, with shares you already have greyed out. **Add** opens each share, stores
+it and reads it. Clicking a `pstr://` link opens the app on Linux (the desktop entry registers
+the scheme) and on Windows (the installer does). On macOS, paste it.
+
 The **Proton account** section on this page is where you sign in. See
 [Account and sync](ACCOUNT_AND_SYNC.md).
 
@@ -254,7 +270,8 @@ The **Proton account** section on this page is where you sign in. See
 - **Palette:** Proton (the default, plum-black like Proton Drive and Proton Gallery), Proton
   Light, Catppuccin Latte, Frappé, Macchiato and Mocha, or Persona 5.
 - **Accent:** Mauve (the suite's violet), Pink, Sky, Pink → Sky, Lavender, Blue, Teal, Peach,
-  Copper or Red. **Gradient accent** draws it as a gradient; Mauve runs into orchid.
+  Copper or Red. **Gradient accent** shades it darker across a button or a bar, and is off
+  by default; only Pink → Sky runs from one colour into another.
 - **Text size:** 90% to 150%. This one stays on this computer.
 - **Library tiles:** posters or stills. **Title names:** as in the share, English or romaji.
 

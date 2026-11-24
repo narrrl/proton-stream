@@ -158,36 +158,25 @@ impl Tiles {
 }
 
 /// The whole of the choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 // An older or hand-edited file is missing fields rather than invalid.
 #[serde(default)]
 pub struct Appearance {
     pub flavor: Flavor,
     pub accent: Accent,
-    /// Whether the accent is painted as a gradient — the seek bar, the play
-    /// button, the top bar — or flat.
+    /// Whether an accent fill carries a little depth — the accent running into
+    /// a shade of itself across a button or a seek bar — or is flat.
     ///
-    /// A switch rather than a fixed decision because a gradient is the first
-    /// thing to go wrong on a screen that cannot show it: on 6-bit panels a
-    /// slow ramp across a wide bar bands visibly, and flat is better than
-    /// striped.
+    /// Tonal only: a fill never runs from one hue into another, which is what
+    /// made the old violet-to-orchid ramps read as decoration rather than
+    /// design. [`Accent::PinkSky`] is the one exception, because a two-hue
+    /// ramp is what choosing it means. Off by default; flat is the suite's
+    /// look, and a slow ramp across a wide bar bands visibly on 6-bit panels.
     pub gradients: bool,
     /// The library grid's shape.
     pub tiles: Tiles,
     /// Which name a title goes by.
     pub names: crate::metadata::TitleNames,
-}
-
-impl Default for Appearance {
-    fn default() -> Self {
-        Self {
-            flavor: Flavor::default(),
-            accent: Accent::default(),
-            gradients: true,
-            tiles: Tiles::default(),
-            names: crate::metadata::TitleNames::default(),
-        }
-    }
 }
 
 fn appearance_file(dirs: &AppDirs) -> std::path::PathBuf {
@@ -203,6 +192,36 @@ pub fn load(dirs: &AppDirs) -> Result<Appearance> {
 pub fn save(dirs: &AppDirs, appearance: &Appearance) -> Result<()> {
     write_json(&appearance_file(dirs), appearance)
 }
+
+/// How opaque a scrim is at `t`, from its solid end (`0.0`) to its clear end
+/// (`1.0`).
+///
+/// A scrim is what lets text sit on artwork, and the one place in the suite a
+/// gradient is drawn on purpose. A linear fade ends in a visible line where it
+/// meets the clear picture: the eye sees the sudden change of slope, not the
+/// opacity. This curve is flat at both ends (`1 - smoothstep`), so neither end
+/// has an edge.
+///
+/// Every client draws scrims from this curve, desktop per texel and the
+/// mobile clients from [`SCRIM_STOPS`], so a banner fades the same way on each.
+pub fn scrim(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
+/// [`scrim`] sampled at nine evenly spaced stops, as `(position, opacity)`,
+/// for clients whose gradient takes a list of stops (Compose, SwiftUI).
+pub const SCRIM_STOPS: [(f32, f32); 9] = [
+    (0.0, 1.0),
+    (0.125, 0.957),
+    (0.25, 0.844),
+    (0.375, 0.684),
+    (0.5, 0.5),
+    (0.625, 0.316),
+    (0.75, 0.156),
+    (0.875, 0.043),
+    (1.0, 0.0),
+];
 
 /// One colour, 8 bits a channel, with no alpha.
 ///
@@ -386,8 +405,9 @@ pub struct Palette {
     pub muted: Rgb,
     /// The one strong colour.
     pub accent: Rgb,
-    /// What a gradient in the accent runs into. Equal to [`Self::accent`] when
-    /// the accent is a single hue and gradients would have nothing to do.
+    /// What a gradient in the accent runs into: a shade of the accent, never
+    /// another hue (except for [`Accent::PinkSky`]). Equal to
+    /// [`Self::accent`] when gradients are off.
     pub accent_alt: Rgb,
     /// The accent taken down into the background, for a pressed control and for
     /// selection behind text.
@@ -421,11 +441,9 @@ struct Ramp {
     pink: Rgb,
     mauve: Rgb,
     sky: Rgb,
-    sapphire: Rgb,
     blue: Rgb,
     lavender: Rgb,
     teal: Rgb,
-    green: Rgb,
     peach: Rgb,
     yellow: Rgb,
     red: Rgb,
@@ -459,11 +477,9 @@ const PROTON: Ramp = Ramp {
     pink: rgb(0xb65bd6),
     mauve: rgb(0x6d4aff),
     sky: rgb(0x4dd2ff),
-    sapphire: rgb(0x3a8fc4),
     blue: rgb(0x3f6fe0),
     lavender: rgb(0xa48bff),
     teal: rgb(0x3fd6b8),
-    green: rgb(0x56d364),
     peach: rgb(0xff9a4d),
     yellow: rgb(0xffd166),
     red: rgb(0xe05561),
@@ -483,21 +499,40 @@ const PROTON_LIGHT: Ramp = Ramp {
     pink: rgb(0xb65bd6),
     mauve: rgb(0x6d4aff),
     sky: rgb(0x0a8fc7),
-    sapphire: rgb(0x1478a8),
     blue: rgb(0x3b5bdb),
     lavender: rgb(0x7b5cf0),
     teal: rgb(0x0f8f7a),
-    green: rgb(0x2f9e44),
     peach: rgb(0xd9711c),
     yellow: rgb(0xb7860b),
     red: rgb(0xb42339),
     light: true,
 };
 
-/// The suite's copper: the lit band on dark pages, the deeper one on light.
-const COPPER_LIT: Rgb = rgb(0xd69b77);
-const COPPER: Rgb = rgb(0xb47456);
-const COPPER_DEEP: Rgb = rgb(0x8a4d36);
+/// The suite's copper, as a scale (`docs/DESIGN-TOKENS.md`).
+///
+/// 400 is the lit band, what copper is on a dark page; 500 is copper on a light
+/// one. The rest are for the clients that need a tint behind a copper label
+/// (100, 200 on dark) or a copper border on a light page (600, 700). Before
+/// this scale existed only the icons had the light and dark ends, and copper
+/// in the app was a single flat value that went muddy wherever it was used.
+pub mod copper {
+    use super::{Rgb, rgb};
+
+    pub const C100: Rgb = rgb(0xfbebdd);
+    pub const C200: Rgb = rgb(0xf2c9aa);
+    pub const C300: Rgb = rgb(0xe5b08d);
+    pub const C400: Rgb = rgb(0xd69b77);
+    pub const C500: Rgb = rgb(0xb47456);
+    pub const C600: Rgb = rgb(0x8f5940);
+    pub const C700: Rgb = rgb(0x703e30);
+}
+
+const COPPER_LIT: Rgb = copper::C400;
+const COPPER: Rgb = copper::C500;
+
+/// How far an accent's gradient partner is taken towards black. Enough to read
+/// as light falling across the control, not enough to read as a second colour.
+const TONAL_SHADE: f32 = 0.16;
 
 const LATTE: Ramp = Ramp {
     base: rgb(0xeff1f5),
@@ -510,11 +545,9 @@ const LATTE: Ramp = Ramp {
     pink: rgb(0xea76cb),
     mauve: rgb(0x8839ef),
     sky: rgb(0x04a5e5),
-    sapphire: rgb(0x209fb5),
     blue: rgb(0x1e66f5),
     lavender: rgb(0x7287fd),
     teal: rgb(0x179299),
-    green: rgb(0x40a02b),
     peach: rgb(0xfe640b),
     yellow: rgb(0xdf8e1d),
     red: rgb(0xd20f39),
@@ -532,11 +565,9 @@ const FRAPPE: Ramp = Ramp {
     pink: rgb(0xf4b8e4),
     mauve: rgb(0xca9ee6),
     sky: rgb(0x99d1db),
-    sapphire: rgb(0x85c1dc),
     blue: rgb(0x8caaee),
     lavender: rgb(0xbabbf1),
     teal: rgb(0x81c8be),
-    green: rgb(0xa6d189),
     peach: rgb(0xef9f76),
     yellow: rgb(0xe5c890),
     red: rgb(0xe78284),
@@ -554,11 +585,9 @@ const MACCHIATO: Ramp = Ramp {
     pink: rgb(0xf5bde6),
     mauve: rgb(0xc6a0f6),
     sky: rgb(0x91d7e3),
-    sapphire: rgb(0x7dc4e4),
     blue: rgb(0x8aadf4),
     lavender: rgb(0xb7bdf8),
     teal: rgb(0x8bd5ca),
-    green: rgb(0xa6da95),
     peach: rgb(0xf5a97f),
     yellow: rgb(0xeed49f),
     red: rgb(0xed8796),
@@ -576,11 +605,9 @@ const MOCHA: Ramp = Ramp {
     pink: rgb(0xf5c2e7),
     mauve: rgb(0xcba6f7),
     sky: rgb(0x89dceb),
-    sapphire: rgb(0x74c7ec),
     blue: rgb(0x89b4fa),
     lavender: rgb(0xb4befe),
     teal: rgb(0x94e2d5),
-    green: rgb(0xa6e3a1),
     peach: rgb(0xfab387),
     yellow: rgb(0xf9e2af),
     red: rgb(0xf38ba8),
@@ -606,11 +633,9 @@ const PERSONA5: Ramp = Ramp {
     pink: rgb(0xff2e63),
     mauve: rgb(0xb13bd6),
     sky: rgb(0x2ec7ff),
-    sapphire: rgb(0x1f9bd0),
     blue: rgb(0x2f5ee0),
     lavender: rgb(0xa07bff),
     teal: rgb(0x12c2a0),
-    green: rgb(0x2fbf4f),
     peach: rgb(0xff7a1a),
     yellow: rgb(0xffc400),
     red: rgb(0xe60012),
@@ -630,29 +655,32 @@ impl Ramp {
         }
     }
 
-    /// The accent, and the hue a gradient in it runs into.
+    /// The accent, and what a gradient in it runs into.
     ///
-    /// The partners are neighbours on the wheel rather than complements: a
-    /// gradient across half the spectrum passes through a colour that belongs
-    /// to neither end, and on a seek bar that reads as a bug. The exception is
+    /// A shade of the same hue, so a gradient is depth and not a second
+    /// colour: a ramp from violet into orchid on every button and bar is the
+    /// look of a template, not of a product. The exception is
     /// [`Accent::PinkSky`], which is the whole point of that entry.
     fn accents(&self, flavor: Flavor, accent: Accent) -> (Rgb, Rgb) {
-        match accent {
-            // The suite's violet runs into orchid, as its icons' faces do.
-            Accent::Mauve => (self.mauve, self.pink),
-            Accent::Pink => (self.pink, self.mauve),
-            Accent::Sky => (self.sky, self.sapphire),
-            Accent::PinkSky => (self.pink, self.sky),
-            Accent::Lavender => (self.lavender, self.blue),
-            Accent::Blue => (self.blue, self.sapphire),
-            Accent::Teal => (self.teal, self.green),
-            Accent::Peach => (self.peach, self.yellow),
+        let color = match accent {
+            Accent::PinkSky => return (self.pink, self.sky),
+            Accent::Mauve => self.mauve,
+            Accent::Pink => self.pink,
+            Accent::Sky => self.sky,
+            Accent::Lavender => self.lavender,
+            Accent::Blue => self.blue,
+            Accent::Teal => self.teal,
+            Accent::Peach => self.peach,
+            // The lit copper on a dark page, as the icons' faces are; on a
+            // light page the deeper band, which holds white ink.
             Accent::Copper => match flavor {
-                Flavor::Proton | Flavor::ProtonLight => (COPPER, COPPER_DEEP),
-                _ => (mix(self.peach, self.red, 0.35), self.red),
+                Flavor::Proton => COPPER_LIT,
+                Flavor::ProtonLight => COPPER,
+                _ => mix(self.peach, self.red, 0.25),
             },
-            Accent::Red => (self.red, self.pink),
-        }
+            Accent::Red => self.red,
+        };
+        (color, mix(color, Rgb::BLACK, TONAL_SHADE))
     }
 }
 
@@ -670,7 +698,7 @@ impl Palette {
         text: PROTON.text,
         muted: PROTON.subtext0,
         accent: PROTON.mauve,
-        accent_alt: PROTON.pink,
+        accent_alt: PROTON.mauve,
         accent_dim: rgb(0x5338c4),
         on_accent: PROTON.text,
         danger: PROTON.red,
@@ -812,7 +840,7 @@ mod tests {
         let appearance = Appearance::default();
         assert_eq!(appearance.flavor, Flavor::Proton);
         assert_eq!(appearance.accent, Accent::Mauve);
-        assert!(appearance.gradients);
+        assert!(!appearance.gradients);
     }
 
     #[test]
@@ -843,7 +871,7 @@ mod tests {
         let appearance = load(&dirs).unwrap();
         assert_eq!(appearance.flavor, Flavor::Mocha);
         assert_eq!(appearance.accent, Accent::default());
-        assert!(appearance.gradients);
+        assert!(!appearance.gradients);
 
         std::fs::remove_dir_all(&temp).ok();
     }
@@ -952,6 +980,66 @@ mod tests {
             assert!(palette.accent.r > palette.accent.b, "{flavor:?}");
             assert_ne!(palette.accent, palette.background, "{flavor:?}");
         }
+    }
+
+    #[test]
+    fn a_gradient_is_a_shade_of_the_accent_and_not_a_second_hue() {
+        for flavor in Flavor::ALL {
+            for accent in Accent::ALL {
+                if accent == Accent::PinkSky {
+                    continue;
+                }
+                let palette = Palette::resolve(Appearance {
+                    flavor,
+                    accent,
+                    gradients: true,
+                    ..Appearance::default()
+                });
+                let (a, b) = (palette.accent, palette.accent_alt);
+                assert!(luminance(b) < luminance(a), "{flavor:?}/{accent:?}");
+                // Same hue: each channel is scaled by the same factor, so
+                // their ordering is unchanged.
+                let order = |c: Rgb| {
+                    let mut v = [(c.r, 0), (c.g, 1), (c.b, 2)];
+                    v.sort();
+                    v.map(|(_, i)| i)
+                };
+                let (oa, ob) = (order(a), order(b));
+                assert_eq!(oa[2], ob[2], "{flavor:?}/{accent:?}: {a:?} → {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_scrim_falls_from_solid_to_clear_without_a_step() {
+        let samples: Vec<f32> = (0..=100).map(|i| scrim(i as f32 / 100.0)).collect();
+        assert_eq!(samples[0], 1.0);
+        assert_eq!(samples[100], 0.0);
+        assert!(samples.windows(2).all(|pair| pair[1] <= pair[0]));
+        // Flat at both ends: the first and last steps are the smallest.
+        let steps: Vec<f32> = samples.windows(2).map(|pair| pair[0] - pair[1]).collect();
+        assert!(steps[0] < steps[50] && steps[99] < steps[50]);
+    }
+
+    #[test]
+    fn the_listed_scrim_stops_are_the_curve() {
+        for (position, opacity) in SCRIM_STOPS {
+            assert!((scrim(position) - opacity).abs() < 0.001, "{position}");
+        }
+    }
+
+    #[test]
+    fn copper_as_an_accent_is_the_lit_band_on_the_dark_page() {
+        let palette = Palette::resolve(Appearance {
+            accent: Accent::Copper,
+            ..Appearance::default()
+        });
+        assert_eq!(palette.accent, copper::C400);
+        assert!(
+            luminance(palette.on_accent) < 0.2,
+            "{:?}",
+            palette.on_accent
+        );
     }
 
     #[test]

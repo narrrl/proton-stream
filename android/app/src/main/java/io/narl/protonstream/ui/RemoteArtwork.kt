@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
@@ -349,26 +350,25 @@ internal fun Skeleton(modifier: Modifier = Modifier) {
 }
 
 /**
- * Art for a title that has none: the accent as a gradient, and its initials.
+ * Art for a title that has none: a quiet card in the surface tone, with a
+ * hairline and the title's initials.
  *
- * A black card with a play triangle on it said nothing about which title it
- * was, so a grid of unmatched titles was a grid of identical cards. Each name
- * sets where on the accent ramp its gradient starts, so neighbours differ
- * while every one stays in the theme's colours.
+ * It used to be an accent gradient started at a point hashed from the name. A
+ * wall of those read as confetti; the initials are what tells two apart, and
+ * the flat card keeps the grid's rhythm.
  */
 @Composable
 internal fun ArtworkPlaceholder(name: String, modifier: Modifier = Modifier, labelled: Boolean = true) {
     val scheme = MaterialTheme.colorScheme
-    val brush = remember(name, scheme.primary, scheme.secondary) {
-        val start = lerp(scheme.primary, scheme.secondary, (name.hashCode().mod(5)) / 4f)
-        Brush.linearGradient(listOf(start, lerp(start, Color.Black, 0.55f)))
-    }
-    BoxWithConstraints(modifier.background(brush), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(
+        modifier.background(scheme.surfaceContainer).border(1.dp, scheme.outlineVariant),
+        contentAlignment = Alignment.Center,
+    ) {
         if (!labelled) return@BoxWithConstraints
         val size = with(LocalDensity.current) { (minOf(maxWidth, maxHeight) * 0.3f).toSp() }
         Text(
             initials(name),
-            color = Color.White.copy(alpha = 0.9f),
+            color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
             fontSize = size,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,

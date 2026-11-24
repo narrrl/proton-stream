@@ -6,7 +6,10 @@ import SwiftUI
 /// disabled fill, because a greyed control that still wears the one strong
 /// colour in the window reads as pressable.
 enum ButtonKind {
-    case accent, tonal, edged, quiet
+    /// `glass` is the quiet button over artwork: a wash of the text colour
+    /// rather than the accent's dim shade, so the banner's row has one
+    /// coloured button, the one that plays. Android's `TonalButton(glass =)`.
+    case accent, tonal, glass, edged, quiet
 }
 
 struct ProtonButtonStyle: ButtonStyle {
@@ -41,6 +44,7 @@ struct ProtonButtonStyle: ButtonStyle {
         switch kind {
         case .accent: return scheme.onPrimary
         case .tonal: return scheme.onSecondaryContainer
+        case .glass: return scheme.onBackground
         case .edged, .quiet: return scheme.primary
         }
     }
@@ -53,6 +57,8 @@ struct ProtonButtonStyle: ButtonStyle {
             if enabled { shape.fill(scheme.accentGradient) } else { shape.fill(scheme.onSurface.opacity(0.12)) }
         case .tonal:
             shape.fill(enabled ? scheme.secondaryContainer : scheme.onSurface.opacity(0.12))
+        case .glass:
+            shape.fill(scheme.onBackground.opacity(enabled ? 0.16 : 0.08))
         case .edged, .quiet:
             Color.clear
         }
@@ -63,6 +69,7 @@ extension ButtonStyle where Self == ProtonButtonStyle {
     static var accent: ProtonButtonStyle { ProtonButtonStyle(kind: .accent) }
     static var accentWide: ProtonButtonStyle { ProtonButtonStyle(kind: .accent, expand: true) }
     static var tonal: ProtonButtonStyle { ProtonButtonStyle(kind: .tonal) }
+    static var glass: ProtonButtonStyle { ProtonButtonStyle(kind: .glass) }
     static var edged: ProtonButtonStyle { ProtonButtonStyle(kind: .edged) }
     static var edgedWide: ProtonButtonStyle { ProtonButtonStyle(kind: .edged, expand: true) }
     static var quiet: ProtonButtonStyle { ProtonButtonStyle(kind: .quiet) }

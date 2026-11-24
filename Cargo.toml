@@ -59,6 +59,9 @@ getrandom = "0.3"
 # The QR code a TV shows for adding a share from a phone (`pstr-core::handoff`):
 # the module matrix only, which the front end draws.
 qrcode = { version = "0.15", default-features = false }
+# The payload of a `pstr://` invite (`pstr-core::invite`). Already in the tree
+# through the SDK.
+base64 = "0.22"
 # `bundled` so a Windows build needs no system SQLite.
 # The suite links one bundled SQLite (cargo allows one `links = "sqlite3"` per
 # graph), so this follows proton-rs.

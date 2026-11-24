@@ -54,7 +54,9 @@ import androidx.compose.ui.unit.dp
 internal fun accentBrush(): Brush {
     val scheme = MaterialTheme.colorScheme
     return remember(scheme.primary, scheme.secondary) {
-        Brush.horizontalGradient(listOf(scheme.primary, scheme.secondary))
+        // Top to bottom, as light falls across a control: `secondary` is a
+        // shade of the accent, never a second hue (`Palette::resolve`).
+        Brush.verticalGradient(listOf(scheme.primary, scheme.secondary))
     }
 }
 
@@ -100,19 +102,34 @@ internal fun AccentButton(
     }
 }
 
+/**
+ * The quiet button. [glass] is the ink of what it sits on — the banner's text
+ * colour over artwork — and makes it a translucent wash of that ink instead of
+ * the accent's dim shade, so a row over a picture has one coloured button, the
+ * one that plays.
+ */
 @Composable
 internal fun TonalButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    glass: Color? = null,
     content: @Composable RowScope.() -> Unit,
 ) = FilledTonalButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
     shape = Pill,
+    colors = if (glass != null) glassButtonColors(glass) else ButtonDefaults.filledTonalButtonColors(),
     content = content,
 )
+
+/** A wash of [ink] at the strength a dark glass chip has on the desktop. */
+internal const val GLASS_ALPHA = 0.16f
+
+@Composable
+private fun glassButtonColors(ink: Color) =
+    ButtonDefaults.filledTonalButtonColors(containerColor = ink.copy(alpha = GLASS_ALPHA), contentColor = ink)
 
 @Composable
 internal fun EdgedButton(

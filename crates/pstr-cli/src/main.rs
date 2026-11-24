@@ -82,6 +82,17 @@ enum Command {
         /// The folder, as `VOLUME:LINK`.
         folder: String,
     },
+    /// Print a `pstr://` invite that adds these shares, or every share, on
+    /// another device. It carries each link's password: treat it as one.
+    Invite {
+        /// Share ids, as `shares` prints. Every share when none are given.
+        ids: Vec<String>,
+    },
+    /// Add every share a `pstr://` invite carries that is not already here.
+    ///
+    /// The invite is asked for, not taken as an argument: it holds passwords,
+    /// and an argument lands in the process list and shell history.
+    Accept,
     /// List configured shares.
     Shares,
     /// Sign in to a Proton account, for watch history across devices and for
@@ -264,6 +275,32 @@ async fn run(runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Result<()> {
                 .await
                 .context("add share")?;
             println!("added {} ({})", share.name, share.id);
+        }
+
+        Command::Invite { ids } => {
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let (link, left_out) = store.invite(&ids).context("make invite")?;
+            if left_out > 0 {
+                eprintln!("left out {left_out} account folder(s): they have no link to share");
+            }
+            println!("{link}");
+        }
+
+        Command::Accept => {
+            let invite = read_password("Invite link: ")?;
+            for invited in pstr_core::invite::decode(&invite).context("read invite")? {
+                if store.contains_link(&invited.url)? {
+                    println!("already added: {}", invited.name);
+                    continue;
+                }
+                match store
+                    .add_verified(&invited.name, &invited.url, invited.password.as_deref())
+                    .await
+                {
+                    Ok((share, _)) => println!("added {} ({})", share.name, share.id),
+                    Err(error) => eprintln!("could not add {}: {error}", invited.name),
+                }
+            }
         }
 
         Command::AddFolder { name, folder } => {

@@ -225,6 +225,15 @@ pub enum Event {
         /// The link has a password of its own and none was given.
         needs_password: bool,
     },
+    /// A confirmed invite was worked through; the shares added are crawling.
+    InviteAdded {
+        /// The names of the shares added.
+        added: Vec<String>,
+        /// How many the library already had.
+        already: usize,
+        /// Shares that were refused, with why.
+        failed: Vec<(String, String)>,
+    },
     /// Shares opened; playback is possible from here.
     Connected {
         /// Shares that did not open, with why.
@@ -853,6 +862,62 @@ impl Engine {
             engine.connection.lock().take();
             engine.connect_and_crawl(Some(vec![share.id]), false).await;
         });
+    }
+
+    /// Add every share a confirmed invite carries that the library does not
+    /// already have, each opened first as the form does, then crawl them
+    /// together. See [`pstr_core::invite`].
+    pub fn add_invited(&self, invited: Vec<pstr_core::invite::InvitedShare>) {
+        let engine = self.clone();
+        self.runtime.spawn(async move {
+            let mut added = Vec::new();
+            let mut ids = Vec::new();
+            let mut already = 0;
+            let mut failed = Vec::new();
+            for share in invited {
+                if engine.store.contains_link(&share.url).unwrap_or(false) {
+                    already += 1;
+                    continue;
+                }
+                // One at a time: each is a handshake and a write to the
+                // share list, and the list is rewritten whole.
+                match engine
+                    .store
+                    .add_verified(&share.name, &share.url, share.password.as_deref())
+                    .await
+                {
+                    Ok((stored, _)) => {
+                        added.push(stored.name);
+                        ids.push(stored.id);
+                    }
+                    Err(error) => {
+                        let label = if share.name.is_empty() {
+                            "a shared folder".to_owned()
+                        } else {
+                            share.name
+                        };
+                        failed.push((label, error.to_string()));
+                    }
+                }
+            }
+            engine.emit(Event::InviteAdded {
+                added,
+                already,
+                failed,
+            });
+            if ids.is_empty() {
+                return;
+            }
+            engine.load_shares();
+            engine.connection.lock().take();
+            engine.connect_and_crawl(Some(ids), false).await;
+        });
+    }
+
+    /// The `pstr://` invite for `ids`, or for every share when empty, and how
+    /// many account folders it had to leave out. See [`ShareStore::invite`].
+    pub fn invite_link(&self, ids: &[&str]) -> pstr_core::Result<(String, usize)> {
+        self.store.invite(ids)
     }
 
     /// Call a share something else. See [`ShareStore::rename`].
@@ -3369,6 +3434,11 @@ pub fn watch_state(position: f64, duration: Option<f64>, watched: bool) -> Watch
 pub fn describe_failures(failures: &[(String, String)]) -> Option<String> {
     if failures.is_empty() {
         return None;
+    }
+    // One reason is worth reading; several are usually the same one, and a
+    // status line has room for the names.
+    if let [(name, reason)] = failures {
+        return Some(format!("could not open {name}: {reason}"));
     }
     let names: Vec<&str> = failures.iter().map(|(name, _)| name.as_str()).collect();
     Some(format!("could not open: {}", names.join(", ")))

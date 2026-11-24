@@ -1,5 +1,6 @@
 package io.narl.protonstream.ui
 
+import io.narl.protonstream.ui.theme.TileShape
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.text.TextAutoSize
@@ -302,7 +303,8 @@ internal fun TitleScreen(
                                 !playerReady -> "Player loading…"
                                 upNext == null -> "Play"
                                 upNext.resumeAt != null -> "Resume ${upNext.label}"
-                                title.watchedCount > 0uL -> "Continue with ${upNext.label}"
+                                // Watched through, it starts the show again: nothing to continue.
+                                title.watchedCount > 0uL && !upNext.watched -> "Continue with ${upNext.label}"
                                 playlist.size == 1 -> "Play"
                                 else -> "Play ${upNext.label}"
                             },
@@ -678,7 +680,7 @@ private fun FranchiseTile(title: TitleRecord, here: Boolean, onClick: () -> Unit
         Modifier
             .width(96.dp)
             .focusHighlight(MaterialTheme.shapes.medium, grow = true)
-            .clip(MaterialTheme.shapes.medium)
+            .clip(TileShape)
             .clickable(enabled = !here, onClick = onClick),
     ) {
         RemoteArtwork(

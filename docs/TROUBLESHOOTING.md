@@ -65,6 +65,15 @@ The command line cannot show one. Sign in once in the app.
 
 Turn off **Hardware decoding** in Settings. It applies from the next file.
 
+### Video plays in slow motion on a TV box or an older phone
+
+The device cannot decode the file fast enough. The player now drops frames to keep the picture
+in step with the sound, so it plays at full speed with some stutter rather than slowly. If it
+stays poor, try **Hardware decoding** the other way round in Settings: on a weak box, software
+decoding of a 1080p H.264 file can be faster than copying every hardware-decoded frame back. A
+4K or 10-bit HEVC file may be more than such a box can play either way; a lower-resolution
+copy of the file will play.
+
 ### An episode takes long to start
 
 The first seconds of a file are fetched over the network. On a slow connection, start the

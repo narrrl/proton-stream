@@ -20,17 +20,20 @@ use pstr_core::config::AppDirs;
 pub enum Request {
     /// Come to the front.
     Raise,
-    /// Come to the front, with this share link in the Add form.
+    /// Come to the front, with this share link in the Add form, or with
+    /// this `pstr://` invite up for confirmation.
     AddShare(String),
 }
 
 impl Request {
     /// What a launch was started with: the first argument that is a share
-    /// link, so `proton-stream 'https://drive.proton.me/urls/…#…'` adds it.
+    /// link or an invite, so `proton-stream 'https://drive.proton.me/urls/…#…'`
+    /// and a click on a `pstr://add?…` link (the desktop entry's `%u`) both
+    /// add what they carry.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Self {
         args.into_iter()
             .map(|arg| arg.trim().to_owned())
-            .find(|arg| pstr_core::shares::share_token(arg).is_ok())
+            .find(|arg| acceptable(arg))
             .map_or(Self::Raise, Self::AddShare)
     }
 
@@ -51,16 +54,20 @@ impl Request {
             return Some(Self::Raise);
         }
         let url = line.strip_prefix("add ")?.trim();
-        pstr_core::shares::share_token(url)
-            .is_ok()
-            .then(|| Self::AddShare(url.to_owned()))
+        acceptable(url).then(|| Self::AddShare(url.to_owned()))
     }
+}
+
+/// Whether `text` is a share link or an invite this build can open.
+fn acceptable(text: &str) -> bool {
+    pstr_core::invite::decode(text).is_ok()
 }
 
 /// How long a launch spends handing its request over before giving up on it.
 const HAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-/// The most a request may be. A share link is a few hundred bytes.
-const MOST: u64 = 8 * 1024;
+/// The most a request may be. A share link is a few hundred bytes; an invite
+/// for a large library a few kilobytes.
+const MOST: u64 = 64 * 1024;
 
 /// The outcome of [`claim`].
 pub enum Claim {
@@ -333,6 +340,24 @@ mod tests {
         let args = ["https://example.com/".to_owned()];
         assert_eq!(Request::from_args(args), Request::Raise);
         assert_eq!(Request::from_args(Vec::new()), Request::Raise);
+    }
+
+    #[test]
+    fn a_launch_from_an_invite_link_asks_for_it_to_be_added() {
+        let invite = pstr_core::invite::encode(&[pstr_core::invite::InvitedShare {
+            name: "Anime".into(),
+            url: LINK.into(),
+            password: None,
+        }])
+        .unwrap();
+        assert_eq!(
+            Request::from_args([invite.clone()]),
+            Request::AddShare(invite)
+        );
+        assert_eq!(
+            Request::from_args(["pstr://add?v=1&s=broken".to_owned()]),
+            Request::Raise
+        );
     }
 
     #[test]

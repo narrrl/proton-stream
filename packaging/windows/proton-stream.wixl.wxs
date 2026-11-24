@@ -156,6 +156,20 @@
             <File Id="WebViewLoader" Source="$(var.WebViewLoader)" Name="WebView2Loader.dll" KeyPath="yes" />
           </Component>
 
+          <!-- pstr:// invites (pstr-core::invite) open in the app, which
+               takes the link as its argument like a pasted share link. -->
+          <Component Id="InviteScheme" Guid="4751b2a6-14a4-46dd-9128-47556fa91263" Win64="yes">
+            <RegistryValue Root="HKLM" Key="Software\Classes\pstr" Type="string"
+                           Value="URL:Proton Stream invite" KeyPath="yes" />
+            <RegistryValue Root="HKLM" Key="Software\Classes\pstr" Name="URL Protocol"
+                           Type="string" Value="" />
+            <RegistryValue Root="HKLM" Key="Software\Classes\pstr\DefaultIcon" Type="string"
+                           Value="&quot;[INSTALLDIR]proton-stream.exe&quot;,0" />
+            <RegistryValue Root="HKLM" Key="Software\Classes\pstr\shell\open\command"
+                           Type="string"
+                           Value="&quot;[INSTALLDIR]proton-stream.exe&quot; &quot;%1&quot;" />
+          </Component>
+
           <Component Id="ReadMe" Guid="5bb65b44-f5df-423b-8dcc-a753d7aef565" Win64="yes">
             <File Id="ReadMe" Source="$(var.ReadMe)" Name="README.md" KeyPath="yes" />
           </Component>
@@ -170,6 +184,7 @@
       <ComponentRef Id="CliExe" />
       <ComponentRef Id="MpvDll" />
       <ComponentRef Id="WebViewLoader" />
+      <ComponentRef Id="InviteScheme" />
       <ComponentRef Id="ReadMe" />
     </Feature>
 
