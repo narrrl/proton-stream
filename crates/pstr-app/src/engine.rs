@@ -3370,6 +3370,11 @@ pub fn describe_failures(failures: &[(String, String)]) -> Option<String> {
     if failures.is_empty() {
         return None;
     }
+    // One reason is worth reading; several are usually the same one, and a
+    // status line has room for the names.
+    if let [(name, reason)] = failures {
+        return Some(format!("could not open {name}: {reason}"));
+    }
     let names: Vec<&str> = failures.iter().map(|(name, _)| name.as_str()).collect();
     Some(format!("could not open: {}", names.join(", ")))
 }

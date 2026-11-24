@@ -1002,18 +1002,13 @@ impl App {
                     already,
                     failed,
                 } => {
-                    if added.is_empty() {
-                        self.crawling = false;
+                    self.connecting = false;
+                    if !added.is_empty() {
+                        self.crawling = true;
                     }
-                    let mut said = match added.len() {
-                        0 => "added nothing".to_owned(),
-                        1 => format!("added {}", added[0]),
-                        count => format!("added {count} shares"),
-                    };
-                    if already > 0 {
-                        said.push_str(&format!(", {already} already in the library"));
+                    if let Some(said) = invite_summary(&added, already) {
+                        self.note(ctx, said, false);
                     }
-                    self.note(ctx, said, false);
                     if let Some(text) = describe_failures(&failed) {
                         self.note(ctx, text, true);
                     }
@@ -1989,7 +1984,9 @@ impl App {
             }
             Action::AddInvited(invited) => {
                 self.form.invite_in = None;
-                self.crawling = true;
+                // Opening each share is a handshake, not a crawl; the crawl
+                // that follows reports itself.
+                self.connecting = true;
                 self.engine.add_invited(invited);
             }
             Action::PasteShare(url) => {
@@ -3201,6 +3198,27 @@ fn page_fade(ctx: &egui::Context, shown: &mut (Option<Page>, f64), page: &Page) 
     theme::motion::ease_out(progress)
 }
 
+/// What an accepted invite did, for one status line; `None` when it added
+/// nothing and found nothing already there, so a refusal is the only line.
+fn invite_summary(added: &[String], already: usize) -> Option<String> {
+    let mut said = match added {
+        [] if already == 0 => return None,
+        [] => String::new(),
+        [one] => format!("added {one}"),
+        many => format!("added {} shares", many.len()),
+    };
+    if already > 0 {
+        if !said.is_empty() {
+            said.push_str(", ");
+        }
+        said.push_str(&match already {
+            1 => "1 was already in the library".to_owned(),
+            count => format!("{count} were already in the library"),
+        });
+    }
+    Some(said)
+}
+
 /// What the top bar says while shares are being listed: one share by name,
 /// several as a count, with the files found across all of them.
 fn crawl_label(progress: &std::collections::BTreeMap<String, usize>) -> String {
@@ -3627,6 +3645,23 @@ mod tests {
                 "poster:found",
                 "poster:moved"
             ]
+        );
+    }
+
+    #[test]
+    fn an_invite_that_added_nothing_new_says_nothing_of_its_own() {
+        assert_eq!(invite_summary(&[], 0), None);
+        assert_eq!(
+            invite_summary(&[], 2).as_deref(),
+            Some("2 were already in the library")
+        );
+        assert_eq!(
+            invite_summary(&["anime".to_owned()], 1).as_deref(),
+            Some("added anime, 1 was already in the library")
+        );
+        assert_eq!(
+            invite_summary(&["a".to_owned(), "b".to_owned()], 0).as_deref(),
+            Some("added 2 shares")
         );
     }
 }
