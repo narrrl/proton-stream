@@ -2099,6 +2099,43 @@ impl Engine {
             .collect()
     }
 
+    /// The files `target` takes its ordered chapters from — an opening and an
+    /// ending kept once beside every episode — opened, for the player to hand
+    /// mpv. Empty for the usual file. See `pstr_stream::ordered`.
+    pub async fn open_ordered_parts(
+        &self,
+        target: &PlaybackTarget,
+        episode: &VideoStream,
+    ) -> Vec<VideoStream> {
+        let candidates = self
+            .catalog
+            .lock()
+            .ordered_part_candidates(&target.share_id, &target.link_id)
+            .unwrap_or_default();
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let Some((library, source)) = self.opened() else {
+            return Vec::new();
+        };
+        pstr_stream::ordered::find_parts(
+            episode,
+            candidates,
+            |node| node.active_revision_id.clone(),
+            |node| {
+                let library = Arc::clone(&library);
+                let source = source.clone();
+                async move {
+                    let uid = node_uid(&node.volume_id, &node.link_id);
+                    library
+                        .reauthenticating(&node.share_id, || source.open(&node.share_id, &uid))
+                        .await
+                }
+            },
+        )
+        .await
+    }
+
     /// How far into the file `target` resumes, as a fraction of its running
     /// time — known from the last time it played.
     fn resume_fraction(&self, target: &PlaybackTarget) -> Option<f64> {

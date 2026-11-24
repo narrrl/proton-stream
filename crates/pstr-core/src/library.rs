@@ -362,6 +362,17 @@ impl Library {
         }
 
         for title in &mut titles {
+            // A series' openings and endings, kept as files of their own for
+            // its episodes to play from, are not episodes: listed, they sort
+            // ahead of the first one, and "Play" starts an opening.
+            if title.states_its_numbering() {
+                for season in &mut title.seasons {
+                    season
+                        .episodes
+                        .retain(|episode| !episode.node.parsed.is_credits());
+                }
+                title.seasons.retain(|season| !season.episodes.is_empty());
+            }
             // A season number, an episode number or more than one file all mean
             // series. A lone unnumbered file is a film.
             let numbered = title.states_its_numbering();
@@ -562,6 +573,46 @@ mod tests {
                 episode_title: None,
             },
         }
+    }
+
+    /// An unnumbered file in the series' folder, as the catalog leaves it:
+    /// the folder's title, and the rest of the name as the file's own.
+    fn extra(share: &str, link: &str, title: &str, rest: &str) -> CatalogNode {
+        let mut node = node(share, link, &format!("{title} - {rest}.mkv"), None, None);
+        node.parsed.episode_title = Some(rest.into());
+        node
+    }
+
+    /// An ordered-chapters release keeps its openings and endings beside the
+    /// episodes. Listed, they sorted ahead of episode one, and "Play" started
+    /// an opening.
+    #[test]
+    fn a_series_openings_and_endings_are_not_listed_as_episodes() {
+        let library = Library::build(
+            vec![
+                extra("s", "op", "InuYasha", "OP"),
+                extra("s", "ed2", "InuYasha", "ED2"),
+                node("s", "e1", "InuYasha - 001.mkv", None, Some(1)),
+                node("s", "e2", "InuYasha - 002.mkv", None, Some(2)),
+                extra("s", "movie", "InuYasha", "Special"),
+            ],
+            &HashMap::new(),
+        );
+        let title = &library.titles[0];
+        let links: Vec<_> = title.episodes().map(|e| e.node.link_id.as_str()).collect();
+        assert_eq!(links, ["movie", "e1", "e2"]);
+    }
+
+    #[test]
+    fn a_folder_of_nothing_but_openings_still_shows_them() {
+        let library = Library::build(
+            vec![
+                extra("s", "op", "Show", "NCOP1"),
+                extra("s", "ed", "Show", "NCED1"),
+            ],
+            &HashMap::new(),
+        );
+        assert_eq!(library.titles[0].episode_count(), 2);
     }
 
     #[test]

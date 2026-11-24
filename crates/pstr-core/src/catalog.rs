@@ -27,6 +27,9 @@ use crate::naming::{self, ParsedName};
 /// Bump when adding a migration.
 pub const SCHEMA_VERSION: i64 = 15;
 
+/// The most files [`Catalog::ordered_part_candidates`] offers for one episode.
+pub const MAX_PART_CANDIDATES: usize = 32;
+
 /// The migration steps, in order. Never edit a shipped one; append.
 const SCHEMA: Schema = Schema::new(&[
     Step::Sql(MIGRATION_V1),
@@ -733,6 +736,36 @@ impl Catalog {
              ORDER BY title, season, episode, name",
         )?;
         let rows = statement.query_map(params![share_id], row_to_node)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// The files an ordered-chapters episode may take its opening and ending
+    /// from: the others in its folder that carry no episode number, in name
+    /// order. A release that splits them out names them `OP`, `ED2`, `NCOP`;
+    /// whether one really is a part of this episode is for its `SegmentUID` to
+    /// say — see [`crate::matroska`].
+    ///
+    /// At most [`MAX_PART_CANDIDATES`]: each one asked costs a block fetch.
+    pub fn ordered_part_candidates(
+        &self,
+        share_id: &str,
+        link_id: &str,
+    ) -> Result<Vec<CatalogNode>> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT n.share_id, n.link_id, n.volume_id, n.parent_link_id, n.name, n.is_folder,
+                    n.media_type, n.size, n.active_revision_id, n.title, n.season, n.episode,
+                    n.year, n.episode_title
+             FROM nodes n
+             JOIN nodes e ON e.share_id = n.share_id AND e.parent_link_id = n.parent_link_id
+             WHERE e.share_id = ?1 AND e.link_id = ?2
+               AND n.link_id != e.link_id AND n.is_folder = 0 AND n.episode IS NULL
+             ORDER BY n.name
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![share_id, link_id, MAX_PART_CANDIDATES as i64],
+            row_to_node,
+        )?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
@@ -2069,6 +2102,34 @@ mod tests {
             url: Some("https://anilist.co/anime/16498".into()),
             details: None,
         }
+    }
+
+    #[test]
+    fn an_episodes_part_candidates_are_the_unnumbered_files_in_its_own_folder() {
+        let mut catalog = Catalog::in_memory().expect("open");
+        let mut elsewhere = file("s", "x", "Show - OP3.mkv");
+        elsewhere.parent_link_id = Some("other".into());
+        catalog
+            .replace_share(
+                "s",
+                &[
+                    file("s", "e1", "Show - 001.mkv"),
+                    file("s", "e2", "Show - 002.mkv"),
+                    file("s", "op", "Show - OP.mkv"),
+                    file("s", "ed2", "Show - ED2.mkv"),
+                    elsewhere,
+                ],
+            )
+            .expect("store");
+        let candidates = catalog.ordered_part_candidates("s", "e1").expect("query");
+        let links: Vec<_> = candidates.iter().map(|n| n.link_id.as_str()).collect();
+        assert_eq!(links, ["ed2", "op"]);
+        assert!(
+            catalog
+                .ordered_part_candidates("s", "gone")
+                .expect("query")
+                .is_empty()
+        );
     }
 
     #[test]

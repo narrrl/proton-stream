@@ -230,11 +230,15 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         subtitleLanguage: String?,
         subtitles: Boolean,
         hardwareDecoding: Boolean,
+        orderedParts: List<ULong>,
     ) {
         check(size > 0uL) { "Cannot play an empty stream" }
         try {
             withContext(Dispatchers.IO) {
                 val loaded = withOpenHandle {
+                    // Before the load: mpv looks for an ordered-chapters
+                    // episode's opening and ending while it opens the file.
+                    nativeSetOrderedParts(it, LongArray(orderedParts.size) { index -> orderedParts[index].toLong() })
                     nativeLoad(
                         it, nativeHandle.toLong(), startPosition, audioLanguage, subtitleLanguage, subtitles,
                         hardwareDecoding,
@@ -263,7 +267,11 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
                             skipRanges = null
                         }
                     }
-                } ?: false
+                } ?: run {
+                    // Closed before mpv was told of them: nothing else will.
+                    orderedParts.forEach(::releaseNativeStream)
+                    false
+                }
                 check(loaded) {
                     "libmpv rejected the stream or no video surface was available"
                 }
@@ -529,6 +537,7 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
         subtitles: Boolean,
         hardwareDecoding: Boolean,
     ): Boolean
+    private external fun nativeSetOrderedParts(handle: Long, parts: LongArray)
     private external fun nativeAddSubtitle(
         handle: Long,
         generation: Long,

@@ -1056,6 +1056,29 @@ struct PlayArgs {
     for_seconds: Option<f64>,
 }
 
+/// The files an ordered-chapters episode links to, opened. See
+/// `pstr_stream::ordered`.
+async fn ordered_parts(dirs: &AppDirs, opened: &Opened) -> Result<Vec<pstr_stream::VideoStream>> {
+    let catalog = Catalog::open(&dirs.catalog_db()).context("open catalog")?;
+    let candidates =
+        catalog.ordered_part_candidates(&opened.share_id, opened.uid.link_id.as_str())?;
+    drop(catalog);
+    Ok(pstr_stream::ordered::find_parts(
+        &opened.stream,
+        candidates,
+        |node| node.active_revision_id.clone(),
+        |node| {
+            let uid = NodeUid::new(
+                VolumeId::new(node.volume_id.clone()),
+                LinkId::new(node.link_id.clone()),
+            );
+            let source = opened.source.clone();
+            async move { source.open(&node.share_id, &uid).await }
+        },
+    )
+    .await)
+}
+
 /// Play a catalogued file through mpv.
 ///
 /// This is the whole stack end to end: catalog → share client → block layer →
@@ -1097,6 +1120,13 @@ async fn play(
     }
 
     let player = Player::new(runtime, player_config).context("start mpv")?;
+    let parts = ordered_parts(dirs, &opened).await?;
+    if !parts.is_empty() {
+        println!("parts:  {} ordered-chapters file(s) beside it", parts.len());
+    }
+    let _parts = player
+        .set_ordered_parts(parts)
+        .context("hand mpv the parts")?;
     let _handle = player.play(opened.stream.clone()).context("load stream")?;
 
     let mut seeked = args.start.is_none();

@@ -42,7 +42,7 @@ private func streamOpen(
     guard let uri, let info else { return failed }
     let value = String(cString: uri)
     guard value.hasPrefix("pstr://"), let handle = UInt64(value.dropFirst("pstr://".count)) else { return failed }
-    let size = pstr_android_stream_size(handle)
+    let size = pstr_android_stream_open(handle)
     guard size >= 0 else { return failed }
 
     info.pointee.cookie = Unmanaged.passRetained(StreamCookie(handle: handle, size: size)).toOpaque()

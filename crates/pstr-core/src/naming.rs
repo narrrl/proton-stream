@@ -33,6 +33,40 @@ impl ParsedName {
     pub fn is_episode(&self) -> bool {
         self.episode.is_some()
     }
+
+    /// Whether this is an opening or an ending on its own — `Show - OP2`,
+    /// `Show - NCED`, `Show - Creditless Opening 1` — rather than something to
+    /// watch. A release with ordered chapters keeps them as files beside the
+    /// episodes, which play them from there; see [`crate::matroska`].
+    pub fn is_credits(&self) -> bool {
+        if self.episode.is_some() {
+            return false;
+        }
+        let Some(name) = self.episode_title.as_deref() else {
+            return false;
+        };
+        let lower = name.trim().to_ascii_lowercase();
+        let rest = lower
+            .strip_prefix("creditless")
+            .or_else(|| lower.strip_prefix("nc"))
+            .unwrap_or(&lower)
+            .trim_start();
+        let rest = ["opening", "ending", "op", "ed"]
+            .iter()
+            .find_map(|word| rest.strip_prefix(word));
+        let Some(rest) = rest else {
+            return false;
+        };
+        // A number, and a letter or a `v2` after it, is all that may follow:
+        // `ED2`, `OP 1a`, `OP3v2`. `Edgerunners` is not an ending.
+        let rest = rest.trim_start();
+        let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        let rest = rest
+            .strip_prefix('v')
+            .filter(|version| !version.is_empty() && version.chars().all(|c| c.is_ascii_digit()))
+            .map_or(rest, |_| "");
+        rest.is_empty() || (rest.len() == 1 && rest.chars().all(|c| c.is_ascii_lowercase()))
+    }
 }
 
 /// Parse a filename (with or without its extension) into a title and numbering.
@@ -964,6 +998,43 @@ pub fn is_subtitle_file(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// As the catalog leaves an unnumbered file in a series folder:
+    /// `InuYasha - OP` under `InuYasha` is the title, and `OP` its name.
+    fn unnumbered(name: &str) -> ParsedName {
+        ParsedName {
+            title: "Show".into(),
+            season: None,
+            episode: None,
+            year: None,
+            episode_title: Some(name.into()),
+        }
+    }
+
+    #[test]
+    fn an_opening_or_an_ending_on_its_own_is_credits() {
+        for name in [
+            "OP",
+            "ED8",
+            "NCOP1",
+            "NCED 2a",
+            "Creditless Opening 3",
+            "OP2v2",
+            "ending",
+        ] {
+            assert!(unnumbered(name).is_credits(), "{name}");
+        }
+        for name in ["Edgerunners", "Opening Night", "Special", "OP Special"] {
+            assert!(!unnumbered(name).is_credits(), "{name}");
+        }
+        // An episode is never credits, whatever it is called.
+        let episode = ParsedName {
+            episode: Some(1),
+            ..unnumbered("OP")
+        };
+        assert!(!episode.is_credits());
+        assert!(!parse("Akira (1988).mkv").is_credits());
+    }
 
     fn parsed(name: &str) -> (String, Option<u32>, Option<u32>, Option<u32>) {
         let p = parse(name);

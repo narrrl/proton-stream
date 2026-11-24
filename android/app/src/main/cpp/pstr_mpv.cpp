@@ -134,7 +134,7 @@ int stream_open(void *, char *uri, mpv_stream_cb_info *info) noexcept {
         if (result.ec != std::errc{} || result.ptr != token.data() + token.size()) {
             return MPV_ERROR_LOADING_FAILED;
         }
-        const int64_t size = pstr_android_stream_size(handle);
+        const int64_t size = pstr_android_stream_open(handle);
         if (size < 0) return MPV_ERROR_LOADING_FAILED;
         std::unique_ptr<StreamCookie> cookie(new StreamCookie{handle, size});
         info->cookie = cookie.get();
@@ -286,6 +286,7 @@ class Player {
         c_boundary([this] { if (events_.joinable()) events_.join(); });
         c_boundary([this] { if (renderer_.joinable()) renderer_.join(); });
         c_boundary([this] { if (mpv_) mpv_terminate_destroy(mpv_); });
+        c_boundary([this] { for (const uint64_t part : parts_) pstr_android_stream_release_unopened(part); });
     }
 
     bool valid() const { return mpv_ != nullptr; }
@@ -314,6 +315,25 @@ class Player {
             surface_changed_ = true;
         }
         render_cv_.notify_one();
+    }
+
+    /// The files the next file takes its ordered chapters from — an opening
+    /// and an ending kept once beside every episode — as `pstr://` streams.
+    /// Before `load`: mpv looks for them while it opens the file, and without
+    /// them searches a directory a stream does not have. Empty for none.
+    ///
+    /// The last file's parts that mpv never opened are handed back here; the
+    /// ones it did are released by their close, like any stream.
+    void set_ordered_parts(std::vector<uint64_t> parts) {
+        for (const uint64_t part : parts_) pstr_android_stream_release_unopened(part);
+        parts_ = std::move(parts);
+        if (!mpv_) return;
+        std::string value;
+        for (size_t i = 0; i < parts_.size(); ++i) {
+            value += i == 0 ? "memory://" : "\n";
+            value += "pstr://" + std::to_string(parts_[i]);
+        }
+        set_string("ordered-chapters-files", value);
     }
 
     bool load(uint64_t handle, double start, const std::string &audio,
@@ -859,6 +879,9 @@ class Player {
     std::vector<Subtitle> pending_subtitles_;
     /// Streams to release once `state_mutex_` is let go.
     std::vector<uint64_t> released_;
+    /// The ordered-chapters parts offered with the last load. Only touched by
+    /// `set_ordered_parts`, from the thread that loads, and on destruction.
+    std::vector<uint64_t> parts_;
 };
 
 Player *from(jlong handle) { return reinterpret_cast<Player *>(handle); }
@@ -950,6 +973,22 @@ extern "C" JNIEXPORT jboolean JNICALL Java_io_narl_protonstream_playback_NativeM
                          hardware_decoding == JNI_TRUE)
                 ? JNI_TRUE
                 : JNI_FALSE);
+    });
+}
+extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeSetOrderedParts(JNIEnv *env, jobject, jlong handle, jlongArray parts) noexcept {
+    c_boundary([=] {
+        std::vector<uint64_t> handles;
+        if (parts) {
+            const jsize count = env->GetArrayLength(parts);
+            std::vector<jlong> values(static_cast<size_t>(count));
+            if (count > 0) env->GetLongArrayRegion(parts, 0, count, values.data());
+            for (const jlong value : values) handles.push_back(static_cast<uint64_t>(value));
+        }
+        if (auto *p = from(handle)) {
+            p->set_ordered_parts(std::move(handles));
+        } else {
+            for (const uint64_t part : handles) pstr_android_stream_release_unopened(part);
+        }
     });
 }
 extern "C" JNIEXPORT void JNICALL Java_io_narl_protonstream_playback_NativeMpvHost_nativeAddSubtitle(JNIEnv *env, jobject, jlong handle, jlong generation, jlong stream, jstring title, jstring language, jboolean select) noexcept {

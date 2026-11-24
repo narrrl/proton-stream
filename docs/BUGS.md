@@ -150,6 +150,35 @@ The first hardware run also found four defects in the harness itself and five in
 the release build; they are [B43](#b43--the-acceptance-harness-could-not-run-against-the-shipping-build)
 and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
+### B72 — an ordered-chapters episode played without its opening and ending
+
+**Symptom.** An Inuyasha episode from a release that keeps its openings and
+endings as files of their own (`OP`, `ED2` … beside the episodes) played with
+them cut out, and on iOS and Android mpv's `Failed to find ordered chapter
+part!` showed as an error (B71). The `OP` and `ED` files were listed as
+episodes, ahead of episode one, so **Play** on a new series started an
+opening.
+
+**Cause.** The episode links them by `SegmentUID`, and mpv looks for the files
+in the episode's directory. A stream has none. Separately, on Android and iOS,
+mpv opens such an episode a second time to look for a second segment and closes
+that open at once; the close released the stream the episode was playing from.
+
+**Fix.** `pstr_core::matroska` reads the episode's `Chapters` and a candidate's
+`SegmentUID` from the head of each file. Before an episode loads, every client
+asks `pstr_stream::ordered::find_parts` which of the unnumbered files in its
+folder it links to, publishes those, and hands mpv the list as
+`ordered-chapters-files` (an inline `memory://` playlist). A file's
+`SegmentUID` is remembered by revision for the life of the process, so the next
+episode opens only the parts it uses. `pstr_android_stream_open` counts opens,
+and `pstr_android_stream_release` unpublishes a stream only when the last one
+closes. `ParsedName::is_credits` keeps `OP`/`ED`/`NCOP` files out of a series'
+episode list.
+
+**Verified.** Desktop, with the real share: `pstr play` on episode 4 logs
+`Match for source 1` and `2` from mpv; finding the parts took about 3 s cold,
+11 candidates. Android builds; playback on the emulator was not possible (the
+library is an account folder and the emulator is not signed in). iOS not built.
 ### B71 — "Failed to find ordered chapter part!" over an episode that played
 
 **Symptom.** On iOS, an Inuyasha episode showed mpv's `Failed to find ordered
