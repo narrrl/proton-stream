@@ -1,0 +1,7 @@
+A flatter look, pstr:// invites, faster refreshes and per-season art.
+
+- Share one share or your whole library with a pstr:// link or QR code.
+- A refresh only re-reads folders that changed.
+- Picking a season shows its own poster, name and synopsis; airing status follows the latest season.
+- Openings and endings kept in separate files (ordered chapters) play.
+- Android TV: the remote no longer gets stuck on the player's volume slider.
