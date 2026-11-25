@@ -86,21 +86,34 @@
   <screenshots>
     <screenshot type="default">
       <caption>Home, with the hero carousel and shelves</caption>
-      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.1.0/images/desktop-home.png</image>
+      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.5.0/images/desktop-home.png</image>
     </screenshot>
     <screenshot>
       <caption>The whole library, filtered and sorted</caption>
-      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.1.0/images/desktop-library.png</image>
+      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.5.0/images/desktop-library.png</image>
     </screenshot>
     <screenshot>
       <caption>A title page with its seasons and episodes</caption>
-      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.1.0/images/desktop-title.png</image>
+      <image>https://raw.githubusercontent.com/narrrl/proton-stream/v2.5.0/images/desktop-title.png</image>
     </screenshot>
   </screenshots>
 
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.5.0" date="2026-11-25">
+      <description>
+        <p>A flatter, calmer look, pstr:// invites to share a library, much faster refreshes, and each season of a show with its own poster and synopsis.</p>
+        <ul>
+          <li>Solid accents replace the violet-to-orchid gradients, copper marks what is new for you, and one focus ring is used everywhere.</li>
+          <li>A pstr:// invite link or QR code adds one share or a whole library on another device.</li>
+          <li>A refresh only re-reads folders that changed: four to five times faster, with a tenth of the CPU.</li>
+          <li>Picking a season shows that season's own poster, name, year and synopsis, and the airing status follows the latest season you have.</li>
+          <li>Episodes that take their opening and ending from separate files (ordered chapters) play them.</li>
+          <li>On iOS, 10-bit and HDR files play instead of failing to draw. On Android TV, the remote no longer gets stuck on the volume slider in the player.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.4.0" date="2026-11-24">
       <description>
         <p>The Stream icon draws correctly in Qt-based shells and launchers, and the floating navigation bar no longer sits in a dark band.</p>
