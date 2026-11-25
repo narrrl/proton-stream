@@ -270,7 +270,9 @@ class Player {
         observe("demuxer-cache-time", 10, MPV_FORMAT_DOUBLE);
         // Errors mpv reports about the file itself, rather than about the
         // request that opened it. Without these a failed demux is silent.
-        mpv_request_log_messages(mpv_, "error");
+        // Warnings too, for logcat: what mpv complained about is the first thing
+        // a playback report needs, and the viewer only ever sees one line.
+        mpv_request_log_messages(mpv_, "warn");
         events_ = std::thread([this] { event_loop(); });
         renderer_ = std::thread([this] { render_loop(); });
     }
@@ -440,9 +442,17 @@ class Player {
         return state_;
     }
 
-    /// The pending error, if any, consumed by reading it.
+    /// The pending error, consumed by reading it — once the file has failed.
+    ///
+    /// Held back until then: most of what mpv logs at error level is something
+    /// it recovers from, and the file plays on. An ordered-chapters episode
+    /// whose opening and ending are not beside it says "There are … seconds
+    /// missing from the timeline!" and plays the episode without them; shown
+    /// at once, that line sat over a playing episode as if it had failed. The
+    /// same rule as iOS's `MpvPlayer.firstError`.
     std::string take_error() {
         std::lock_guard lock(state_mutex_);
+        if (!state_.ended || state_.end_reason != EndReason::Failed) return {};
         return std::exchange(error_, std::string());
     }
 
@@ -693,6 +703,9 @@ class Player {
     /// episode without them.
     void record_log(const mpv_event_log_message &message) {
         if (!message.text) return;
+        __android_log_print(message.log_level <= MPV_LOG_LEVEL_ERROR ? ANDROID_LOG_ERROR : ANDROID_LOG_WARN,
+                            "pstr-mpv", "%s: %s", message.prefix ? message.prefix : "", message.text);
+        if (message.log_level > MPV_LOG_LEVEL_ERROR) return;
         if (message.prefix && !std::strncmp(message.prefix, "ffmpeg", 6)) return;
         if (std::strstr(message.text, "ordered chapter")) return;
         std::lock_guard lock(state_mutex_);

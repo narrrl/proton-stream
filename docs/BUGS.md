@@ -150,6 +150,45 @@ The first hardware run also found four defects in the harness itself and five in
 the release build; they are [B43](#b43--the-acceptance-harness-could-not-run-against-the-shipping-build)
 and [B44](#b44--r8-broke-the-app-under-instrumentation-in-five-places).
 
+### B73 — a copied episode was listed twice, and Android put recovered mpv errors over the player
+
+**Symptom.** Inuyasha listed episodes 1 and 2 twice each. Playing an episode on
+Android put one of "There are 190.887 seconds missing from the timeline!",
+"Could not open codec." or "gl_tex_clear: OpenGL error: GL_OUT_OF_MEMORY" over
+an episode that went on playing. The same episodes played without a word on iPad.
+
+**Cause.** Three things.
+
+- The library held a second folder with copies of those two files, and
+  `Library::build` lists every file it is given, so each copy became an episode
+  of its own.
+- The copies are ordered-chapters episodes with no opening or ending beside
+  them, so mpv logged the missing timeline at error level and played the
+  episode without them.
+- The release is H.264 High 10, which no phone decodes in hardware. With
+  `hwdec=auto-copy-safe` mpv tries `h264_mediacodec` once for every timeline
+  segment (opening, episode, ending), which fails with `vd: Could not open
+  codec.`, and decodes in software instead. The out-of-memory line was a
+  one-off texture allocation that mpv recovered from; it did not reproduce in
+  a debug build with mpv's verbose log forwarded to logcat.
+
+Android showed the first error-level line of a file the moment it was logged;
+iOS has held it back since
+[B70](#b70--ios-refused-some-files-with-an-mpv-rendering-error).
+
+**Fix.** `library::drop_copies` keeps one of each file a title holds more than
+once (same name, same size): the copy played last, otherwise the one in the
+folder holding more of the title, which is where its opening and ending are.
+On Android, `take_error` hands the held error out only once the file has ended
+with `MPV_END_FILE_REASON_ERROR`, as iOS does, and every mpv warning and error
+now goes to logcat under `pstr-mpv`, so the next report has the whole story.
+
+**Verified.** `a_file_copied_into_a_second_folder_is_listed_once`,
+`of_two_copies_the_one_played_is_kept`,
+`files_of_one_name_but_different_sizes_are_both_kept`; on a Pixel, Inuyasha #001
+from the series folder played through its opening and into the episode with no
+dialog, and the log showed the High 10 fallback once per segment.
+
 ### B72 — an ordered-chapters episode played without its opening and ending
 
 **Symptom.** An Inuyasha episode from a release that keeps its openings and

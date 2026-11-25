@@ -362,6 +362,7 @@ impl Library {
         }
 
         for title in &mut titles {
+            drop_copies(title);
             // A series' openings and endings, kept as files of their own for
             // its episodes to play from, are not episodes: listed, they sort
             // ahead of the first one, and "Play" starts an opening.
@@ -503,6 +504,65 @@ impl Library {
     }
 }
 
+/// Keep one of each file a title holds more than once.
+///
+/// A file copied into a second folder (a backup, a "to watch" pick) is one
+/// episode, not two: same name, same size. Listed twice, it doubles the
+/// season and "Play next" walks through it again. The copy kept is the one
+/// played last; failing that, the one whose folder holds more of the title,
+/// which is where an ordered-chapters episode finds its opening and ending.
+fn drop_copies(title: &mut Title) {
+    let mut per_folder: HashMap<(&str, Option<&str>), usize> = HashMap::new();
+    for episode in title.episodes() {
+        let node = &episode.node;
+        *per_folder
+            .entry((node.share_id.as_str(), node.parent_link_id.as_deref()))
+            .or_default() += 1;
+    }
+    let rank = |episode: &Episode| {
+        let node = &episode.node;
+        let folder = per_folder[&(node.share_id.as_str(), node.parent_link_id.as_deref())];
+        (episode.last_played(), folder)
+    };
+
+    let mut keep: HashMap<(&str, i64), (usize, usize)> = HashMap::new();
+    for (season_index, season) in title.seasons.iter().enumerate() {
+        for (episode_index, episode) in season.episodes.iter().enumerate() {
+            let Some(size) = episode.node.size else {
+                continue;
+            };
+            let slot = keep
+                .entry((episode.node.name.as_str(), size))
+                .or_insert((season_index, episode_index));
+            let held = &title.seasons[slot.0].episodes[slot.1];
+            if rank(episode) > rank(held) {
+                *slot = (season_index, episode_index);
+            }
+        }
+    }
+
+    let mut dropped: Vec<Vec<bool>> = title
+        .seasons
+        .iter()
+        .map(|season| vec![false; season.episodes.len()])
+        .collect();
+    for (season_index, season) in title.seasons.iter().enumerate() {
+        for (episode_index, episode) in season.episodes.iter().enumerate() {
+            let Some(size) = episode.node.size else {
+                continue;
+            };
+            if keep[&(episode.node.name.as_str(), size)] != (season_index, episode_index) {
+                dropped[season_index][episode_index] = true;
+            }
+        }
+    }
+    for (season, dropped) in title.seasons.iter_mut().zip(dropped) {
+        let mut flags = dropped.into_iter();
+        season.episodes.retain(|_| !flags.next().unwrap_or(false));
+    }
+    title.seasons.retain(|season| !season.episodes.is_empty());
+}
+
 /// The grouping key: case- and punctuation-insensitive, so `Fullmetal
 /// Alchemist: Brotherhood` and `Fullmetal Alchemist Brotherhood` are one title.
 ///
@@ -601,6 +661,78 @@ mod tests {
         let title = &library.titles[0];
         let links: Vec<_> = title.episodes().map(|e| e.node.link_id.as_str()).collect();
         assert_eq!(links, ["movie", "e1", "e2"]);
+    }
+
+    fn in_folder(mut node: CatalogNode, folder: &str) -> CatalogNode {
+        node.parent_link_id = Some(folder.into());
+        node
+    }
+
+    #[test]
+    fn a_file_copied_into_a_second_folder_is_listed_once() {
+        let library = Library::build(
+            vec![
+                in_folder(
+                    node("s", "copy1", "InuYasha - 001.mkv", None, Some(1)),
+                    "picks",
+                ),
+                in_folder(
+                    node("s", "e1", "InuYasha - 001.mkv", None, Some(1)),
+                    "series",
+                ),
+                in_folder(
+                    node("s", "e2", "InuYasha - 002.mkv", None, Some(2)),
+                    "series",
+                ),
+                in_folder(
+                    node("s", "e3", "InuYasha - 003.mkv", None, Some(3)),
+                    "series",
+                ),
+            ],
+            &HashMap::new(),
+        );
+        let links: Vec<_> = library.titles[0]
+            .episodes()
+            .map(|e| e.node.link_id.as_str())
+            .collect();
+        assert_eq!(links, ["e1", "e2", "e3"]);
+    }
+
+    #[test]
+    fn of_two_copies_the_one_played_is_kept() {
+        let watch = HashMap::from([(
+            ("s".to_string(), "copy1".to_string()),
+            WatchState {
+                position_secs: 300.0,
+                duration_secs: Some(1400.0),
+                watched: false,
+                updated_at: 5,
+            },
+        )]);
+        let library = Library::build(
+            vec![
+                in_folder(node("s", "e1", "Show - 01.mkv", None, Some(1)), "series"),
+                in_folder(node("s", "e2", "Show - 02.mkv", None, Some(2)), "series"),
+                in_folder(node("s", "copy1", "Show - 01.mkv", None, Some(1)), "picks"),
+            ],
+            &watch,
+        );
+        let links: Vec<_> = library.titles[0]
+            .episodes()
+            .map(|e| e.node.link_id.as_str())
+            .collect();
+        assert_eq!(links, ["copy1", "e2"]);
+    }
+
+    #[test]
+    fn files_of_one_name_but_different_sizes_are_both_kept() {
+        let mut other = node("s", "b", "Show - 01.mkv", None, Some(1));
+        other.size = Some(2048);
+        let library = Library::build(
+            vec![node("s", "a", "Show - 01.mkv", None, Some(1)), other],
+            &HashMap::new(),
+        );
+        assert_eq!(library.titles[0].episode_count(), 2);
     }
 
     #[test]

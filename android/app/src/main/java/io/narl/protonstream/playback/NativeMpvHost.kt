@@ -182,7 +182,8 @@ class NativeMpvHost private constructor(private val nativeHandle: Long) : Libmpv
      */
     val advancing: StateFlow<Boolean> = mutableAdvancing.asStateFlow()
     /**
-     * What mpv last complained about, until the viewer dismisses it.
+     * The first thing mpv complained about in a file that then failed, until
+     * the viewer dismisses it. A complaint about a file that plays on is not one.
      *
      * Errors mpv reports are about the *file* — an unreadable header, a codec it
      * has no decoder for — and reach nothing else: the play call has already
