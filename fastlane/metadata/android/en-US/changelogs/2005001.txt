@@ -1,0 +1,4 @@
+Fixes for copied episodes and player error messages.
+
+- A file copied into a second folder is listed once, not as a second episode.
+- Android: errors mpv recovers from no longer cover a playing episode ("Could not open codec.", missing timeline).

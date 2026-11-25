@@ -101,6 +101,15 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.5.1" date="2026-11-25">
+      <description>
+        <p>Fixes for copied episodes and player error messages.</p>
+        <ul>
+          <li>A file copied into a second folder is listed once instead of as a second episode.</li>
+          <li>On Android, errors the player recovers from, such as "Could not open codec." for 10-bit H.264, no longer cover a playing episode.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.5.0" date="2026-11-25">
       <description>
         <p>A flatter, calmer look, pstr:// invites to share a library, much faster refreshes, and each season of a show with its own poster and synopsis.</p>
